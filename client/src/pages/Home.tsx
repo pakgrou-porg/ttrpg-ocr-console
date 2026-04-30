@@ -39,10 +39,10 @@ export default function Home() {
       <div>
         <h1 className="text-4xl font-bold tracking-tight mb-2 flex items-center gap-3">
           <BookOpen className="w-10 h-10 text-primary" />
-          TTRPG OCR Pipeline Console
+          The Grand Arcanum
         </h1>
         <p className="text-lg text-muted-foreground max-w-3xl">
-          Welcome to the central command for the TTRPG OCR pipeline. Manage ingestion, monitor ensemble consensus, and resolve flagged extractions to build the ultimate structured dataset.
+          Welcome to the Vault of Infinite Lore. Manage the scribes, monitor the arcane consensus, and resolve flagged incantations to build the ultimate grimoire.
         </p>
       </div>
 

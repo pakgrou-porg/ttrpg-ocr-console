@@ -11,3 +11,5 @@
 - [ ] Rename and update `ConfigContent.tsx` to `SummoningRituals.tsx` ("Summoning Rituals").
 - [ ] Rename and update `ConfigPrompts.tsx` to `IncantationsRunes.tsx` ("Incantations & Runes") - add prompt for Ramblings AI.
 - [ ] Update `Home.tsx` dashboard cards with the new thematic names.
+- [ ] Update Layout.tsx with the new thematic console name ("The Grand Arcanum")
+- [ ] Update Home.tsx with the new thematic console name ("The Grand Arcanum")

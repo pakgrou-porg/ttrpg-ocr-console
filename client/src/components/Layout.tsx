@@ -26,9 +26,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <div className="p-6 border-b border-border">
           <h1 className="text-xl font-bold text-sidebar-foreground tracking-wider flex items-center gap-2">
             <BookOpen className="w-6 h-6 text-primary" />
-            TTRPG OCR
+            The Grand Arcanum
           </h1>
-          <p className="text-xs text-sidebar-foreground/60 mt-1 font-mono">Pipeline Console v1.0</p>
+          <p className="text-xs text-sidebar-foreground/60 mt-1 font-mono">Vault of Infinite Lore</p>
         </div>
 
         <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-1">
