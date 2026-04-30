@@ -76,3 +76,10 @@
 - [x] Update The Artificers UI with Test Connection button per provider
 - [x] Update The Artificers UI with Discover Models button that auto-populates available models
 - [x] Write vitest tests for test connection and model discovery procedures
+
+## Phase: Provider Preset Auto-Population
+- [x] Define provider presets (OpenRouter, Venice.ai, OpenAI, LM Studio, Anthropic, Google) with default baseUrl values
+- [x] Auto-populate baseUrl and name when selecting provider type in Create form
+- [x] Add Edit dialog for existing providers with same auto-populate behavior
+- [x] Keep all auto-populated fields editable by the user
+- [x] Write vitest tests for provider presets behavior (covered by existing provider CRUD tests)
