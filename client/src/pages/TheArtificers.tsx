@@ -5,18 +5,27 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import {
-  Cpu, Plus, Trash2, TestTube, Edit, Key, Loader2, CheckCircle2, XCircle, Wifi
+  Cpu, Plus, Trash2, TestTube, Key, Loader2, CheckCircle2, XCircle, Wifi, Search, ChevronDown, ChevronUp, Zap
 } from "lucide-react";
+
+interface TestResult {
+  ok: boolean;
+  latencyMs: number;
+  models?: string[];
+  error?: string;
+}
 
 export default function TheArtificers() {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const [testResults, setTestResults] = useState<Record<number, TestResult>>({});
+  const [testingId, setTestingId] = useState<number | null>(null);
+  const [discoveringId, setDiscoveringId] = useState<number | null>(null);
+  const [expandedModels, setExpandedModels] = useState<Record<number, boolean>>({});
 
   const { data: providers, isLoading, refetch } = trpc.providers.list.useQuery();
   const { data: providerTypes } = trpc.providers.types.useQuery();
@@ -27,7 +36,7 @@ export default function TheArtificers() {
   });
 
   const updateMutation = trpc.providers.update.useMutation({
-    onSuccess: () => { toast.success("Provider updated."); refetch(); setEditingId(null); },
+    onSuccess: () => { toast.success("Provider updated."); refetch(); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -37,15 +46,22 @@ export default function TheArtificers() {
   });
 
   const testMutation = trpc.providers.test.useMutation({
-    onSuccess: (result) => {
+    onSuccess: (result, variables) => {
+      setTestResults(prev => ({ ...prev, [variables.id]: result as TestResult }));
       if (result.ok) {
         toast.success(`Connection successful (${result.latencyMs}ms). ${result.models?.length ?? 0} models discovered.`);
         refetch();
       } else {
-        toast.error(`Connection failed: ${result.error}`);
+        toast.error(`Connection failed: ${(result as TestResult).error}`);
       }
+      setTestingId(null);
+      setDiscoveringId(null);
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => {
+      toast.error(e.message);
+      setTestingId(null);
+      setDiscoveringId(null);
+    },
   });
 
   const [form, setForm] = useState({
@@ -62,6 +78,20 @@ export default function TheArtificers() {
       apiKey: form.apiKey || undefined,
       notes: form.notes || undefined,
     });
+  };
+
+  const handleTestConnection = (providerId: number) => {
+    setTestingId(providerId);
+    testMutation.mutate({ id: providerId });
+  };
+
+  const handleDiscoverModels = (providerId: number) => {
+    setDiscoveringId(providerId);
+    testMutation.mutate({ id: providerId });
+  };
+
+  const toggleModelExpand = (providerId: number) => {
+    setExpandedModels(prev => ({ ...prev, [providerId]: !prev[providerId] }));
   };
 
   return (
@@ -143,77 +173,163 @@ export default function TheArtificers() {
         </Card>
       ) : (
         <div className="grid gap-4">
-          {providers?.map(provider => (
-            <Card key={provider.id} className={`transition-all ${!provider.isActive ? "opacity-60" : ""}`}>
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className={`w-3 h-3 rounded-full ${provider.isActive ? "bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]" : "bg-gray-500"}`} />
-                    <CardTitle className="text-lg">{provider.name}</CardTitle>
-                    <Badge variant="secondary">{provider.providerType?.split("_").map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ")}</Badge>
+          {providers?.map(provider => {
+            const result = testResults[provider.id];
+            const isTestingThis = testingId === provider.id;
+            const isDiscoveringThis = discoveringId === provider.id;
+            const models = (provider.availableModels as string[]) ?? [];
+            const isExpanded = expandedModels[provider.id] ?? false;
+
+            return (
+              <Card key={provider.id} className={`transition-all ${!provider.isActive ? "opacity-60" : ""}`}>
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-3 h-3 rounded-full ${provider.isActive ? "bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]" : "bg-gray-500"}`} />
+                      <CardTitle className="text-lg">{provider.name}</CardTitle>
+                      <Badge variant="secondary">{provider.providerType?.split("_").map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ")}</Badge>
+                      {/* Inline test result badge */}
+                      {result && !isTestingThis && (
+                        result.ok ? (
+                          <Badge className="bg-green-900/30 text-green-400 border-green-700 gap-1">
+                            <CheckCircle2 className="h-3 w-3" />
+                            {result.latencyMs}ms
+                          </Badge>
+                        ) : (
+                          <Badge className="bg-red-900/30 text-red-400 border-red-700 gap-1">
+                            <XCircle className="h-3 w-3" />
+                            Failed
+                          </Badge>
+                        )
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {/* Test Connection Button */}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleTestConnection(provider.id)}
+                        disabled={isTestingThis || isDiscoveringThis}
+                        className="gap-1.5"
+                      >
+                        {isTestingThis ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <TestTube className="h-4 w-4" />
+                        )}
+                        Test Connection
+                      </Button>
+                      {/* Discover Models Button */}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleDiscoverModels(provider.id)}
+                        disabled={isTestingThis || isDiscoveringThis}
+                        className="gap-1.5"
+                      >
+                        {isDiscoveringThis ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Search className="h-4 w-4" />
+                        )}
+                        Discover Models
+                      </Button>
+                      {/* Enable/Disable Toggle */}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => updateMutation.mutate({ id: provider.id, isActive: !provider.isActive })}
+                      >
+                        <Wifi className="h-4 w-4" />
+                        <span className="ml-1">{provider.isActive ? "Disable" : "Enable"}</span>
+                      </Button>
+                      {/* Delete Button */}
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => { if (confirm("Banish this Artificer? All model assignments will also be removed.")) deleteMutation.mutate({ id: provider.id }); }}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => testMutation.mutate({ id: provider.id })}
-                      disabled={testMutation.isPending}
-                    >
-                      {testMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <TestTube className="h-4 w-4" />}
-                      <span className="ml-1">Test</span>
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => updateMutation.mutate({ id: provider.id, isActive: !provider.isActive })}
-                    >
-                      <Wifi className="h-4 w-4" />
-                      <span className="ml-1">{provider.isActive ? "Disable" : "Enable"}</span>
-                    </Button>
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      onClick={() => { if (confirm("Banish this Artificer? All model assignments will also be removed.")) deleteMutation.mutate({ id: provider.id }); }}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-                <CardDescription className="ml-6">{provider.baseUrl}</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="flex items-center gap-6 text-sm text-muted-foreground">
-                  <div className="flex items-center gap-1">
-                    <Key className="h-3.5 w-3.5" />
-                    {provider.hasApiKey ? (
-                      <span className="font-mono text-xs">{provider.maskedApiKey}</span>
-                    ) : (
-                      <span className="italic">No API key set</span>
+                  <CardDescription className="ml-6">{provider.baseUrl}</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex items-center gap-6 text-sm text-muted-foreground">
+                    <div className="flex items-center gap-1">
+                      <Key className="h-3.5 w-3.5" />
+                      {provider.hasApiKey ? (
+                        <span className="font-mono text-xs">{provider.maskedApiKey}</span>
+                      ) : (
+                        <span className="italic">No API key set</span>
+                      )}
+                    </div>
+                    {models.length > 0 && (
+                      <div className="flex items-center gap-1">
+                        <Zap className="h-3.5 w-3.5 text-purple-400" />
+                        <span>{models.length} models available</span>
+                      </div>
+                    )}
+                    {provider.notes && (
+                      <div className="text-xs italic truncate max-w-[300px]">{provider.notes}</div>
                     )}
                   </div>
-                  {provider.availableModels && (provider.availableModels as string[]).length > 0 && (
-                    <div className="flex items-center gap-1">
-                      <Cpu className="h-3.5 w-3.5" />
-                      <span>{(provider.availableModels as string[]).length} models available</span>
+
+                  {/* Available Models Section */}
+                  {models.length > 0 && (
+                    <div className="mt-3">
+                      <div className="flex flex-wrap gap-1.5">
+                        {(isExpanded ? models : models.slice(0, 8)).map((model: string) => (
+                          <Badge key={model} variant="outline" className="text-xs font-mono">{model}</Badge>
+                        ))}
+                      </div>
+                      {models.length > 8 && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="mt-2 text-xs text-muted-foreground hover:text-foreground gap-1"
+                          onClick={() => toggleModelExpand(provider.id)}
+                        >
+                          {isExpanded ? (
+                            <>
+                              <ChevronUp className="h-3 w-3" />
+                              Show fewer models
+                            </>
+                          ) : (
+                            <>
+                              <ChevronDown className="h-3 w-3" />
+                              Show all {models.length} models
+                            </>
+                          )}
+                        </Button>
+                      )}
                     </div>
                   )}
-                  {provider.notes && (
-                    <div className="text-xs italic truncate max-w-[300px]">{provider.notes}</div>
+
+                  {/* Test result details (shown after a test) */}
+                  {result && !isTestingThis && (
+                    <div className={`mt-3 p-3 rounded-md border text-sm ${result.ok ? "border-green-700/50 bg-green-950/20" : "border-red-700/50 bg-red-950/20"}`}>
+                      {result.ok ? (
+                        <div className="flex items-center gap-2 text-green-400">
+                          <CheckCircle2 className="h-4 w-4" />
+                          <span>Connection established in <strong>{result.latencyMs}ms</strong></span>
+                          {result.models && result.models.length > 0 && (
+                            <span className="text-muted-foreground">— {result.models.length} model{result.models.length !== 1 ? "s" : ""} discovered and cached</span>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 text-red-400">
+                          <XCircle className="h-4 w-4" />
+                          <span>Connection failed after {result.latencyMs}ms: {result.error}</span>
+                        </div>
+                      )}
+                    </div>
                   )}
-                </div>
-                {provider.availableModels && (provider.availableModels as string[]).length > 0 && (
-                  <div className="mt-3 flex flex-wrap gap-1.5">
-                    {(provider.availableModels as string[]).slice(0, 8).map((model: string) => (
-                      <Badge key={model} variant="outline" className="text-xs font-mono">{model}</Badge>
-                    ))}
-                    {(provider.availableModels as string[]).length > 8 && (
-                      <Badge variant="outline" className="text-xs">+{(provider.availableModels as string[]).length - 8} more</Badge>
-                    )}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          ))}
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
       )}
     </div>

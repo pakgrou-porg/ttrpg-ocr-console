@@ -139,6 +139,86 @@ describe("assignments (Model Assignment Matrix)", () => {
   });
 });
 
+describe("providers.test (Test Connection & Model Discovery)", () => {
+  it("returns NOT_FOUND for non-existent provider", async () => {
+    const caller = appRouter.createCaller(createAdminContext());
+    await expect(caller.providers.test({ id: 999999 })).rejects.toThrow("Provider not found");
+  });
+
+  it("denies non-admin from testing a provider", async () => {
+    const caller = appRouter.createCaller(createUserContext());
+    await expect(caller.providers.test({ id: 1 })).rejects.toThrow();
+  });
+
+  it("returns ok:false for unreachable provider URL", async () => {
+    const caller = appRouter.createCaller(createAdminContext());
+    // Create a provider with an unreachable URL
+    const created = await caller.providers.create({
+      name: `Unreachable Provider ${suffix}`,
+      providerType: "openai_compatible",
+      baseUrl: "http://192.0.2.1:9999/v1",
+      apiKey: "sk-test-unreachable",
+    });
+    const result = await caller.providers.test({ id: created.id });
+    expect(result.ok).toBe(false);
+    expect(result.latencyMs).toBeGreaterThan(0);
+    expect(result.error).toBeDefined();
+    // Cleanup
+    await caller.providers.delete({ id: created.id });
+  }, 15000);
+
+  it("returns ok:false for provider with invalid URL (bad hostname)", async () => {
+    const caller = appRouter.createCaller(createAdminContext());
+    const created = await caller.providers.create({
+      name: `Bad Hostname ${suffix}`,
+      providerType: "openai_compatible",
+      baseUrl: "http://this-host-does-not-exist-xyz123.invalid/v1",
+    });
+    const result = await caller.providers.test({ id: created.id });
+    expect(result.ok).toBe(false);
+    expect(result.error).toBeDefined();
+    // Cleanup
+    await caller.providers.delete({ id: created.id });
+  });
+
+  it("returns ok:true and models array when provider responds correctly", async () => {
+    const caller = appRouter.createCaller(createAdminContext());
+    // Use OpenRouter's public /models endpoint (no API key required)
+    const created = await caller.providers.create({
+      name: `OpenRouter Discovery Test ${suffix}`,
+      providerType: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+    });
+    const result = await caller.providers.test({ id: created.id });
+    expect(result.ok).toBe(true);
+    expect(result.latencyMs).toBeGreaterThan(0);
+    expect(Array.isArray(result.models)).toBe(true);
+    expect(result.models!.length).toBeGreaterThan(0);
+    // Verify that models were cached in the DB
+    const provider = await caller.providers.get({ id: created.id });
+    expect((provider.availableModels as string[]).length).toBeGreaterThan(0);
+    // Cleanup
+    await caller.providers.delete({ id: created.id });
+  }, 15000);
+
+  it("works for provider without API key (e.g., local LM Studio)", async () => {
+    const caller = appRouter.createCaller(createAdminContext());
+    // Create a provider with no API key and a URL that will refuse connection quickly
+    const created = await caller.providers.create({
+      name: `No Key Provider ${suffix}`,
+      providerType: "lm_studio",
+      baseUrl: "http://127.0.0.1:19999/v1",
+    });
+    const result = await caller.providers.test({ id: created.id });
+    // Should fail (connection refused) but not throw
+    expect(result.ok).toBe(false);
+    expect(result.latencyMs).toBeGreaterThan(0);
+    expect(result.error).toBeDefined();
+    // Cleanup
+    await caller.providers.delete({ id: created.id });
+  }, 15000);
+});
+
 describe("connections (Database Connection Config)", () => {
   it("lists available connection types", async () => {
     const caller = appRouter.createCaller(createAdminContext());

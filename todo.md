@@ -58,14 +58,21 @@
 
 ## Phase: LLM Provider Management & Database Connection Config
 
-- [ ] Add llm_providers table to drizzle schema (name, type, baseUrl, encryptedApiKey, isActive)
-- [ ] Add model_assignments table to drizzle schema (providerId, modelName, pipelineStage, priority)
-- [ ] Add db_connections table to drizzle schema (name, type, host, port, database, encryptedCredentials, isActive)
-- [ ] Build tRPC procedures for provider CRUD with encrypted API key storage
-- [ ] Build tRPC procedures for model assignment matrix (assign/unassign models to stages)
-- [ ] Build tRPC procedures for database connection management with connection testing
-- [ ] Build LLM Provider Registry UI page (The Artificers)
-- [ ] Build Model Assignment Matrix UI page (The Assignments)
-- [ ] Build Database Connection Config UI page (The Vault Nexus)
-- [ ] Update Layout.tsx to add new pages to The Inner Sanctum submenu
-- [ ] Write vitest tests for provider, assignment, and connection procedures
+- [x] Add llm_providers table to drizzle schema (name, type, baseUrl, encryptedApiKey, isActive)
+- [x] Add model_assignments table to drizzle schema (providerId, modelName, pipelineStage, priority)
+- [x] Add db_connections table to drizzle schema (name, type, host, port, database, encryptedCredentials, isActive)
+- [x] Build tRPC procedures for provider CRUD with encrypted API key storage
+- [x] Build tRPC procedures for model assignment matrix (assign/unassign models to stages)
+- [x] Build tRPC procedures for database connection management with connection testing
+- [x] Build LLM Provider Registry UI page (The Artificers)
+- [x] Build Model Assignment Matrix UI page (The Assignments)
+- [x] Build Database Connection Config UI page (The Vault Nexus)
+- [x] Update Layout.tsx to add new pages to The Inner Sanctum submenu
+- [x] Write vitest tests for provider, assignment, and connection procedures
+
+## Phase: Provider Test Connection & Model Discovery
+- [x] Add tRPC procedure for provider test connection (ping baseUrl)
+- [x] Add tRPC procedure for model discovery (query /v1/models endpoint)
+- [x] Update The Artificers UI with Test Connection button per provider
+- [x] Update The Artificers UI with Discover Models button that auto-populates available models
+- [x] Write vitest tests for test connection and model discovery procedures
