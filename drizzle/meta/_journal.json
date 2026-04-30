@@ -36,6 +36,13 @@
       "when": 1777588988575,
       "tag": "0004_breezy_the_stranger",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "5",
+      "when": 1777590868000,
+      "tag": "0005_yummy_sentry",
+      "breakpoints": true
     }
   ]
 }

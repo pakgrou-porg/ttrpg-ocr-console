@@ -19,6 +19,7 @@ import TheConclave from "@/pages/TheConclave";
 import TheArtificers from "@/pages/TheArtificers";
 import TheAssignments from "@/pages/TheAssignments";
 import TheVaultNexus from "@/pages/TheVaultNexus";
+import ArchivistsDesk from "@/pages/ArchivistsDesk";
 import NotFound from "@/pages/NotFound";
 
 function Router() {
@@ -44,6 +45,11 @@ function Router() {
         <Route path="/divination-omens">
           <PermissionGate featureArea="divination_omens">
             <DivinationOmens />
+          </PermissionGate>
+        </Route>
+        <Route path="/inner-sanctum/archivists-desk">
+          <PermissionGate featureArea="oversee_scribes">
+            <ArchivistsDesk />
           </PermissionGate>
         </Route>
         <Route path="/inner-sanctum/oversee-scribes">

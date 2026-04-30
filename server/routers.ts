@@ -19,10 +19,14 @@ import {
   getAllLlmProviders, getLlmProviderById, createLlmProvider, updateLlmProvider, deleteLlmProvider,
   getAllModelAssignments, getModelAssignmentsByStage, createModelAssignment, updateModelAssignment, deleteModelAssignment,
   getAllDbConnections, getDbConnectionById, createDbConnection, updateDbConnection, deleteDbConnection, setActiveDbConnection,
+  getAllDocuments, getDocumentById, createDocument, updateDocument, deleteDocument, searchDocuments,
+  getPagesByDocumentId, getPageById, createDocumentPage, updateDocumentPage,
+  getOcrResultByPageId, getOcrResultById, createOcrResult, updateOcrResult,
+  getAllHitlItems, getHitlItemById, getHitlItemsByPageId, createHitlItem, updateHitlItem, getHitlStats,
 } from "./db";
 import { encryptSecret, decryptSecret, maskSecret } from "./crypto";
 import { ENV } from "./_core/env";
-import { FEATURE_AREAS, PROVIDER_TYPES, PIPELINE_STAGES, DB_CONNECTION_TYPES } from "../drizzle/schema";
+import { FEATURE_AREAS, PROVIDER_TYPES, PIPELINE_STAGES, DB_CONNECTION_TYPES, DOCUMENT_STATUSES, OCR_RESULT_STATUSES, HITL_PRIORITIES, HITL_STATUSES } from "../drizzle/schema";
 
 /** Admin-only guard — throws FORBIDDEN if the caller is not an admin. */
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -864,6 +868,311 @@ export const appRouter = router({
         label: t.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" "),
       }));
     }),
+  }),
+
+  // ─── Library (Documents & Pages — Enter the Arkanum) ─────────────────────
+  library: router({
+    /** List all documents with summary info */
+    listDocuments: protectedProcedure
+      .input(z.object({
+        gameSystem: z.string().optional(),
+        status: z.enum(DOCUMENT_STATUSES).optional(),
+      }).optional())
+      .query(async ({ input }) => {
+        const docs = await getAllDocuments();
+        let filtered = docs;
+        if (input?.gameSystem) filtered = filtered.filter(d => d.gameSystem === input.gameSystem);
+        if (input?.status) filtered = filtered.filter(d => d.status === input.status);
+        return filtered;
+      }),
+
+    /** Search documents by title, filename, or game system */
+    searchDocuments: protectedProcedure
+      .input(z.object({ query: z.string().min(1).max(256) }))
+      .query(async ({ input }) => {
+        return searchDocuments(input.query);
+      }),
+
+    /** Get a single document by ID */
+    getDocument: protectedProcedure
+      .input(z.object({ id: z.number().int() }))
+      .query(async ({ input }) => {
+        const doc = await getDocumentById(input.id);
+        if (!doc) throw new TRPCError({ code: "NOT_FOUND", message: "Document not found in the Library." });
+        return doc;
+      }),
+
+    /** Get all pages for a document */
+    getPages: protectedProcedure
+      .input(z.object({ documentId: z.number().int() }))
+      .query(async ({ input }) => {
+        return getPagesByDocumentId(input.documentId);
+      }),
+
+    /** Get a single page with its OCR result */
+    getPageWithOcr: protectedProcedure
+      .input(z.object({ pageId: z.number().int() }))
+      .query(async ({ input }) => {
+        const page = await getPageById(input.pageId);
+        if (!page) throw new TRPCError({ code: "NOT_FOUND", message: "Page not found." });
+        const ocrResult = await getOcrResultByPageId(input.pageId);
+        return { page, ocrResult: ocrResult ?? null };
+      }),
+
+    /** Create a new document (admin only — used by pipeline) */
+    createDocument: adminProcedure
+      .input(z.object({
+        filename: z.string().max(512),
+        gameSystem: z.string().max(128).optional(),
+        edition: z.string().max(64).optional(),
+        title: z.string().max(512).optional(),
+        publisher: z.string().max(256).optional(),
+        totalPages: z.number().int().min(0).default(0),
+        pdfUrl: z.string().max(1024).optional(),
+        coverThumbnailUrl: z.string().max(1024).optional(),
+        metadata: z.record(z.string(), z.unknown()).optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const id = await createDocument(input);
+        return { success: true, id };
+      }),
+
+    /** Update a document (admin only) */
+    updateDocument: adminProcedure
+      .input(z.object({
+        id: z.number().int(),
+        title: z.string().max(512).optional(),
+        gameSystem: z.string().max(128).optional(),
+        edition: z.string().max(64).optional(),
+        publisher: z.string().max(256).optional(),
+        status: z.enum(DOCUMENT_STATUSES).optional(),
+        totalPages: z.number().int().optional(),
+        processedPages: z.number().int().optional(),
+        flaggedPages: z.number().int().optional(),
+        avgConfidence: z.number().int().optional(),
+        metadata: z.record(z.string(), z.unknown()).optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const { id, ...updates } = input;
+        await updateDocument(id, updates as any);
+        return { success: true };
+      }),
+
+    /** Delete a document and all its pages/OCR data (admin only) */
+    deleteDocument: adminProcedure
+      .input(z.object({ id: z.number().int() }))
+      .mutation(async ({ input }) => {
+        await deleteDocument(input.id);
+        return { success: true };
+      }),
+
+    /** Add a page to a document (admin only — used by pipeline) */
+    addPage: adminProcedure
+      .input(z.object({
+        documentId: z.number().int(),
+        pageNumber: z.number().int().min(1),
+        imageUrl: z.string().max(1024).optional(),
+        thumbnailUrl: z.string().max(1024).optional(),
+        phash: z.string().max(64).optional(),
+        imageWidth: z.number().int().optional(),
+        imageHeight: z.number().int().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const id = await createDocumentPage(input);
+        return { success: true, id };
+      }),
+
+    /** Add or update OCR result for a page (admin only — used by pipeline) */
+    upsertOcrResult: adminProcedure
+      .input(z.object({
+        pageId: z.number().int(),
+        rawText: z.string().optional(),
+        structuredData: z.record(z.string(), z.unknown()).optional(),
+        layoutMetadata: z.record(z.string(), z.unknown()).optional(),
+        confidence: z.number().int().min(0).max(100).optional(),
+        status: z.enum(OCR_RESULT_STATUSES).optional(),
+        pass1Model: z.string().max(256).optional(),
+        pass2Model: z.string().max(256).optional(),
+        auditLog: z.array(z.object({
+          timestamp: z.string(),
+          action: z.string(),
+          model: z.string().optional(),
+          detail: z.string().optional(),
+        })).optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const existing = await getOcrResultByPageId(input.pageId);
+        if (existing) {
+          const { pageId, ...updates } = input;
+          await updateOcrResult(existing.id, updates as any);
+          return { success: true, id: existing.id, action: "updated" };
+        } else {
+          const id = await createOcrResult(input as any);
+          return { success: true, id, action: "created" };
+        }
+      }),
+
+    /** Get available document statuses */
+    documentStatuses: protectedProcedure.query(() => {
+      return DOCUMENT_STATUSES.map(s => ({
+        id: s,
+        label: s.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" "),
+      }));
+    }),
+  }),
+
+  // ─── HITL Queue (Archivist's Desk) ────────────────────────────────────────
+  hitl: router({
+    /** List HITL queue items with optional filters */
+    list: protectedProcedure
+      .input(z.object({
+        status: z.enum(HITL_STATUSES).optional(),
+        priority: z.enum(HITL_PRIORITIES).optional(),
+        limit: z.number().int().min(1).max(500).optional(),
+      }).optional())
+      .query(async ({ input }) => {
+        const items = await getAllHitlItems({
+          status: input?.status,
+          priority: input?.priority,
+          limit: input?.limit,
+        });
+        // Enrich with page and document info
+        const enriched = await Promise.all(items.map(async (item) => {
+          const page = await getPageById(item.pageId);
+          let documentTitle = "Unknown";
+          let documentId: number | null = null;
+          if (page) {
+            const doc = await getDocumentById(page.documentId);
+            documentTitle = doc?.title ?? doc?.filename ?? "Unknown";
+            documentId = page.documentId;
+          }
+          return {
+            ...item,
+            pageNumber: page?.pageNumber ?? null,
+            thumbnailUrl: page?.thumbnailUrl ?? null,
+            documentTitle,
+            documentId,
+          };
+        }));
+        return enriched;
+      }),
+
+    /** Get a single HITL item with full context (page, OCR, document) */
+    get: protectedProcedure
+      .input(z.object({ id: z.number().int() }))
+      .query(async ({ input }) => {
+        const item = await getHitlItemById(input.id);
+        if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "HITL item not found." });
+        const page = await getPageById(item.pageId);
+        const ocrResult = item.ocrResultId ? await getOcrResultById(item.ocrResultId) : await getOcrResultByPageId(item.pageId);
+        let document = null;
+        if (page) {
+          document = await getDocumentById(page.documentId);
+        }
+        return { item, page: page ?? null, ocrResult: ocrResult ?? null, document: document ?? null };
+      }),
+
+    /** Get HITL stats for the dashboard */
+    stats: protectedProcedure.query(async () => {
+      return getHitlStats();
+    }),
+
+    /** Flag a page for HITL review */
+    flag: protectedProcedure
+      .input(z.object({
+        pageId: z.number().int(),
+        ocrResultId: z.number().int().optional(),
+        reason: z.string().max(1024),
+        flagCategory: z.string().max(64).optional(),
+        priority: z.enum(HITL_PRIORITIES).default("medium"),
+      }))
+      .mutation(async ({ input }) => {
+        const id = await createHitlItem(input);
+        // Also mark the page as flagged
+        await updateDocumentPage(input.pageId, { isFlagged: true });
+        return { success: true, id };
+      }),
+
+    /** Assign a HITL item to a reviewer */
+    assign: protectedProcedure
+      .input(z.object({
+        id: z.number().int(),
+        assignedTo: z.number().int(),
+      }))
+      .mutation(async ({ input }) => {
+        await updateHitlItem(input.id, { assignedTo: input.assignedTo, status: "in_progress" as any });
+        return { success: true };
+      }),
+
+    /** Resolve a HITL item — apply corrections to the OCR result */
+    resolve: protectedProcedure
+      .input(z.object({
+        id: z.number().int(),
+        correctedText: z.string().optional(),
+        correctedStructuredData: z.record(z.string(), z.unknown()).optional(),
+        resolutionNotes: z.string().max(2048).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const item = await getHitlItemById(input.id);
+        if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "HITL item not found." });
+
+        // Update the HITL item
+        await updateHitlItem(input.id, {
+          status: "resolved" as any,
+          resolutionNotes: input.resolutionNotes,
+          resolvedBy: ctx.user.id,
+          resolvedAt: new Date(),
+        });
+
+        // Apply corrections to the OCR result if provided
+        const ocrResult = item.ocrResultId
+          ? await getOcrResultById(item.ocrResultId)
+          : await getOcrResultByPageId(item.pageId);
+
+        if (ocrResult && (input.correctedText || input.correctedStructuredData)) {
+          await updateOcrResult(ocrResult.id, {
+            correctedText: input.correctedText,
+            correctedStructuredData: input.correctedStructuredData,
+            correctedBy: ctx.user.id,
+            correctedAt: new Date(),
+            status: "corrected" as any,
+          });
+        }
+
+        return { success: true };
+      }),
+
+    /** Skip a HITL item */
+    skip: protectedProcedure
+      .input(z.object({
+        id: z.number().int(),
+        resolutionNotes: z.string().max(2048).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await updateHitlItem(input.id, {
+          status: "skipped" as any,
+          resolutionNotes: input.resolutionNotes,
+          resolvedBy: ctx.user.id,
+          resolvedAt: new Date(),
+        });
+        return { success: true };
+      }),
+
+    /** Escalate a HITL item */
+    escalate: protectedProcedure
+      .input(z.object({
+        id: z.number().int(),
+        resolutionNotes: z.string().max(2048).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await updateHitlItem(input.id, {
+          status: "escalated" as any,
+          resolutionNotes: input.resolutionNotes,
+          resolvedBy: ctx.user.id,
+          resolvedAt: new Date(),
+        });
+        return { success: true };
+      }),
   }),
 });
 

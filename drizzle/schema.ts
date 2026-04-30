@@ -333,3 +333,188 @@ export const dbConnections = mysqlTable("db_connections", {
 
 export type DbConnection = typeof dbConnections.$inferSelect;
 export type InsertDbConnection = typeof dbConnections.$inferInsert;
+
+/**
+ * ─── Library Shelves: Documents, Pages, OCR Results, HITL Queue ──────────────
+ *
+ * These tables support the Library Shelves browser (Enter the Arkanum view-only)
+ * and the Archivist's Desk (HITL review with editing).
+ */
+
+/**
+ * Source documents (PDFs) ingested into the pipeline.
+ * Each document represents a single TTRPG PDF file.
+ */
+export const DOCUMENT_STATUSES = [
+  "pending",
+  "converting",
+  "ocr_pass1",
+  "ocr_pass2",
+  "enriching",
+  "review",
+  "completed",
+  "failed",
+] as const;
+
+export type DocumentStatus = (typeof DOCUMENT_STATUSES)[number];
+
+export const documents = mysqlTable("documents", {
+  id: int("id").autoincrement().primaryKey(),
+  /** Original filename of the PDF */
+  filename: varchar("filename", { length: 512 }).notNull(),
+  /** Game system (e.g., "Dungeons & Dragons", "Pathfinder") */
+  gameSystem: varchar("gameSystem", { length: 128 }),
+  /** Edition/version (e.g., "5e", "2e") */
+  edition: varchar("edition", { length: 64 }),
+  /** Book title as it appears on the cover */
+  title: varchar("title", { length: 512 }),
+  /** Publisher name */
+  publisher: varchar("publisher", { length: 256 }),
+  /** Total number of pages in the PDF */
+  totalPages: int("totalPages").default(0).notNull(),
+  /** Number of pages that have been OCR-processed */
+  processedPages: int("processedPages").default(0).notNull(),
+  /** Number of pages flagged for HITL review */
+  flaggedPages: int("flaggedPages").default(0).notNull(),
+  /** Average OCR confidence across all pages (0-100) */
+  avgConfidence: int("avgConfidence").default(0),
+  /** Current processing status */
+  status: mysqlEnum("status", ["pending", "converting", "ocr_pass1", "ocr_pass2", "enriching", "review", "completed", "failed"]).default("pending").notNull(),
+  /** Optional S3 URL for the original PDF */
+  pdfUrl: varchar("pdfUrl", { length: 1024 }),
+  /** Optional cover image thumbnail URL */
+  coverThumbnailUrl: varchar("coverThumbnailUrl", { length: 1024 }),
+  /** Linked ingestion job ID (if any) */
+  ingestionJobId: int("ingestionJobId"),
+  /** Additional metadata (ISBN, year, etc.) */
+  metadata: json("metadata").$type<Record<string, unknown>>(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type Document = typeof documents.$inferSelect;
+export type InsertDocument = typeof documents.$inferInsert;
+
+/**
+ * Individual pages within a document.
+ * Each page has a high-res image (local path or S3 URL) and a thumbnail.
+ */
+export const documentPages = mysqlTable("document_pages", {
+  id: int("id").autoincrement().primaryKey(),
+  /** Parent document ID */
+  documentId: int("documentId").notNull(),
+  /** Page number within the document (1-indexed) */
+  pageNumber: int("pageNumber").notNull(),
+  /** URL to the high-resolution page image (S3 or local path) */
+  imageUrl: varchar("imageUrl", { length: 1024 }),
+  /** URL to the thumbnail image (S3) */
+  thumbnailUrl: varchar("thumbnailUrl", { length: 1024 }),
+  /** Perceptual hash for duplicate detection */
+  phash: varchar("phash", { length: 64 }),
+  /** Whether this page has been binarized */
+  isBinarized: boolean("isBinarized").default(false).notNull(),
+  /** Image width in pixels */
+  imageWidth: int("imageWidth"),
+  /** Image height in pixels */
+  imageHeight: int("imageHeight"),
+  /** Whether this page is flagged for HITL review */
+  isFlagged: boolean("isFlagged").default(false).notNull(),
+  /** Whether OCR has been completed for this page */
+  ocrCompleted: boolean("ocrCompleted").default(false).notNull(),
+  /** OCR confidence for this specific page (0-100) */
+  ocrConfidence: int("ocrConfidence"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type DocumentPage = typeof documentPages.$inferSelect;
+export type InsertDocumentPage = typeof documentPages.$inferInsert;
+
+/**
+ * OCR extraction results for each page.
+ * Stores both raw text and structured JSON data from the two-pass OCR pipeline.
+ */
+export const OCR_RESULT_STATUSES = [
+  "pending",
+  "pass1_complete",
+  "pass2_complete",
+  "validated",
+  "corrected",
+  "failed",
+] as const;
+
+export type OcrResultStatus = (typeof OCR_RESULT_STATUSES)[number];
+
+export const ocrResults = mysqlTable("ocr_results", {
+  id: int("id").autoincrement().primaryKey(),
+  /** Parent page ID */
+  pageId: int("pageId").notNull(),
+  /** Raw extracted text (full-page) */
+  rawText: text("rawText"),
+  /** Structured data extracted by the pipeline (JSON) */
+  structuredData: json("structuredData").$type<Record<string, unknown>>(),
+  /** Layout metadata from Pass 1 (bounding boxes, element types) */
+  layoutMetadata: json("layoutMetadata").$type<Record<string, unknown>>(),
+  /** Overall confidence score for this extraction (0-100) */
+  confidence: int("confidence").default(0),
+  /** Processing status */
+  status: mysqlEnum("status", ["pending", "pass1_complete", "pass2_complete", "validated", "corrected", "failed"]).default("pending").notNull(),
+  /** Which model produced the Pass 1 result */
+  pass1Model: varchar("pass1Model", { length: 256 }),
+  /** Which model produced the Pass 2 result */
+  pass2Model: varchar("pass2Model", { length: 256 }),
+  /** Audit log of processing steps (JSON array) */
+  auditLog: json("auditLog").$type<{ timestamp: string; action: string; model?: string; detail?: string }[]>().default([]),
+  /** Human-corrected text (if HITL review was performed) */
+  correctedText: text("correctedText"),
+  /** Human-corrected structured data (if HITL review was performed) */
+  correctedStructuredData: json("correctedStructuredData").$type<Record<string, unknown>>(),
+  /** ID of the user who performed the correction */
+  correctedBy: int("correctedBy"),
+  /** When the correction was made */
+  correctedAt: timestamp("correctedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type OcrResult = typeof ocrResults.$inferSelect;
+export type InsertOcrResult = typeof ocrResults.$inferInsert;
+
+/**
+ * HITL (Human-in-the-Loop) review queue.
+ * Pages flagged for human review are tracked here with priority and resolution status.
+ */
+export const HITL_PRIORITIES = ["low", "medium", "high", "critical"] as const;
+export type HitlPriority = (typeof HITL_PRIORITIES)[number];
+
+export const HITL_STATUSES = ["queued", "in_progress", "resolved", "skipped", "escalated"] as const;
+export type HitlStatus = (typeof HITL_STATUSES)[number];
+
+export const hitlQueue = mysqlTable("hitl_queue", {
+  id: int("id").autoincrement().primaryKey(),
+  /** The page that needs review */
+  pageId: int("pageId").notNull(),
+  /** The OCR result that needs review */
+  ocrResultId: int("ocrResultId"),
+  /** Why this page was flagged */
+  reason: text("reason").notNull(),
+  /** Flag category for filtering */
+  flagCategory: varchar("flagCategory", { length: 64 }),
+  /** Review priority */
+  priority: mysqlEnum("priority", ["low", "medium", "high", "critical"]).default("medium").notNull(),
+  /** Current review status */
+  status: mysqlEnum("status", ["queued", "in_progress", "resolved", "skipped", "escalated"]).default("queued").notNull(),
+  /** User assigned to review this item */
+  assignedTo: int("assignedTo"),
+  /** Resolution notes from the reviewer */
+  resolutionNotes: text("resolutionNotes"),
+  /** User who resolved this item */
+  resolvedBy: int("resolvedBy"),
+  /** When the item was resolved */
+  resolvedAt: timestamp("resolvedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type HitlQueueItem = typeof hitlQueue.$inferSelect;
+export type InsertHitlQueueItem = typeof hitlQueue.$inferInsert;

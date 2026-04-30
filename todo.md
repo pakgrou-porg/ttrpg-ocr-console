@@ -83,3 +83,17 @@
 - [x] Add Edit dialog for existing providers with same auto-populate behavior
 - [x] Keep all auto-populated fields editable by the user
 - [x] Write vitest tests for provider presets behavior (covered by existing provider CRUD tests)
+
+## Phase: Library Shelves Browser & HITL Review
+- [x] Add documents table (source PDFs: name, game, version, page count, status)
+- [x] Add document_pages table (page images: documentId, pageNumber, imageUrl, thumbnailUrl, phash)
+- [x] Add ocr_results table (extracted data per page: pageId, rawText, structuredData, confidence, status)
+- [x] Add hitl_queue table (pages flagged for review: pageId, reason, priority, assignedTo, resolution)
+- [x] Build tRPC procedures for document/page browsing (list docs, get pages, get OCR results)
+- [x] Build tRPC procedures for HITL editing (update OCR results, resolve queue items, flag pages)
+- [x] Build shared LibraryShelves component (image viewer + OCR data side-by-side, page navigation)
+- [x] Integrate LibraryShelves into Enter the Arkanum (view-only mode)
+- [x] Build HITL Review page (Archivist's Desk) with editing capabilities
+- [x] Add Archivist's Desk to navigation and routing
+- [x] Write vitest tests for library and HITL procedures (30 test cases)
+- [ ] Push full codebase to GitHub via PAT

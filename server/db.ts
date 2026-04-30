@@ -10,6 +10,10 @@ import {
   systemConfig, InsertSystemConfig,
   ingestionJobs, InsertIngestionJob,
   telemetryEvents, InsertTelemetryEvent,
+  documents, InsertDocument,
+  documentPages, InsertDocumentPage,
+  ocrResults, InsertOcrResult,
+  hitlQueue, InsertHitlQueueItem,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
@@ -594,4 +598,177 @@ export async function setActiveDbConnection(id: number) {
   await db.update(dbConnections).set({ isActive: false }).where(sql`1=1`);
   // Activate the selected one
   await db.update(dbConnections).set({ isActive: true }).where(eq(dbConnections.id, id));
+}
+
+// ─── Documents (Library Shelves) ────────────────────────────────────────────
+
+export async function getAllDocuments() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(documents).orderBy(desc(documents.createdAt));
+}
+
+export async function getDocumentById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(documents).where(eq(documents.id, id)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
+export async function createDocument(doc: InsertDocument) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(documents).values(doc);
+  return result[0].insertId;
+}
+
+export async function updateDocument(id: number, updates: Partial<InsertDocument>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(documents).set(updates).where(eq(documents.id, id));
+}
+
+export async function deleteDocument(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  // Cascade: delete HITL items, OCR results, pages, then the document
+  const pages = await db.select({ id: documentPages.id }).from(documentPages).where(eq(documentPages.documentId, id));
+  const pageIds = pages.map(p => p.id);
+  if (pageIds.length > 0) {
+    for (const pid of pageIds) {
+      await db.delete(hitlQueue).where(eq(hitlQueue.pageId, pid));
+      await db.delete(ocrResults).where(eq(ocrResults.pageId, pid));
+    }
+    await db.delete(documentPages).where(eq(documentPages.documentId, id));
+  }
+  await db.delete(documents).where(eq(documents.id, id));
+}
+
+export async function searchDocuments(query: string) {
+  const db = await getDb();
+  if (!db) return [];
+  const pattern = `%${query}%`;
+  return db.select().from(documents)
+    .where(sql`${documents.title} LIKE ${pattern} OR ${documents.filename} LIKE ${pattern} OR ${documents.gameSystem} LIKE ${pattern}`)
+    .orderBy(desc(documents.createdAt))
+    .limit(50);
+}
+
+// ─── Document Pages ─────────────────────────────────────────────────────────
+
+export async function getPagesByDocumentId(documentId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(documentPages)
+    .where(eq(documentPages.documentId, documentId))
+    .orderBy(documentPages.pageNumber);
+}
+
+export async function getPageById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(documentPages).where(eq(documentPages.id, id)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
+export async function createDocumentPage(page: InsertDocumentPage) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(documentPages).values(page);
+  return result[0].insertId;
+}
+
+export async function updateDocumentPage(id: number, updates: Partial<InsertDocumentPage>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(documentPages).set(updates).where(eq(documentPages.id, id));
+}
+
+// ─── OCR Results ────────────────────────────────────────────────────────────
+
+export async function getOcrResultByPageId(pageId: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(ocrResults).where(eq(ocrResults.pageId, pageId)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
+export async function getOcrResultById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(ocrResults).where(eq(ocrResults.id, id)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
+export async function createOcrResult(ocrResult: InsertOcrResult) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(ocrResults).values(ocrResult);
+  return result[0].insertId;
+}
+
+export async function updateOcrResult(id: number, updates: Partial<InsertOcrResult>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(ocrResults).set(updates).where(eq(ocrResults.id, id));
+}
+
+// ─── HITL Queue ─────────────────────────────────────────────────────────────
+
+export async function getAllHitlItems(options?: { status?: string; priority?: string; limit?: number }) {
+  const db = await getDb();
+  if (!db) return [];
+  const conditions = [];
+  if (options?.status) conditions.push(eq(hitlQueue.status, options.status as any));
+  if (options?.priority) conditions.push(eq(hitlQueue.priority, options.priority as any));
+
+  const query = db.select().from(hitlQueue);
+  if (conditions.length > 0) {
+    return query.where(and(...conditions)).orderBy(desc(hitlQueue.createdAt)).limit(options?.limit ?? 100);
+  }
+  return query.orderBy(desc(hitlQueue.createdAt)).limit(options?.limit ?? 100);
+}
+
+export async function getHitlItemById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(hitlQueue).where(eq(hitlQueue.id, id)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
+export async function getHitlItemsByPageId(pageId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(hitlQueue).where(eq(hitlQueue.pageId, pageId)).orderBy(desc(hitlQueue.createdAt));
+}
+
+export async function createHitlItem(item: InsertHitlQueueItem) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(hitlQueue).values(item);
+  return result[0].insertId;
+}
+
+export async function updateHitlItem(id: number, updates: Partial<InsertHitlQueueItem>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(hitlQueue).set(updates).where(eq(hitlQueue.id, id));
+}
+
+export async function getHitlStats() {
+  const db = await getDb();
+  if (!db) return { total: 0, queued: 0, inProgress: 0, resolved: 0, skipped: 0, escalated: 0, byCritical: 0, byHigh: 0, byMedium: 0, byLow: 0 };
+  const all = await db.select().from(hitlQueue);
+  return {
+    total: all.length,
+    queued: all.filter(i => i.status === "queued").length,
+    inProgress: all.filter(i => i.status === "in_progress").length,
+    resolved: all.filter(i => i.status === "resolved").length,
+    skipped: all.filter(i => i.status === "skipped").length,
+    escalated: all.filter(i => i.status === "escalated").length,
+    byCritical: all.filter(i => i.priority === "critical").length,
+    byHigh: all.filter(i => i.priority === "high").length,
+    byMedium: all.filter(i => i.priority === "medium").length,
+    byLow: all.filter(i => i.priority === "low").length,
+  };
 }

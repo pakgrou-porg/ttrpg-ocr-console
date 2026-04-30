@@ -4,7 +4,7 @@ import {
   BookOpen, Settings, Activity, Edit3, Moon, Sun, Search,
   HelpCircle, BarChart2, Database, Terminal, ChevronDown,
   ChevronRight, User, Scroll, Shield, LogOut, UserCircle,
-  Cpu, GitBranch,
+  Cpu, GitBranch, ClipboardCheck,
 } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { Button } from "@/components/ui/button";
@@ -50,6 +50,7 @@ const topNavItems: NavItem[] = [
 ];
 
 const innerSanctumChildren: NavItem[] = [
+  { href: "/inner-sanctum/archivists-desk", label: "Archivist's Desk", icon: ClipboardCheck },
   { href: "/inner-sanctum/oversee-scribes", label: "Oversee the Scribes", icon: Activity },
   { href: "/inner-sanctum/arcane-mechanisms", label: "Arcane Mechanisms", icon: Settings },
   { href: "/inner-sanctum/summoning-rituals", label: "Summoning Rituals", icon: Database },
