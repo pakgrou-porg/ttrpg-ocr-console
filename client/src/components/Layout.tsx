@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { BookOpen, Settings, Activity, Edit3, ShieldAlert, Moon, Sun } from "lucide-react";
+import { BookOpen, Settings, Activity, Edit3, ShieldAlert, Moon, Sun, Search, HelpCircle, BarChart2, Database, Terminal } from "lucide-react";
 import { useTheme } from "@/hooks/use-theme";
 import { Button } from "@/components/ui/button";
 
@@ -9,10 +9,14 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   const navItems = [
     { href: "/", label: "Overview", icon: BookOpen },
-    { href: "/setup", label: "Setup & Config", icon: Settings },
-    { href: "/monitoring", label: "Telemetry", icon: Activity },
-    { href: "/archivist", label: "Archivist's Desk", icon: Edit3 },
-    { href: "/admin", label: "Admin Correction", icon: ShieldAlert },
+    { href: "/using-data", label: "Using the Data", icon: Edit3 },
+    { href: "/perusing-data", label: "Perusing the Data", icon: Search },
+    { href: "/how-to-use", label: "How to Use This", icon: HelpCircle },
+    { href: "/monitoring-jobs", label: "Monitoring Jobs", icon: Activity },
+    { href: "/usage-stats", label: "Usage Stats", icon: BarChart2 },
+    { href: "/config-systems", label: "Systems & Tools", icon: Settings },
+    { href: "/config-content", label: "Content Config", icon: Database },
+    { href: "/config-prompts", label: "System Prompts", icon: Terminal },
   ];
 
   return (

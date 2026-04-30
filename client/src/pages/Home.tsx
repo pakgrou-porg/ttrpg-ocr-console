@@ -1,36 +1,36 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { BookOpen, Settings, Activity, Edit3, ShieldAlert } from "lucide-react";
+import { BookOpen, Settings, Activity, Edit3, ShieldAlert, Search } from "lucide-react";
 import { Link } from "wouter";
 
 export default function Home() {
   const modules = [
     {
-      title: "Setup & Configuration",
-      description: "Configure pipeline settings, model weights, and TTRPG lexicon.",
-      icon: Settings,
-      href: "/setup",
+      title: "Using the Data",
+      description: "Access extracted records for active gameplay, save entities, and organize groups.",
+      icon: Edit3,
+      href: "/using-data",
       color: "text-blue-500",
     },
     {
-      title: "Monitoring & Telemetry",
-      description: "View ingestion queues, model performance, and throughput metrics.",
-      icon: Activity,
-      href: "/monitoring",
+      title: "Perusing the Data",
+      description: "Explore the entire structured dataset with natural language queries and filters.",
+      icon: Search,
+      href: "/perusing-data",
       color: "text-green-500",
     },
     {
-      title: "Archivist's Desk",
-      description: "Human-in-the-loop review for low-confidence OCR results.",
-      icon: Edit3,
-      href: "/archivist",
+      title: "Monitoring Jobs",
+      description: "Track ingestion queues, background processes, and the HITL review queue.",
+      icon: Activity,
+      href: "/monitoring-jobs",
       color: "text-orange-500",
     },
     {
-      title: "Admin Correction",
-      description: "Live database editor with auto-feedback loop for continuous improvement.",
-      icon: ShieldAlert,
-      href: "/admin",
-      color: "text-red-500",
+      title: "Configuration",
+      description: "Manage systems, tools, content imports, and system prompts.",
+      icon: Settings,
+      href: "/config-systems",
+      color: "text-purple-500",
     },
   ];
 
