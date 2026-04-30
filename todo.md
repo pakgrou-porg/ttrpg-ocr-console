@@ -20,3 +20,15 @@
 - [x] Connect Incantations & Runes to system_prompts database table via tRPC
 - [x] Add user login/logout to sidebar and Home page header
 - [x] Write vitest tests for profile and prompts procedures
+
+## Phase: Admin, Access Control & Grand Hall Redesign
+
+- [x] Add user_permissions and feature_restrictions tables to drizzle schema
+- [x] Add db helpers for user management and permission queries
+- [x] Add tRPC admin procedures (list users, create user, update permissions, feature restrictions)
+- [x] Redesign Grand Hall with atmospheric orb-based status (Arkanum, Agents, Scribes)
+- [x] Add avatar icon to top-right header with dropdown for self-service profile
+- [x] Build Admin User Management page (The Conclave) inside The Inner Sanctum
+- [x] Move system status details into Arcane Mechanisms page
+- [x] Update Layout.tsx to add The Conclave to Inner Sanctum submenu (admin only)
+- [x] Write vitest tests for admin and permission procedures

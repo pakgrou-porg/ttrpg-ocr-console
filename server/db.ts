@@ -1,6 +1,12 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users, userProfiles, systemPrompts, InsertUserProfile, InsertSystemPrompt } from "../drizzle/schema";
+import {
+  InsertUser, users,
+  userProfiles, InsertUserProfile,
+  systemPrompts, InsertSystemPrompt,
+  userPermissions, InsertUserPermission,
+  userInvitations, InsertUserInvitation,
+} from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -16,6 +22,8 @@ export async function getDb() {
   }
   return _db;
 }
+
+// ─── Users ────────────────────────────────────────────────────────────────────
 
 export async function upsertUser(user: InsertUser): Promise<void> {
   if (!user.openId) throw new Error("User openId is required for upsert");
@@ -54,6 +62,25 @@ export async function getUserByOpenId(openId: string) {
   return result.length > 0 ? result[0] : undefined;
 }
 
+export async function getAllUsers() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(users).orderBy(users.createdAt);
+}
+
+export async function getUserById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(users).where(eq(users.id, id)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
+export async function updateUserRole(userId: number, role: "user" | "admin") {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(users).set({ role }).where(eq(users.id, userId));
+}
+
 // ─── User Profiles ────────────────────────────────────────────────────────────
 
 export async function getUserProfile(userId: number) {
@@ -70,9 +97,93 @@ export async function upsertUserProfile(profile: InsertUserProfile) {
   if (profile.displayName !== undefined) updateSet.displayName = profile.displayName;
   if (profile.preferredGame !== undefined) updateSet.preferredGame = profile.preferredGame;
   if (profile.preferredVersion !== undefined) updateSet.preferredVersion = profile.preferredVersion;
+  if (profile.avatarUrl !== undefined) updateSet.avatarUrl = profile.avatarUrl;
   if (profile.savedEntries !== undefined) updateSet.savedEntries = profile.savedEntries;
   if (profile.savedGroups !== undefined) updateSet.savedGroups = profile.savedGroups;
   await db.insert(userProfiles).values(profile).onDuplicateKeyUpdate({ set: updateSet });
+}
+
+// ─── User Permissions ─────────────────────────────────────────────────────────
+
+export async function getUserPermissions(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(userPermissions).where(eq(userPermissions.userId, userId));
+}
+
+export async function setUserPermission(permission: InsertUserPermission) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  // Check if a record already exists for this user+featureArea
+  const existing = await db.select()
+    .from(userPermissions)
+    .where(and(
+      eq(userPermissions.userId, permission.userId),
+      eq(userPermissions.featureArea, permission.featureArea)
+    ))
+    .limit(1);
+
+  if (existing.length > 0) {
+    await db.update(userPermissions)
+      .set({
+        granted: permission.granted,
+        restrictedGame: permission.restrictedGame ?? null,
+        restrictedVersion: permission.restrictedVersion ?? null,
+        grantedBy: permission.grantedBy,
+      })
+      .where(eq(userPermissions.id, existing[0].id));
+  } else {
+    await db.insert(userPermissions).values(permission);
+  }
+}
+
+export async function deleteUserPermission(userId: number, featureArea: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(userPermissions).where(
+    and(eq(userPermissions.userId, userId), eq(userPermissions.featureArea, featureArea))
+  );
+}
+
+export async function getAllPermissionsForAllUsers() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(userPermissions).orderBy(userPermissions.userId);
+}
+
+// ─── User Invitations ─────────────────────────────────────────────────────────
+
+export async function createInvitation(invitation: InsertUserInvitation) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.insert(userInvitations).values(invitation);
+}
+
+export async function getInvitationByToken(token: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(userInvitations).where(eq(userInvitations.token, token)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
+export async function getAllInvitations() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(userInvitations).orderBy(userInvitations.createdAt);
+}
+
+export async function acceptInvitation(token: string, userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(userInvitations)
+    .set({ accepted: true, acceptedByUserId: userId })
+    .where(eq(userInvitations.token, token));
+}
+
+export async function revokeInvitation(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(userInvitations).where(eq(userInvitations.id, id));
 }
 
 // ─── System Prompts ───────────────────────────────────────────────────────────
@@ -100,14 +211,6 @@ export async function upsertSystemPrompt(prompt: InsertSystemPrompt) {
       version: prompt.version,
     },
   });
-}
-
-export async function updateSystemPromptText(name: string, promptText: string) {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-  await db.update(systemPrompts)
-    .set({ promptText, version: db.$count(systemPrompts) })
-    .where(eq(systemPrompts.name, name));
 }
 
 export async function seedDefaultPrompts() {

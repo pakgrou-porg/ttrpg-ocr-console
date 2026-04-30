@@ -15,6 +15,13 @@
       "when": 1777563512844,
       "tag": "0001_luxuriant_wolfsbane",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1777569389041,
+      "tag": "0002_lowly_sunfire",
+      "breakpoints": true
     }
   ]
 }
