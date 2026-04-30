@@ -1,50 +1,10 @@
 import { useAuth } from "@/_core/hooks/useAuth";
+import { trpc } from "@/lib/trpc";
 import { Link } from "wouter";
 import { Edit3, Search, BookOpen, Activity, BarChart3, Settings } from "lucide-react";
 
 // Orb status types
 type OrbStatus = "lit" | "dim" | "pulsing" | "error";
-
-interface StatusOrb {
-  id: string;
-  label: string;
-  sublabel: string;
-  status: OrbStatus;
-  color: string;
-}
-
-// Static mock statuses — these will be replaced with live tRPC queries once
-// the local Supabase, LM Studio, and OpenRouter endpoints are connected.
-const STATUS_ORBS: StatusOrb[] = [
-  {
-    id: "arkanum",
-    label: "The Arkanum",
-    sublabel: "Database Online",
-    status: "lit",
-    color: "from-emerald-500 to-emerald-700",
-  },
-  {
-    id: "agents",
-    label: "Agents",
-    sublabel: "Available & Ready",
-    status: "pulsing",
-    color: "from-violet-500 to-violet-700",
-  },
-  {
-    id: "scribes",
-    label: "Scribes",
-    sublabel: "Idle — No Active Jobs",
-    status: "dim",
-    color: "from-amber-500 to-amber-700",
-  },
-  {
-    id: "openrouter",
-    label: "Cloud Conduit",
-    sublabel: "OpenRouter Active",
-    status: "lit",
-    color: "from-sky-500 to-sky-700",
-  },
-];
 
 const ORB_GLOW: Record<OrbStatus, string> = {
   lit: "shadow-[0_0_18px_4px] shadow-current opacity-100",
@@ -94,6 +54,44 @@ const MODULES = [
 
 export default function Home() {
   const { user } = useAuth();
+  const { data: healthData, isLoading: healthLoading } = trpc.health.all.useQuery(undefined, {
+    refetchInterval: 30000, // Poll every 30s
+  });
+  const { data: jobStats } = trpc.jobs.stats.useQuery(undefined, {
+    refetchInterval: 15000,
+  });
+
+  // Derive orb states from live data
+  const orbs = [
+    {
+      id: "arkanum",
+      label: "The Arkanum",
+      sublabel: healthLoading ? "Checking..." : healthData?.database.ok ? `Online (${healthData.database.latencyMs}ms)` : "Offline",
+      status: (healthLoading ? "pulsing" : healthData?.database.ok ? "lit" : "error") as OrbStatus,
+      color: "from-emerald-500 to-emerald-700",
+    },
+    {
+      id: "agents",
+      label: "Agents",
+      sublabel: healthLoading ? "Checking..." : healthData?.agents.ok ? healthData.agents.detail : "Unavailable",
+      status: (healthLoading ? "pulsing" : healthData?.agents.ok ? "pulsing" : "error") as OrbStatus,
+      color: "from-violet-500 to-violet-700",
+    },
+    {
+      id: "scribes",
+      label: "Scribes",
+      sublabel: jobStats?.active ? `${jobStats.active} Job(s) Active` : "Idle — No Active Jobs",
+      status: (jobStats?.active ? "pulsing" : "dim") as OrbStatus,
+      color: "from-amber-500 to-amber-700",
+    },
+    {
+      id: "openrouter",
+      label: "Cloud Conduit",
+      sublabel: healthLoading ? "Checking..." : healthData?.cloudConduit.ok ? healthData.cloudConduit.detail : "Unavailable",
+      status: (healthLoading ? "pulsing" : healthData?.cloudConduit.ok ? "lit" : "error") as OrbStatus,
+      color: "from-sky-500 to-sky-700",
+    },
+  ];
 
   return (
     <div className="space-y-10 animate-in fade-in duration-500">
@@ -115,7 +113,7 @@ export default function Home() {
           Arcane Vitals
         </h2>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-          {STATUS_ORBS.map((orb) => (
+          {orbs.map((orb) => (
             <div
               key={orb.id}
               className="flex flex-col items-center gap-3 p-5 rounded-xl border border-border/40 bg-card/40 backdrop-blur-sm"

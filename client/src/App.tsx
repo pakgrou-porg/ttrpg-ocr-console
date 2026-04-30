@@ -4,6 +4,7 @@ import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { Layout } from "@/components/Layout";
+import { PermissionGate } from "@/components/PermissionGate";
 import Home from "@/pages/Home";
 import EnterArkanum from "@/pages/EnterArkanum";
 import ListenRamblings from "@/pages/ListenRamblings";
@@ -22,15 +23,51 @@ function Router() {
     <Layout>
       <Switch>
         <Route path="/" component={Home} />
-        <Route path="/enter-arkanum" component={EnterArkanum} />
-        <Route path="/listen-ramblings" component={ListenRamblings} />
-        <Route path="/tome-knowledge" component={TomeKnowledge} />
-        <Route path="/divination-omens" component={DivinationOmens} />
-        <Route path="/inner-sanctum/oversee-scribes" component={OverseeScribes} />
-        <Route path="/inner-sanctum/arcane-mechanisms" component={ArcaneMechanisms} />
-        <Route path="/inner-sanctum/summoning-rituals" component={SummoningRituals} />
-        <Route path="/inner-sanctum/incantations-runes" component={IncantationsRunes} />
-        <Route path="/inner-sanctum/the-conclave" component={TheConclave} />
+        <Route path="/enter-arkanum">
+          <PermissionGate featureArea="enter_arkanum">
+            <EnterArkanum />
+          </PermissionGate>
+        </Route>
+        <Route path="/listen-ramblings">
+          <PermissionGate featureArea="listen_ramblings">
+            <ListenRamblings />
+          </PermissionGate>
+        </Route>
+        <Route path="/tome-knowledge">
+          <PermissionGate featureArea="tome_knowledge">
+            <TomeKnowledge />
+          </PermissionGate>
+        </Route>
+        <Route path="/divination-omens">
+          <PermissionGate featureArea="divination_omens">
+            <DivinationOmens />
+          </PermissionGate>
+        </Route>
+        <Route path="/inner-sanctum/oversee-scribes">
+          <PermissionGate featureArea="oversee_scribes">
+            <OverseeScribes />
+          </PermissionGate>
+        </Route>
+        <Route path="/inner-sanctum/arcane-mechanisms">
+          <PermissionGate featureArea="arcane_mechanisms">
+            <ArcaneMechanisms />
+          </PermissionGate>
+        </Route>
+        <Route path="/inner-sanctum/summoning-rituals">
+          <PermissionGate featureArea="summoning_rituals">
+            <SummoningRituals />
+          </PermissionGate>
+        </Route>
+        <Route path="/inner-sanctum/incantations-runes">
+          <PermissionGate featureArea="incantations_runes">
+            <IncantationsRunes />
+          </PermissionGate>
+        </Route>
+        <Route path="/inner-sanctum/the-conclave">
+          <PermissionGate featureArea="the_conclave">
+            <TheConclave />
+          </PermissionGate>
+        </Route>
         <Route path="/personal-sanctum" component={PersonalSanctum} />
         <Route component={NotFound} />
       </Switch>

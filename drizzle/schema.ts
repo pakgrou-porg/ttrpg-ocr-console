@@ -117,3 +117,75 @@ export const systemPrompts = mysqlTable("system_prompts", {
 
 export type SystemPrompt = typeof systemPrompts.$inferSelect;
 export type InsertSystemPrompt = typeof systemPrompts.$inferInsert;
+
+/**
+ * System configuration key-value store.
+ * Used by Arcane Mechanisms to persist service connection details.
+ */
+export const systemConfig = mysqlTable("system_config", {
+  id: int("id").autoincrement().primaryKey(),
+  key: varchar("key", { length: 128 }).notNull().unique(),
+  value: text("value").notNull(),
+  category: varchar("category", { length: 64 }).notNull(),
+  updatedBy: int("updatedBy"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type SystemConfig = typeof systemConfig.$inferSelect;
+export type InsertSystemConfig = typeof systemConfig.$inferInsert;
+
+/**
+ * Ingestion jobs tracked by Oversee the Scribes.
+ * Represents PDF processing pipeline jobs.
+ */
+export const ingestionJobs = mysqlTable("ingestion_jobs", {
+  id: int("id").autoincrement().primaryKey(),
+  /** Source PDF filename */
+  sourceFile: varchar("sourceFile", { length: 512 }).notNull(),
+  /** Game system this material belongs to */
+  gameSystem: varchar("gameSystem", { length: 128 }),
+  /** Current status of the job */
+  status: mysqlEnum("status", ["queued", "converting", "pass1_ocr", "pass2_ocr", "enriching", "review", "completed", "failed"]).default("queued").notNull(),
+  /** Total pages in the PDF */
+  totalPages: int("totalPages").default(0).notNull(),
+  /** Pages processed so far */
+  processedPages: int("processedPages").default(0).notNull(),
+  /** Pages flagged for HITL review */
+  flaggedPages: int("flaggedPages").default(0).notNull(),
+  /** Average confidence score (0-100) */
+  avgConfidence: int("avgConfidence").default(0),
+  /** Error message if failed */
+  errorMessage: text("errorMessage"),
+  /** When processing started */
+  startedAt: timestamp("startedAt"),
+  /** When processing completed */
+  completedAt: timestamp("completedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type IngestionJob = typeof ingestionJobs.$inferSelect;
+export type InsertIngestionJob = typeof ingestionJobs.$inferInsert;
+
+/**
+ * Telemetry events for Divination & Omens.
+ * Tracks pipeline metrics, model usage, and performance data.
+ */
+export const telemetryEvents = mysqlTable("telemetry_events", {
+  id: int("id").autoincrement().primaryKey(),
+  /** Event type category */
+  eventType: varchar("eventType", { length: 64 }).notNull(),
+  /** Which model or service produced this event */
+  source: varchar("source", { length: 128 }).notNull(),
+  /** Numeric metric value (e.g., latency in ms, token count, confidence score) */
+  metricValue: int("metricValue"),
+  /** Optional cost in microdollars (1 USD = 1_000_000) */
+  costMicros: int("costMicros").default(0),
+  /** Additional metadata as JSON */
+  metadata: json("metadata").$type<Record<string, unknown>>(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type TelemetryEvent = typeof telemetryEvents.$inferSelect;
+export type InsertTelemetryEvent = typeof telemetryEvents.$inferInsert;

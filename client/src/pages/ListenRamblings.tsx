@@ -1,11 +1,25 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Search, Filter, Database, ChevronRight, Sparkles } from "lucide-react";
+import { Search, Filter, Database, ChevronRight, Sparkles, Loader2 } from "lucide-react";
 import { useState } from "react";
+import { trpc } from "@/lib/trpc";
+import { Streamdown } from "streamdown";
 
 export default function ListenRamblings() {
   const [searchQuery, setSearchQuery] = useState("");
+  const [rambling, setRambling] = useState<string | null>(null);
+
+  const ramblingMutation = trpc.ramblings.generate.useMutation({
+    onSuccess: (data) => {
+      setRambling(data.text);
+    },
+  });
+
+  const handleRandomRambling = () => {
+    setRambling(null);
+    ramblingMutation.mutate({ topic: searchQuery || undefined });
+  };
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -19,8 +33,8 @@ export default function ListenRamblings() {
         </p>
       </div>
 
-      <div className="flex gap-4">
-        <div className="relative flex-1 max-w-3xl">
+      <div className="flex gap-4 flex-wrap">
+        <div className="relative flex-1 min-w-[300px] max-w-3xl">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
           <Input 
             placeholder="Ask the database (e.g., 'List all undead with CR > 10', 'Show me oriental dragons')..." 
@@ -33,15 +47,54 @@ export default function ListenRamblings() {
           <Database className="w-5 h-5" />
           Query Database
         </Button>
-        <Button variant="secondary" className="h-12 px-4 gap-2 bg-purple-500/20 text-purple-500 hover:bg-purple-500/30 border border-purple-500/30">
-          <Sparkles className="w-5 h-5" />
-          Random Rambling
+        <Button 
+          variant="secondary" 
+          className="h-12 px-4 gap-2 bg-purple-500/20 text-purple-500 hover:bg-purple-500/30 border border-purple-500/30"
+          onClick={handleRandomRambling}
+          disabled={ramblingMutation.isPending}
+        >
+          {ramblingMutation.isPending ? (
+            <Loader2 className="w-5 h-5 animate-spin" />
+          ) : (
+            <Sparkles className="w-5 h-5" />
+          )}
+          {ramblingMutation.isPending ? "Channeling..." : "Random Rambling"}
         </Button>
         <Button variant="outline" className="h-12 px-4 gap-2">
           <Filter className="w-5 h-5" />
           Filters
         </Button>
       </div>
+
+      {/* Rambling Output */}
+      {(rambling || ramblingMutation.isPending) && (
+        <Card className="bg-gradient-to-br from-purple-500/5 to-violet-500/5 border-purple-500/30 backdrop-blur-sm">
+          <CardHeader>
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Sparkles className="w-5 h-5 text-purple-400" />
+              Voice of the Arkanum
+            </CardTitle>
+            <CardDescription>A random musing from the depths of the lore vault</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {ramblingMutation.isPending ? (
+              <div className="flex items-center gap-3 text-muted-foreground">
+                <Loader2 className="w-5 h-5 animate-spin" />
+                <span className="italic">The Arkanum stirs... channeling ancient knowledge...</span>
+              </div>
+            ) : rambling ? (
+              <div className="prose prose-invert prose-sm max-w-none">
+                <Streamdown>{rambling}</Streamdown>
+              </div>
+            ) : null}
+            {ramblingMutation.isError && (
+              <p className="text-destructive text-sm">
+                The Arkanum could not be reached. {ramblingMutation.error.message}
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
         {/* Filters Sidebar */}

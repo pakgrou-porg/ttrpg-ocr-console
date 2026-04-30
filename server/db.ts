@@ -1,11 +1,15 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, gte } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
+import { desc, sql } from "drizzle-orm";
 import {
   InsertUser, users,
   userProfiles, InsertUserProfile,
   systemPrompts, InsertSystemPrompt,
   userPermissions, InsertUserPermission,
   userInvitations, InsertUserInvitation,
+  systemConfig, InsertSystemConfig,
+  ingestionJobs, InsertIngestionJob,
+  telemetryEvents, InsertTelemetryEvent,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
@@ -315,5 +319,163 @@ Output JSON:
     if (!existing) {
       await db.insert(systemPrompts).values(prompt);
     }
+  }
+}
+
+// ─── System Config ───────────────────────────────────────────────────────────
+
+export async function getAllSystemConfig() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(systemConfig).orderBy(systemConfig.category, systemConfig.key);
+}
+
+export async function getSystemConfigByCategory(category: string) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(systemConfig).where(eq(systemConfig.category, category));
+}
+
+export async function getSystemConfigByKey(key: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(systemConfig).where(eq(systemConfig.key, key)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
+export async function upsertSystemConfig(config: InsertSystemConfig) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.insert(systemConfig).values(config).onDuplicateKeyUpdate({
+    set: { value: config.value, updatedBy: config.updatedBy },
+  });
+}
+
+export async function deleteSystemConfig(key: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(systemConfig).where(eq(systemConfig.key, key));
+}
+
+// ─── Ingestion Jobs ──────────────────────────────────────────────────────────
+
+export async function getAllIngestionJobs() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(ingestionJobs).orderBy(desc(ingestionJobs.createdAt)).limit(100);
+}
+
+export async function getActiveIngestionJobs() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(ingestionJobs)
+    .where(
+      and(
+        sql`${ingestionJobs.status} != 'completed'`,
+        sql`${ingestionJobs.status} != 'failed'`
+      )
+    )
+    .orderBy(desc(ingestionJobs.createdAt));
+}
+
+export async function getIngestionJobById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(ingestionJobs).where(eq(ingestionJobs.id, id)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
+export async function createIngestionJob(job: InsertIngestionJob) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(ingestionJobs).values(job);
+  return result[0].insertId;
+}
+
+export async function updateIngestionJobStatus(id: number, updates: Partial<InsertIngestionJob>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(ingestionJobs).set(updates).where(eq(ingestionJobs.id, id));
+}
+
+export async function getIngestionJobStats() {
+  const db = await getDb();
+  if (!db) return { total: 0, active: 0, completed: 0, failed: 0, queued: 0, totalPages: 0, processedPages: 0 };
+  const all = await db.select().from(ingestionJobs);
+  return {
+    total: all.length,
+    active: all.filter(j => !["completed", "failed", "queued"].includes(j.status)).length,
+    completed: all.filter(j => j.status === "completed").length,
+    failed: all.filter(j => j.status === "failed").length,
+    queued: all.filter(j => j.status === "queued").length,
+    totalPages: all.reduce((sum, j) => sum + j.totalPages, 0),
+    processedPages: all.reduce((sum, j) => sum + j.processedPages, 0),
+  };
+}
+
+// ─── Telemetry Events ────────────────────────────────────────────────────────
+
+export async function recordTelemetryEvent(event: InsertTelemetryEvent) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.insert(telemetryEvents).values(event);
+}
+
+export async function getTelemetryEvents(options: { eventType?: string; source?: string; since?: Date; limit?: number }) {
+  const db = await getDb();
+  if (!db) return [];
+  const conditions = [];
+  if (options.eventType) conditions.push(eq(telemetryEvents.eventType, options.eventType));
+  if (options.source) conditions.push(eq(telemetryEvents.source, options.source));
+  if (options.since) conditions.push(gte(telemetryEvents.createdAt, options.since));
+
+  const query = db.select().from(telemetryEvents);
+  if (conditions.length > 0) {
+    return query.where(and(...conditions)).orderBy(desc(telemetryEvents.createdAt)).limit(options.limit ?? 500);
+  }
+  return query.orderBy(desc(telemetryEvents.createdAt)).limit(options.limit ?? 500);
+}
+
+export async function getTelemetrySummary() {
+  const db = await getDb();
+  if (!db) return { totalEvents: 0, totalCostMicros: 0, avgLatency: 0, modelBreakdown: [] as { source: string; count: number; avgMetric: number; totalCost: number }[] };
+
+  const all = await db.select().from(telemetryEvents);
+  const bySource = new Map<string, { count: number; totalMetric: number; totalCost: number }>();
+
+  for (const event of all) {
+    const existing = bySource.get(event.source) ?? { count: 0, totalMetric: 0, totalCost: 0 };
+    existing.count++;
+    existing.totalMetric += event.metricValue ?? 0;
+    existing.totalCost += event.costMicros ?? 0;
+    bySource.set(event.source, existing);
+  }
+
+  const modelBreakdown = Array.from(bySource.entries()).map(([source, data]) => ({
+    source,
+    count: data.count,
+    avgMetric: data.count > 0 ? Math.round(data.totalMetric / data.count) : 0,
+    totalCost: data.totalCost,
+  }));
+
+  return {
+    totalEvents: all.length,
+    totalCostMicros: all.reduce((sum, e) => sum + (e.costMicros ?? 0), 0),
+    avgLatency: all.length > 0 ? Math.round(all.reduce((sum, e) => sum + (e.metricValue ?? 0), 0) / all.length) : 0,
+    modelBreakdown,
+  };
+}
+
+// ─── Health Check (DB ping) ──────────────────────────────────────────────────
+
+export async function pingDatabase(): Promise<{ ok: boolean; latencyMs: number }> {
+  const start = Date.now();
+  try {
+    const db = await getDb();
+    if (!db) return { ok: false, latencyMs: 0 };
+    await db.execute(sql`SELECT 1`);
+    return { ok: true, latencyMs: Date.now() - start };
+  } catch {
+    return { ok: false, latencyMs: Date.now() - start };
   }
 }

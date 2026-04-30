@@ -32,3 +32,26 @@
 - [x] Move system status details into Arcane Mechanisms page
 - [x] Update Layout.tsx to add The Conclave to Inner Sanctum submenu (admin only)
 - [x] Write vitest tests for admin and permission procedures
+
+## Phase: Live Features & Telemetry
+
+- [x] Add system_config table to drizzle schema
+- [x] Add ingestion_jobs and telemetry_events tables to drizzle schema
+- [x] Build tRPC health-check procedures (ping DB, LM Studio, OpenRouter)
+- [x] Build tRPC permission enforcement hook (usePermission)
+- [x] Build tRPC procedure for Listen to Ramblings (LLM invocation with voice_of_arkanum prompt)
+- [x] Build tRPC procedures for Oversee the Scribes (live job queue)
+- [x] Build tRPC procedures for system_config CRUD (Arcane Mechanisms persistence)
+- [x] Build tRPC procedures for telemetry data (Divination & Omens)
+- [x] Update Grand Hall orbs to use live health-check data
+- [x] Build usePermission hook and gate feature areas on frontend
+- [x] Wire Listen to Ramblings page to LLM tRPC procedure
+- [x] Connect Oversee the Scribes to live job queue data
+- [x] Persist Arcane Mechanisms config fields to system_config table
+- [x] Connect Divination & Omens charts to real telemetry data
+- [x] Write vitest tests for health-check procedures
+- [x] Write vitest tests for permission enforcement
+- [x] Write vitest tests for ramblings LLM procedure
+- [x] Write vitest tests for system_config procedures
+- [x] Write vitest tests for telemetry procedures
+- [x] Write vitest tests for ingestion job procedures
