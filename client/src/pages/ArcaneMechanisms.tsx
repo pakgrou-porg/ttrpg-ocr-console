@@ -4,16 +4,16 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Settings, Save, Server, Cpu, Key } from "lucide-react";
 
-export default function ConfigSystems() {
+export default function ArcaneMechanisms() {
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       <div>
         <h1 className="text-4xl font-bold tracking-tight mb-2 flex items-center gap-3">
           <Settings className="w-10 h-10 text-primary" />
-          Systems & Tools
+          Arcane Mechanisms
         </h1>
         <p className="text-lg text-muted-foreground max-w-3xl">
-          Configure connections to your local models, database, and external APIs.
+          Configure connections to your local models, database, and external APIs. Tune the gears of the Arcanum.
         </p>
       </div>
 
@@ -23,7 +23,7 @@ export default function ConfigSystems() {
           <CardHeader>
             <CardTitle className="text-2xl flex items-center gap-2">
               <Server className="w-5 h-5 text-primary" />
-              Database Connection
+              Database Connection (Supabase)
             </CardTitle>
             <CardDescription>Supabase PostgREST endpoint and credentials.</CardDescription>
           </CardHeader>

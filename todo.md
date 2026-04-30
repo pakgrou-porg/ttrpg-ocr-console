@@ -1,12 +1,13 @@
-# TTRPG OCR Console - New Requirements
+# TTRPG OCR Console - Thematic Renaming
 
-- [ ] Update `Layout.tsx` navigation menu to reflect new UX emphasis.
-- [ ] Update `App.tsx` routes for the new pages.
-- [ ] Build "Using the Data" page (active gameplay, saving records, groups).
-- [ ] Build "Perusing the Data" page (search, filter, explore, e.g., "oriental dragons").
-- [ ] Build "How to Use This" page (documentation/guides).
-- [ ] Build "Monitoring Jobs" page (ingestion queue, HITL review).
-- [ ] Build "Usage Stats" page (telemetry, performance metrics).
-- [ ] Build "Configuration - Systems & Tools" page (local model configs, DB connection, creds).
-- [ ] Build "Configuration - Content Config" page (imports for new game/version/materials).
-- [ ] Build "Configuration - System Prompts" page (prompts for all stages and operations).
+- [ ] Update `Layout.tsx` navigation menu with thematic names.
+- [ ] Update `App.tsx` routes and imports for the renamed pages.
+- [ ] Rename and update `UsingData.tsx` to `EnterArcanum.tsx` ("Enter the Arcanum").
+- [ ] Rename and update `PerusingData.tsx` to `ListenRamblings.tsx` ("Listen to Ramblings") - add random subject generator.
+- [ ] Rename and update `HowToUse.tsx` to `TomeKnowledge.tsx` ("Tome of Knowledge").
+- [ ] Rename and update `MonitoringJobs.tsx` to `OverseeScribes.tsx` ("Oversee the Scribes").
+- [ ] Rename and update `UsageStats.tsx` to `DivinationOmens.tsx` ("Divination & Omens").
+- [ ] Rename and update `ConfigSystems.tsx` to `ArcaneMechanisms.tsx` ("Arcane Mechanisms").
+- [ ] Rename and update `ConfigContent.tsx` to `SummoningRituals.tsx` ("Summoning Rituals").
+- [ ] Rename and update `ConfigPrompts.tsx` to `IncantationsRunes.tsx` ("Incantations & Runes") - add prompt for Ramblings AI.
+- [ ] Update `Home.tsx` dashboard cards with the new thematic names.

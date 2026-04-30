@@ -1,10 +1,10 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Search, Filter, Database, ChevronRight } from "lucide-react";
+import { Search, Filter, Database, ChevronRight, Sparkles } from "lucide-react";
 import { useState } from "react";
 
-export default function PerusingData() {
+export default function ListenRamblings() {
   const [searchQuery, setSearchQuery] = useState("");
 
   return (
@@ -12,10 +12,10 @@ export default function PerusingData() {
       <div>
         <h1 className="text-4xl font-bold tracking-tight mb-2 flex items-center gap-3">
           <Search className="w-10 h-10 text-primary" />
-          Perusing the Data
+          Listen to Ramblings
         </h1>
         <p className="text-lg text-muted-foreground max-w-3xl">
-          Explore the entire structured dataset. Use natural language queries or advanced filters to find exactly what you need (e.g., "show me oriental dragons").
+          Explore the entire structured dataset. Use natural language queries, advanced filters, or simply listen to the random ramblings of the Arcanum to discover forgotten lore.
         </p>
       </div>
 
@@ -32,6 +32,10 @@ export default function PerusingData() {
         <Button className="h-12 px-8 gap-2">
           <Database className="w-5 h-5" />
           Query Database
+        </Button>
+        <Button variant="secondary" className="h-12 px-4 gap-2 bg-purple-500/20 text-purple-500 hover:bg-purple-500/30 border border-purple-500/30">
+          <Sparkles className="w-5 h-5" />
+          Random Rambling
         </Button>
         <Button variant="outline" className="h-12 px-4 gap-2">
           <Filter className="w-5 h-5" />

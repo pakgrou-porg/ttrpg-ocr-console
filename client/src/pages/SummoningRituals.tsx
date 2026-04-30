@@ -5,7 +5,7 @@ import { Label } from "@/components/ui/label";
 import { Database, Save, Plus, Trash2, UploadCloud } from "lucide-react";
 import { useState } from "react";
 
-export default function ConfigContent() {
+export default function SummoningRituals() {
   const [lexicon, setLexicon] = useState([
     "Armor Class", "Hit Points", "Saving Throw", "Dexterity", "Constitution", "Intelligence", "Wisdom", "Charisma", "Initiative", "Proficiency Bonus"
   ]);
@@ -27,10 +27,10 @@ export default function ConfigContent() {
       <div>
         <h1 className="text-4xl font-bold tracking-tight mb-2 flex items-center gap-3">
           <Database className="w-10 h-10 text-primary" />
-          Content Configuration
+          Summoning Rituals
         </h1>
         <p className="text-lg text-muted-foreground max-w-3xl">
-          Set up imports for new games, versions, or materials, and manage the domain-specific lexicon.
+          Set up imports for new games, versions, or materials, and manage the domain-specific lexicon. Summon new knowledge into the Arcanum.
         </p>
       </div>
 
@@ -40,9 +40,9 @@ export default function ConfigContent() {
           <CardHeader>
             <CardTitle className="text-2xl flex items-center gap-2">
               <UploadCloud className="w-5 h-5 text-primary" />
-              New Import Job
+              New Summoning Ritual
             </CardTitle>
-            <CardDescription>Configure a new PDF ingestion batch.</CardDescription>
+              <CardDescription>Configure a new PDF ingestion batch to summon knowledge.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
             <div className="space-y-2">
@@ -68,7 +68,7 @@ export default function ConfigContent() {
             </div>
             <Button className="w-full gap-2 mt-4 bg-primary hover:bg-primary/90 text-primary-foreground">
               <Plus className="w-4 h-4" />
-              Queue Import Job
+              Begin Summoning
             </Button>
           </CardContent>
         </Card>
@@ -76,7 +76,7 @@ export default function ConfigContent() {
         {/* TTRPG Lexicon Management */}
         <Card className="bg-card/50 backdrop-blur-sm border-border/50">
           <CardHeader>
-            <CardTitle className="text-2xl">TTRPG Lexicon Management</CardTitle>
+            <CardTitle className="text-2xl">Words of Binding (Lexicon)</CardTitle>
             <CardDescription>Manage the domain-specific vocabulary used to validate OCR extractions.</CardDescription>
           </CardHeader>
           <CardContent>

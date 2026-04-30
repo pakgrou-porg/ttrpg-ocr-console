@@ -8,15 +8,15 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const { theme, setTheme } = useTheme();
 
   const navItems = [
-    { href: "/", label: "Overview", icon: BookOpen },
-    { href: "/using-data", label: "Using the Data", icon: Edit3 },
-    { href: "/perusing-data", label: "Perusing the Data", icon: Search },
-    { href: "/how-to-use", label: "How to Use This", icon: HelpCircle },
-    { href: "/monitoring-jobs", label: "Monitoring Jobs", icon: Activity },
-    { href: "/usage-stats", label: "Usage Stats", icon: BarChart2 },
-    { href: "/config-systems", label: "Systems & Tools", icon: Settings },
-    { href: "/config-content", label: "Content Config", icon: Database },
-    { href: "/config-prompts", label: "System Prompts", icon: Terminal },
+    { href: "/", label: "The Grand Hall", icon: BookOpen },
+    { href: "/enter-arcanum", label: "Enter the Arcanum", icon: Edit3 },
+    { href: "/listen-ramblings", label: "Listen to Ramblings", icon: Search },
+    { href: "/tome-knowledge", label: "Tome of Knowledge", icon: HelpCircle },
+    { href: "/oversee-scribes", label: "Oversee the Scribes", icon: Activity },
+    { href: "/divination-omens", label: "Divination & Omens", icon: BarChart2 },
+    { href: "/arcane-mechanisms", label: "Arcane Mechanisms", icon: Settings },
+    { href: "/summoning-rituals", label: "Summoning Rituals", icon: Database },
+    { href: "/incantations-runes", label: "Incantations & Runes", icon: Terminal },
   ];
 
   return (

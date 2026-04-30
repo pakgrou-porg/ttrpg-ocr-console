@@ -19,16 +19,16 @@ const categoryData = [
   { name: 'Rules', count: 550 },
 ];
 
-export default function UsageStats() {
+export default function DivinationOmens() {
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       <div>
         <h1 className="text-4xl font-bold tracking-tight mb-2 flex items-center gap-3">
           <BarChart2 className="w-10 h-10 text-primary" />
-          Usage Stats
+          Divination & Omens
         </h1>
         <p className="text-lg text-muted-foreground max-w-3xl">
-          Telemetry and performance metrics for the OCR pipeline and database queries.
+          Telemetry and performance metrics for the OCR pipeline and database queries. Read the signs to optimize the flow of knowledge.
         </p>
       </div>
 
@@ -36,7 +36,7 @@ export default function UsageStats() {
         <Card className="bg-card/50 backdrop-blur-sm border-border/50">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <Database className="w-4 h-4" /> Total Records
+              <Database className="w-4 h-4" /> Total Lore Fragments
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -47,7 +47,7 @@ export default function UsageStats() {
         <Card className="bg-card/50 backdrop-blur-sm border-border/50">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <TrendingUp className="w-4 h-4 text-green-500" /> Weekly Queries
+              <TrendingUp className="w-4 h-4 text-green-500" /> Weekly Divinations
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -58,7 +58,7 @@ export default function UsageStats() {
         <Card className="bg-card/50 backdrop-blur-sm border-border/50">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <Users className="w-4 h-4 text-blue-500" /> Active Groups
+              <Users className="w-4 h-4 text-blue-500" /> Active Grimoires
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -72,7 +72,7 @@ export default function UsageStats() {
         {/* Query Volume Chart */}
         <Card className="bg-card/50 backdrop-blur-sm border-border/50">
           <CardHeader>
-            <CardTitle className="text-2xl">Query Volume (7 Days)</CardTitle>
+            <CardTitle className="text-2xl">Divination Volume (7 Days)</CardTitle>
             <CardDescription>User queries vs. internal API calls.</CardDescription>
           </CardHeader>
           <CardContent className="h-[300px]">
@@ -96,7 +96,7 @@ export default function UsageStats() {
         {/* Database Composition Chart */}
         <Card className="bg-card/50 backdrop-blur-sm border-border/50">
           <CardHeader>
-            <CardTitle className="text-2xl">Database Composition</CardTitle>
+            <CardTitle className="text-2xl">Lore Composition</CardTitle>
             <CardDescription>Distribution of extracted records by category.</CardDescription>
           </CardHeader>
           <CardContent className="h-[300px]">

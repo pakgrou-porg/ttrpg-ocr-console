@@ -5,31 +5,31 @@ import { Link } from "wouter";
 export default function Home() {
   const modules = [
     {
-      title: "Using the Data",
+      title: "Enter the Arcanum",
       description: "Access extracted records for active gameplay, save entities, and organize groups.",
       icon: Edit3,
-      href: "/using-data",
+      href: "/enter-arcanum",
       color: "text-blue-500",
     },
     {
-      title: "Perusing the Data",
+      title: "Listen to Ramblings",
       description: "Explore the entire structured dataset with natural language queries and filters.",
       icon: Search,
-      href: "/perusing-data",
+      href: "/listen-ramblings",
       color: "text-green-500",
     },
     {
-      title: "Monitoring Jobs",
+      title: "Oversee the Scribes",
       description: "Track ingestion queues, background processes, and the HITL review queue.",
       icon: Activity,
-      href: "/monitoring-jobs",
+      href: "/oversee-scribes",
       color: "text-orange-500",
     },
     {
-      title: "Configuration",
+      title: "Arcane Mechanisms",
       description: "Manage systems, tools, content imports, and system prompts.",
       icon: Settings,
-      href: "/config-systems",
+      href: "/arcane-mechanisms",
       color: "text-purple-500",
     },
   ];

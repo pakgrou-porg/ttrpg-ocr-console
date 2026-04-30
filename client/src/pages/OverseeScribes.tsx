@@ -2,16 +2,16 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Activity, Clock, CheckCircle2, AlertCircle, Play, Pause, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-export default function MonitoringJobs() {
+export default function OverseeScribes() {
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       <div>
         <h1 className="text-4xl font-bold tracking-tight mb-2 flex items-center gap-3">
           <Activity className="w-10 h-10 text-primary" />
-          Monitoring Jobs
+          Oversee the Scribes
         </h1>
         <p className="text-lg text-muted-foreground max-w-3xl">
-          Track the status of active ingestion queues, background processes, and the Human-in-the-Loop (HITL) review queue.
+          Track the status of active ingestion queues, background processes, and the Human-in-the-Loop (HITL) review queue. Ensure the scribes are working efficiently.
         </p>
       </div>
 
@@ -19,7 +19,7 @@ export default function MonitoringJobs() {
         <Card className="bg-card/50 backdrop-blur-sm border-border/50">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <Clock className="w-4 h-4" /> Active Jobs
+              <Clock className="w-4 h-4" /> Active Scribes
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -30,7 +30,7 @@ export default function MonitoringJobs() {
         <Card className="bg-card/50 backdrop-blur-sm border-border/50">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-green-500" /> Completed Today
+              <CheckCircle2 className="w-4 h-4 text-green-500" /> Transcribed Today
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -41,7 +41,7 @@ export default function MonitoringJobs() {
         <Card className="bg-card/50 backdrop-blur-sm border-border/50">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 text-orange-500" /> HITL Queue
+              <AlertCircle className="w-4 h-4 text-orange-500" /> Scribe Queries (HITL)
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -54,7 +54,7 @@ export default function MonitoringJobs() {
       <Card className="bg-card/50 backdrop-blur-sm border-border/50">
         <CardHeader className="flex flex-row items-center justify-between">
           <div>
-            <CardTitle className="text-2xl">Active Ingestion Queue</CardTitle>
+            <CardTitle className="text-2xl">Active Transcription Queue</CardTitle>
             <CardDescription>Current status of PDF processing batches.</CardDescription>
           </div>
           <div className="flex gap-2">

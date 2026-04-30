@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Edit3, Search, Save, FolderPlus, PlayCircle } from "lucide-react";
 import { useState } from "react";
 
-export default function UsingData() {
+export default function EnterArcanum() {
   const [searchQuery, setSearchQuery] = useState("");
 
   return (
@@ -12,10 +12,10 @@ export default function UsingData() {
       <div>
         <h1 className="text-4xl font-bold tracking-tight mb-2 flex items-center gap-3">
           <Edit3 className="w-10 h-10 text-primary" />
-          Using the Data
+          Enter the Arcanum
         </h1>
         <p className="text-lg text-muted-foreground max-w-3xl">
-          Access extracted records for active gameplay, save frequently used entities, and organize them into custom groups for quick reference.
+          Access extracted records for active gameplay, save frequently used entities, and organize them into custom groups for quick reference. The Arcanum holds the knowledge you need right now.
         </p>
       </div>
 
@@ -40,7 +40,7 @@ export default function UsingData() {
         <Card className="lg:col-span-2 bg-card/50 backdrop-blur-sm border-border/50">
           <CardHeader className="flex flex-row items-center justify-between">
             <div>
-              <CardTitle className="text-2xl">Saved Records</CardTitle>
+              <CardTitle className="text-2xl">Universal Memory</CardTitle>
               <CardDescription>Your pinned entities and spells for fast access.</CardDescription>
             </div>
             <Button variant="outline" className="gap-2">
@@ -83,7 +83,7 @@ export default function UsingData() {
         <Card className="bg-card/50 backdrop-blur-sm border-border/50">
           <CardHeader className="flex flex-row items-center justify-between">
             <div>
-              <CardTitle className="text-2xl">Groups</CardTitle>
+              <CardTitle className="text-2xl">Grimoires</CardTitle>
               <CardDescription>Organize records by encounter or session.</CardDescription>
             </div>
             <Button variant="ghost" size="icon">
