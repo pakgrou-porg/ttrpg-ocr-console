@@ -1,17 +1,22 @@
-# TTRPG OCR Console - Thematic Renaming
+# TTRPG OCR Console - Evos' Infinite Kodex
 
-- [ ] Update `Layout.tsx` navigation menu with thematic names.
-- [ ] Update `App.tsx` routes and imports for the renamed pages.
-- [ ] Rename and update `UsingData.tsx` to `EnterArcanum.tsx` ("Enter the Arcanum").
-- [ ] Rename and update `PerusingData.tsx` to `ListenRamblings.tsx` ("Listen to Ramblings") - add random subject generator.
-- [ ] Rename and update `HowToUse.tsx` to `TomeKnowledge.tsx` ("Tome of Knowledge").
-- [ ] Rename and update `MonitoringJobs.tsx` to `OverseeScribes.tsx` ("Oversee the Scribes").
-- [ ] Rename and update `UsageStats.tsx` to `DivinationOmens.tsx` ("Divination & Omens").
-- [ ] Rename and update `ConfigSystems.tsx` to `ArcaneMechanisms.tsx` ("Arcane Mechanisms").
-- [ ] Rename and update `ConfigContent.tsx` to `SummoningRituals.tsx` ("Summoning Rituals").
-- [ ] Rename and update `ConfigPrompts.tsx` to `IncantationsRunes.tsx` ("Incantations & Runes") - add prompt for Ramblings AI.
-- [ ] Update `Home.tsx` dashboard cards with the new thematic names.
-- [ ] Update Layout.tsx with the new thematic console name ("The Grand Arcanum")
-- [ ] Update Home.tsx with the new thematic console name ("The Grand Arcanum")
-- [ ] Update Layout.tsx and Home.tsx with the new console name ("Evos' Infinite Kodex") and subtitle ("Vault of Lore")
-- [ ] Find and replace all instances of "Arcanum" with "Arkanum" across all files
+- [x] Update `Layout.tsx` navigation menu with thematic names.
+- [x] Update `App.tsx` routes and imports for the renamed pages.
+- [x] Rename and update `UsingData.tsx` to `EnterArkanum.tsx` ("Enter the Arkanum").
+- [x] Rename and update `PerusingData.tsx` to `ListenRamblings.tsx` ("Listen to Ramblings") - add random subject generator.
+- [x] Rename and update `HowToUse.tsx` to `TomeKnowledge.tsx` ("Tome of Knowledge").
+- [x] Rename and update `MonitoringJobs.tsx` to `OverseeScribes.tsx` ("Oversee the Scribes").
+- [x] Rename and update `UsageStats.tsx` to `DivinationOmens.tsx` ("Divination & Omens").
+- [x] Rename and update `ConfigSystems.tsx` to `ArcaneMechanisms.tsx` ("Arcane Mechanisms").
+- [x] Rename and update `ConfigContent.tsx` to `SummoningRituals.tsx` ("Summoning Rituals").
+- [x] Rename and update `ConfigPrompts.tsx` to `IncantationsRunes.tsx` ("Incantations & Runes") - add prompt for Ramblings AI.
+- [x] Update `Home.tsx` dashboard cards with the new thematic names.
+- [x] Rename console to "Evos' Infinite Kodex" with subtitle "Vault of Lore"
+- [x] Replace all instances of "Arcanum" with "Arkanum" across all files
+- [x] Upgrade project to web-db-user (backend + database + auth)
+- [x] Create database schema for user_profiles and system_prompts tables
+- [x] Implement nested navigation in Layout.tsx (The Inner Sanctum collapsible group)
+- [x] Build PersonalSanctum page (user profile, preferences, saved lore stats)
+- [x] Connect Incantations & Runes to system_prompts database table via tRPC
+- [x] Add user login/logout to sidebar and Home page header
+- [x] Write vitest tests for profile and prompts procedures
