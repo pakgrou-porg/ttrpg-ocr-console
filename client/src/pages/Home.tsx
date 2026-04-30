@@ -5,7 +5,7 @@ import { Link } from "wouter";
 export default function Home() {
   const modules = [
     {
-      title: "Enter the Arcanum",
+      title: "Enter the Arkanum",
       description: "Access extracted records for active gameplay, save entities, and organize groups.",
       icon: Edit3,
       href: "/enter-arcanum",
@@ -39,10 +39,10 @@ export default function Home() {
       <div>
         <h1 className="text-4xl font-bold tracking-tight mb-2 flex items-center gap-3">
           <BookOpen className="w-10 h-10 text-primary" />
-          The Grand Arcanum
+          Evos' Infinite Kodex
         </h1>
         <p className="text-lg text-muted-foreground max-w-3xl">
-          Welcome to the Vault of Infinite Lore. Manage the scribes, monitor the arcane consensus, and resolve flagged incantations to build the ultimate grimoire.
+          Welcome to the Vault of Lore. Manage the scribes, monitor the arcane consensus, and resolve flagged incantations to build the ultimate grimoire.
         </p>
       </div>
 

@@ -30,7 +30,7 @@ export default function SummoningRituals() {
           Summoning Rituals
         </h1>
         <p className="text-lg text-muted-foreground max-w-3xl">
-          Set up imports for new games, versions, or materials, and manage the domain-specific lexicon. Summon new knowledge into the Arcanum.
+          Set up imports for new games, versions, or materials, and manage the domain-specific lexicon. Summon new knowledge into the Arkanum.
         </p>
       </div>
 

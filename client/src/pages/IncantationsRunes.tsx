@@ -10,7 +10,7 @@ export default function IncantationsRunes() {
     pass1: `You are an expert TTRPG archivist. Your task is to analyze the provided image of a TTRPG sourcebook page and extract its structural layout. Identify the bounding boxes for all major sections: stat blocks, spell descriptions, lore text, tables, and artwork. Return the layout metadata in valid JSON format.`,
     pass2: `You are a meticulous data extraction assistant. Given the cropped image of a TTRPG stat block and the structural metadata from Pass 1, extract all relevant fields (Name, Type, Alignment, AC, HP, Speed, Stats, Actions, etc.) into the provided JSON schema. Ensure all numerical values are extracted accurately. Do not hallucinate information not present in the image.`,
     referee: `You are the Adversarial TTRPG Archivist Referee. Your job is to compare the JSON extractions from multiple OCR models (Gemini, Claude, GPT-4o) for the same source image. Identify any discrepancies between the models. If a discrepancy exists, evaluate the source image to determine the correct value. If the image is ambiguous, flag the field for human review. Calculate the final consensus score (C_final) based on the agreement rate and your confidence in the resolution.`,
-    ramblings: `You are the Voice of the Arcanum, an ancient and slightly eccentric magical intelligence that resides within a vast library of TTRPG lore. Your task is to generate a "Random Rambling"—a fascinating, obscure, or highly specific combination of lore, mechanics, or entities from the database. Present this information to the user in a theatrical, mystical tone, as if you are whispering secrets you just uncovered in a dusty tome. Suggest a specific query they could run to explore this topic further.`
+    ramblings: `You are the Voice of the Arkanum, an ancient and slightly eccentric magical intelligence that resides within a vast library of TTRPG lore. Your task is to generate a "Random Rambling"—a fascinating, obscure, or highly specific combination of lore, mechanics, or entities from the database. Present this information to the user in a theatrical, mystical tone, as if you are whispering secrets you just uncovered in a dusty tome. Suggest a specific query they could run to explore this topic further.`
   };
 
   return (
@@ -21,7 +21,7 @@ export default function IncantationsRunes() {
           Incantations & Runes
         </h1>
         <p className="text-lg text-muted-foreground max-w-3xl">
-          Manage and refine the system prompts used by the ensemble models at each stage of the OCR pipeline, and the voice of the Arcanum itself.
+          Manage and refine the system prompts used by the ensemble models at each stage of the OCR pipeline, and the voice of the Arkanum itself.
         </p>
       </div>
 
@@ -53,7 +53,7 @@ export default function IncantationsRunes() {
             onClick={() => setActiveTab('ramblings')}
           >
             <span className="w-6 h-6 rounded-full bg-purple-500/20 text-purple-500 flex items-center justify-center text-xs">V</span>
-            Voice of the Arcanum (Ramblings AI)
+            Voice of the Arkanum (Ramblings AI)
           </button>
         </div>
         
@@ -64,7 +64,7 @@ export default function IncantationsRunes() {
                 {activeTab === 'pass1' && "Layout Analysis Prompt"}
                 {activeTab === 'pass2' && "Content Extraction Prompt"}
                 {activeTab === 'referee' && "Adversarial Referee Prompt"}
-                {activeTab === 'ramblings' && "Voice of the Arcanum Prompt"}
+                {activeTab === 'ramblings' && "Voice of the Arkanum Prompt"}
               </h3>
               <p className="text-sm text-muted-foreground">
                 {activeTab === 'pass1' && "Used by the local VLM (e.g., LLaVA) to identify bounding boxes."}

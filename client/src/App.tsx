@@ -2,7 +2,7 @@ import { Switch, Route } from "wouter";
 import { ThemeProvider } from "@/hooks/use-theme";
 import { Layout } from "@/components/Layout";
 import Home from "@/pages/Home";
-import EnterArcanum from "@/pages/EnterArcanum";
+import EnterArkanum from "@/pages/EnterArkanum";
 import ListenRamblings from "@/pages/ListenRamblings";
 import TomeKnowledge from "@/pages/TomeKnowledge";
 import OverseeScribes from "@/pages/OverseeScribes";
@@ -17,7 +17,7 @@ function App() {
       <Layout>
         <Switch>
           <Route path="/" component={Home} />
-          <Route path="/enter-arcanum" component={EnterArcanum} />
+          <Route path="/enter-arkanum" component={EnterArkanum} />
           <Route path="/listen-ramblings" component={ListenRamblings} />
           <Route path="/tome-knowledge" component={TomeKnowledge} />
           <Route path="/oversee-scribes" component={OverseeScribes} />

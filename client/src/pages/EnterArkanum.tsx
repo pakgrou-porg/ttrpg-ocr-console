@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Edit3, Search, Save, FolderPlus, PlayCircle } from "lucide-react";
 import { useState } from "react";
 
-export default function EnterArcanum() {
+export default function EnterArkanum() {
   const [searchQuery, setSearchQuery] = useState("");
 
   return (
@@ -12,10 +12,10 @@ export default function EnterArcanum() {
       <div>
         <h1 className="text-4xl font-bold tracking-tight mb-2 flex items-center gap-3">
           <Edit3 className="w-10 h-10 text-primary" />
-          Enter the Arcanum
+          Enter the Arkanum
         </h1>
         <p className="text-lg text-muted-foreground max-w-3xl">
-          Access extracted records for active gameplay, save frequently used entities, and organize them into custom groups for quick reference. The Arcanum holds the knowledge you need right now.
+          Access extracted records for active gameplay, save frequently used entities, and organize them into custom groups for quick reference. The Arkanum holds the knowledge you need right now.
         </p>
       </div>
 

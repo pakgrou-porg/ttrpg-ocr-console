@@ -29,7 +29,7 @@ export default function TomeKnowledge() {
               <li>Go to <strong>Summoning Rituals</strong> to set up a new import job for your PDFs.</li>
               <li>Monitor the ingestion progress on the <strong>Oversee the Scribes</strong> page.</li>
               <li>Once complete, use <strong>Listen to Ramblings</strong> to explore the extracted records.</li>
-              <li>Save frequently used records in <strong>Enter the Arcanum</strong> for quick access during gameplay.</li>
+              <li>Save frequently used records in <strong>Enter the Arkanum</strong> for quick access during gameplay.</li>
             </ol>
           </CardContent>
         </Card>

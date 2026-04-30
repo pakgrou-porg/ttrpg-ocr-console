@@ -15,7 +15,7 @@ export default function ListenRamblings() {
           Listen to Ramblings
         </h1>
         <p className="text-lg text-muted-foreground max-w-3xl">
-          Explore the entire structured dataset. Use natural language queries, advanced filters, or simply listen to the random ramblings of the Arcanum to discover forgotten lore.
+          Explore the entire structured dataset. Use natural language queries, advanced filters, or simply listen to the random ramblings of the Arkanum to discover forgotten lore.
         </p>
       </div>
 

@@ -9,7 +9,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   const navItems = [
     { href: "/", label: "The Grand Hall", icon: BookOpen },
-    { href: "/enter-arcanum", label: "Enter the Arcanum", icon: Edit3 },
+    { href: "/enter-arcanum", label: "Enter the Arkanum", icon: Edit3 },
     { href: "/listen-ramblings", label: "Listen to Ramblings", icon: Search },
     { href: "/tome-knowledge", label: "Tome of Knowledge", icon: HelpCircle },
     { href: "/oversee-scribes", label: "Oversee the Scribes", icon: Activity },
@@ -26,9 +26,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <div className="p-6 border-b border-border">
           <h1 className="text-xl font-bold text-sidebar-foreground tracking-wider flex items-center gap-2">
             <BookOpen className="w-6 h-6 text-primary" />
-            The Grand Arcanum
+            Evos' Infinite Kodex
           </h1>
-          <p className="text-xs text-sidebar-foreground/60 mt-1 font-mono">Vault of Infinite Lore</p>
+          <p className="text-xs text-sidebar-foreground/60 mt-1 font-mono">Vault of Lore</p>
         </div>
 
         <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-1">

@@ -13,3 +13,5 @@
 - [ ] Update `Home.tsx` dashboard cards with the new thematic names.
 - [ ] Update Layout.tsx with the new thematic console name ("The Grand Arcanum")
 - [ ] Update Home.tsx with the new thematic console name ("The Grand Arcanum")
+- [ ] Update Layout.tsx and Home.tsx with the new console name ("Evos' Infinite Kodex") and subtitle ("Vault of Lore")
+- [ ] Find and replace all instances of "Arcanum" with "Arkanum" across all files

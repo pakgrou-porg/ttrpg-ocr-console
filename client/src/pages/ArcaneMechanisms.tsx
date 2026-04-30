@@ -13,7 +13,7 @@ export default function ArcaneMechanisms() {
           Arcane Mechanisms
         </h1>
         <p className="text-lg text-muted-foreground max-w-3xl">
-          Configure connections to your local models, database, and external APIs. Tune the gears of the Arcanum.
+          Configure connections to your local models, database, and external APIs. Tune the gears of the Arkanum.
         </p>
       </div>
 
