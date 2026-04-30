@@ -479,3 +479,119 @@ export async function pingDatabase(): Promise<{ ok: boolean; latencyMs: number }
     return { ok: false, latencyMs: Date.now() - start };
   }
 }
+
+// ─── LLM Providers ──────────────────────────────────────────────────────────
+
+import { llmProviders, InsertLlmProvider, modelAssignments, InsertModelAssignment, dbConnections, InsertDbConnection } from "../drizzle/schema";
+
+export async function getAllLlmProviders() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(llmProviders).orderBy(llmProviders.name);
+}
+
+export async function getLlmProviderById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(llmProviders).where(eq(llmProviders.id, id)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
+export async function createLlmProvider(provider: InsertLlmProvider) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(llmProviders).values(provider);
+  return result[0].insertId;
+}
+
+export async function updateLlmProvider(id: number, updates: Partial<InsertLlmProvider>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(llmProviders).set(updates).where(eq(llmProviders.id, id));
+}
+
+export async function deleteLlmProvider(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  // Also delete any model assignments for this provider
+  await db.delete(modelAssignments).where(eq(modelAssignments.providerId, id));
+  await db.delete(llmProviders).where(eq(llmProviders.id, id));
+}
+
+// ─── Model Assignments ──────────────────────────────────────────────────────
+
+export async function getAllModelAssignments() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(modelAssignments).orderBy(modelAssignments.pipelineStage, modelAssignments.priority);
+}
+
+export async function getModelAssignmentsByStage(stage: string) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(modelAssignments)
+    .where(eq(modelAssignments.pipelineStage, stage))
+    .orderBy(modelAssignments.priority);
+}
+
+export async function createModelAssignment(assignment: InsertModelAssignment) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(modelAssignments).values(assignment);
+  return result[0].insertId;
+}
+
+export async function updateModelAssignment(id: number, updates: Partial<InsertModelAssignment>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(modelAssignments).set(updates).where(eq(modelAssignments.id, id));
+}
+
+export async function deleteModelAssignment(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(modelAssignments).where(eq(modelAssignments.id, id));
+}
+
+// ─── Database Connections ───────────────────────────────────────────────────
+
+export async function getAllDbConnections() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(dbConnections).orderBy(dbConnections.name);
+}
+
+export async function getDbConnectionById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(dbConnections).where(eq(dbConnections.id, id)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
+export async function createDbConnection(connection: InsertDbConnection) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(dbConnections).values(connection);
+  return result[0].insertId;
+}
+
+export async function updateDbConnection(id: number, updates: Partial<InsertDbConnection>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(dbConnections).set(updates).where(eq(dbConnections.id, id));
+}
+
+export async function deleteDbConnection(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(dbConnections).where(eq(dbConnections.id, id));
+}
+
+export async function setActiveDbConnection(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  // Deactivate all connections first
+  await db.update(dbConnections).set({ isActive: false }).where(sql`1=1`);
+  // Activate the selected one
+  await db.update(dbConnections).set({ isActive: true }).where(eq(dbConnections.id, id));
+}

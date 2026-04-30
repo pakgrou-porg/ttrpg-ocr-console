@@ -29,6 +29,13 @@
       "when": 1777587659845,
       "tag": "0003_grey_amphibian",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1777588988575,
+      "tag": "0004_breezy_the_stranger",
+      "breakpoints": true
     }
   ]
 }

@@ -55,3 +55,17 @@
 - [x] Write vitest tests for system_config procedures
 - [x] Write vitest tests for telemetry procedures
 - [x] Write vitest tests for ingestion job procedures
+
+## Phase: LLM Provider Management & Database Connection Config
+
+- [ ] Add llm_providers table to drizzle schema (name, type, baseUrl, encryptedApiKey, isActive)
+- [ ] Add model_assignments table to drizzle schema (providerId, modelName, pipelineStage, priority)
+- [ ] Add db_connections table to drizzle schema (name, type, host, port, database, encryptedCredentials, isActive)
+- [ ] Build tRPC procedures for provider CRUD with encrypted API key storage
+- [ ] Build tRPC procedures for model assignment matrix (assign/unassign models to stages)
+- [ ] Build tRPC procedures for database connection management with connection testing
+- [ ] Build LLM Provider Registry UI page (The Artificers)
+- [ ] Build Model Assignment Matrix UI page (The Assignments)
+- [ ] Build Database Connection Config UI page (The Vault Nexus)
+- [ ] Update Layout.tsx to add new pages to The Inner Sanctum submenu
+- [ ] Write vitest tests for provider, assignment, and connection procedures

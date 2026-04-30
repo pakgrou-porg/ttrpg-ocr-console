@@ -189,3 +189,147 @@ export const telemetryEvents = mysqlTable("telemetry_events", {
 
 export type TelemetryEvent = typeof telemetryEvents.$inferSelect;
 export type InsertTelemetryEvent = typeof telemetryEvents.$inferInsert;
+
+/**
+ * LLM Provider Registry — stores connection details for AI providers.
+ * API keys are encrypted before storage and never exposed to the frontend.
+ */
+export const PROVIDER_TYPES = [
+  "openai_compatible",
+  "lm_studio",
+  "openrouter",
+  "venice_ai",
+  "anthropic",
+  "google",
+  "custom",
+] as const;
+
+export type ProviderType = (typeof PROVIDER_TYPES)[number];
+
+export const llmProviders = mysqlTable("llm_providers", {
+  id: int("id").autoincrement().primaryKey(),
+  /** Human-readable name for this provider instance */
+  name: varchar("name", { length: 128 }).notNull().unique(),
+  /** Provider type/protocol */
+  providerType: varchar("providerType", { length: 64 }).notNull(),
+  /** Base URL for the API endpoint */
+  baseUrl: varchar("baseUrl", { length: 512 }).notNull(),
+  /** Encrypted API key (AES-256-GCM encrypted, stored as hex) */
+  encryptedApiKey: text("encryptedApiKey"),
+  /** Initialization vector for decryption (hex) */
+  keyIv: varchar("keyIv", { length: 64 }),
+  /** Auth tag for decryption (hex) */
+  keyAuthTag: varchar("keyAuthTag", { length: 64 }),
+  /** Whether this provider is currently active/enabled */
+  isActive: boolean("isActive").default(true).notNull(),
+  /** Optional notes about this provider */
+  notes: text("notes"),
+  /** Available models on this provider (cached list) */
+  availableModels: json("availableModels").$type<string[]>().default([]),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type LlmProvider = typeof llmProviders.$inferSelect;
+export type InsertLlmProvider = typeof llmProviders.$inferInsert;
+
+/**
+ * Pipeline stages that can be assigned to specific models.
+ */
+export const PIPELINE_STAGES = [
+  "layout_analysis",
+  "bbox_detection",
+  "ocr_extraction",
+  "tabular_data",
+  "image_classification",
+  "embedding",
+  "enrichment",
+  "referee",
+  "voice_of_arkanum",
+  "summarization",
+] as const;
+
+export type PipelineStage = (typeof PIPELINE_STAGES)[number];
+
+/**
+ * Model Assignment Matrix — maps specific models to pipeline stages.
+ * Multiple models can be assigned to the same stage with priority ordering
+ * for fallback chains.
+ */
+export const modelAssignments = mysqlTable("model_assignments", {
+  id: int("id").autoincrement().primaryKey(),
+  /** Which provider this model belongs to */
+  providerId: int("providerId").notNull(),
+  /** The model identifier (e.g., "gpt-4o", "llava-v1.6", "gemini-2.5-pro") */
+  modelName: varchar("modelName", { length: 256 }).notNull(),
+  /** Which pipeline stage this model is assigned to */
+  pipelineStage: varchar("pipelineStage", { length: 64 }).notNull(),
+  /** Priority within the stage (1 = primary, 2 = first fallback, etc.) */
+  priority: int("priority").default(1).notNull(),
+  /** Whether this assignment is currently active */
+  isActive: boolean("isActive").default(true).notNull(),
+  /** Optional config overrides (temperature, max_tokens, etc.) */
+  configOverrides: json("configOverrides").$type<Record<string, unknown>>(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type ModelAssignment = typeof modelAssignments.$inferSelect;
+export type InsertModelAssignment = typeof modelAssignments.$inferInsert;
+
+/**
+ * Database connections — allows switching between cloud Supabase
+ * and locally-hosted Docker PostgreSQL instances.
+ * Credentials are encrypted before storage.
+ */
+export const DB_CONNECTION_TYPES = [
+  "supabase_cloud",
+  "supabase_local",
+  "postgres_docker",
+  "postgres_remote",
+  "mysql",
+  "custom",
+] as const;
+
+export type DbConnectionType = (typeof DB_CONNECTION_TYPES)[number];
+
+export const dbConnections = mysqlTable("db_connections", {
+  id: int("id").autoincrement().primaryKey(),
+  /** Human-readable name for this connection */
+  name: varchar("name", { length: 128 }).notNull().unique(),
+  /** Connection type */
+  connectionType: varchar("connectionType", { length: 64 }).notNull(),
+  /** Host address */
+  host: varchar("host", { length: 256 }).notNull(),
+  /** Port number */
+  port: int("port").default(5432).notNull(),
+  /** Database name */
+  databaseName: varchar("databaseName", { length: 128 }).notNull(),
+  /** Username (encrypted) */
+  encryptedUsername: text("encryptedUsername"),
+  /** Password (encrypted) */
+  encryptedPassword: text("encryptedPassword"),
+  /** IV for username decryption */
+  usernameIv: varchar("usernameIv", { length: 64 }),
+  /** Auth tag for username */
+  usernameAuthTag: varchar("usernameAuthTag", { length: 64 }),
+  /** IV for password decryption */
+  passwordIv: varchar("passwordIv", { length: 64 }),
+  /** Auth tag for password */
+  passwordAuthTag: varchar("passwordAuthTag", { length: 64 }),
+  /** Whether SSL is required */
+  useSsl: boolean("useSsl").default(true).notNull(),
+  /** Whether this is the currently active connection */
+  isActive: boolean("isActive").default(false).notNull(),
+  /** Connection status from last test */
+  lastTestStatus: mysqlEnum("lastTestStatus", ["untested", "success", "failed"]).default("untested").notNull(),
+  /** Last test timestamp */
+  lastTestedAt: timestamp("lastTestedAt"),
+  /** Optional notes */
+  notes: text("notes"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type DbConnection = typeof dbConnections.$inferSelect;
+export type InsertDbConnection = typeof dbConnections.$inferInsert;

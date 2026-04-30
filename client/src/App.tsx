@@ -16,6 +16,9 @@ import SummoningRituals from "@/pages/SummoningRituals";
 import IncantationsRunes from "@/pages/IncantationsRunes";
 import PersonalSanctum from "@/pages/PersonalSanctum";
 import TheConclave from "@/pages/TheConclave";
+import TheArtificers from "@/pages/TheArtificers";
+import TheAssignments from "@/pages/TheAssignments";
+import TheVaultNexus from "@/pages/TheVaultNexus";
 import NotFound from "@/pages/NotFound";
 
 function Router() {
@@ -61,6 +64,21 @@ function Router() {
         <Route path="/inner-sanctum/incantations-runes">
           <PermissionGate featureArea="incantations_runes">
             <IncantationsRunes />
+          </PermissionGate>
+        </Route>
+        <Route path="/inner-sanctum/the-artificers">
+          <PermissionGate featureArea="the_conclave">
+            <TheArtificers />
+          </PermissionGate>
+        </Route>
+        <Route path="/inner-sanctum/the-assignments">
+          <PermissionGate featureArea="the_conclave">
+            <TheAssignments />
+          </PermissionGate>
+        </Route>
+        <Route path="/inner-sanctum/vault-nexus">
+          <PermissionGate featureArea="the_conclave">
+            <TheVaultNexus />
           </PermissionGate>
         </Route>
         <Route path="/inner-sanctum/the-conclave">
