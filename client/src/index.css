@@ -1,6 +1,8 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+@import url('https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@400;700;900&family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Fira+Code:wght@400;500&display=swap');
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
@@ -43,74 +45,97 @@
 }
 
 :root {
-  --primary: var(--color-blue-700);
-  --primary-foreground: var(--color-blue-50);
-  --sidebar-primary: var(--color-blue-600);
-  --sidebar-primary-foreground: var(--color-blue-50);
-  --chart-1: var(--color-blue-300);
-  --chart-2: var(--color-blue-500);
-  --chart-3: var(--color-blue-600);
-  --chart-4: var(--color-blue-700);
-  --chart-5: var(--color-blue-800);
-  --radius: 0.65rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.235 0.015 65);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.235 0.015 65);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.235 0.015 65);
-  --secondary: oklch(0.98 0.001 286.375);
-  --secondary-foreground: oklch(0.4 0.015 65);
-  --muted: oklch(0.967 0.001 286.375);
-  --muted-foreground: oklch(0.552 0.016 285.938);
-  --accent: oklch(0.967 0.001 286.375);
-  --accent-foreground: oklch(0.141 0.005 285.823);
-  --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(0.92 0.004 286.32);
-  --input: oklch(0.92 0.004 286.32);
-  --ring: oklch(0.623 0.214 259.815);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.235 0.015 65);
-  --sidebar-accent: oklch(0.967 0.001 286.375);
-  --sidebar-accent-foreground: oklch(0.141 0.005 285.823);
-  --sidebar-border: oklch(0.92 0.004 286.32);
-  --sidebar-ring: oklch(0.623 0.214 259.815);
+  /* High Fantasy / Arcane Scholar Theme - Light (Parchment & Ink) */
+  --primary: oklch(0.35 0.1 260); /* Deep Arcane Blue */
+  --primary-foreground: oklch(0.98 0.02 80); /* Warm Off-White */
+  --sidebar-primary: oklch(0.25 0.05 40); /* Dark Leather Brown */
+  --sidebar-primary-foreground: oklch(0.95 0.05 80); /* Parchment */
+  
+  --chart-1: oklch(0.5 0.15 260); /* Arcane Blue */
+  --chart-2: oklch(0.4 0.1 300); /* Mystic Purple */
+  --chart-3: oklch(0.6 0.15 40); /* Ember Orange */
+  --chart-4: oklch(0.3 0.05 160); /* Forest Green */
+  --chart-5: oklch(0.7 0.1 80); /* Gold */
+  
+  --radius: 0.25rem; /* Sharper, more classic corners */
+  
+  --background: oklch(0.95 0.03 85); /* Aged Parchment */
+  --foreground: oklch(0.2 0.02 40); /* Dark Sepia Ink */
+  
+  --card: oklch(0.98 0.02 85); /* Lighter Parchment */
+  --card-foreground: oklch(0.2 0.02 40);
+  
+  --popover: oklch(0.98 0.02 85);
+  --popover-foreground: oklch(0.2 0.02 40);
+  
+  --secondary: oklch(0.9 0.05 80); /* Aged Paper */
+  --secondary-foreground: oklch(0.3 0.05 40); /* Brown Ink */
+  
+  --muted: oklch(0.9 0.02 85);
+  --muted-foreground: oklch(0.4 0.02 40);
+  
+  --accent: oklch(0.85 0.05 80); /* Highlighted Parchment */
+  --accent-foreground: oklch(0.2 0.02 40);
+  
+  --destructive: oklch(0.5 0.2 25); /* Blood Red */
+  --destructive-foreground: oklch(0.98 0.02 80);
+  
+  --border: oklch(0.8 0.05 80); /* Faded Ink Line */
+  --input: oklch(0.85 0.05 80);
+  --ring: oklch(0.4 0.1 260); /* Arcane Glow */
+  
+  --sidebar: oklch(0.15 0.02 40); /* Very Dark Leather */
+  --sidebar-foreground: oklch(0.9 0.05 80); /* Aged Paper Text */
+  --sidebar-accent: oklch(0.25 0.05 40); /* Darker Leather */
+  --sidebar-accent-foreground: oklch(0.95 0.05 80);
+  --sidebar-border: oklch(0.2 0.02 40);
+  --sidebar-ring: oklch(0.4 0.1 260);
 }
 
 .dark {
-  --primary: var(--color-blue-700);
-  --primary-foreground: var(--color-blue-50);
-  --sidebar-primary: var(--color-blue-500);
-  --sidebar-primary-foreground: var(--color-blue-50);
-  --background: oklch(0.141 0.005 285.823);
-  --foreground: oklch(0.85 0.005 65);
-  --card: oklch(0.21 0.006 285.885);
-  --card-foreground: oklch(0.85 0.005 65);
-  --popover: oklch(0.21 0.006 285.885);
-  --popover-foreground: oklch(0.85 0.005 65);
-  --secondary: oklch(0.24 0.006 286.033);
-  --secondary-foreground: oklch(0.7 0.005 65);
-  --muted: oklch(0.274 0.006 286.033);
-  --muted-foreground: oklch(0.705 0.015 286.067);
-  --accent: oklch(0.274 0.006 286.033);
-  --accent-foreground:  oklch(0.92 0.005 65);
-  --destructive: oklch(0.704 0.191 22.216);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.488 0.243 264.376);
-  --chart-1: var(--color-blue-300);
-  --chart-2: var(--color-blue-500);
-  --chart-3: var(--color-blue-600);
-  --chart-4: var(--color-blue-700);
-  --chart-5: var(--color-blue-800);
-  --sidebar: oklch(0.21 0.006 285.885);
-  --sidebar-foreground: oklch(0.85 0.005 65);
-  --sidebar-accent: oklch(0.274 0.006 286.033);
-  --sidebar-accent-foreground:  oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.488 0.243 264.376);
+  /* High Fantasy / Arcane Scholar Theme - Dark (Midnight & Glowing Runes) */
+  --primary: oklch(0.6 0.15 260); /* Bright Arcane Blue */
+  --primary-foreground: oklch(0.1 0.02 260); /* Dark Blue/Black */
+  --sidebar-primary: oklch(0.2 0.05 260); /* Deep Midnight Blue */
+  --sidebar-primary-foreground: oklch(0.9 0.05 260); /* Pale Blue */
+  
+  --background: oklch(0.15 0.02 260); /* Very Dark Blue/Black */
+  --foreground: oklch(0.9 0.02 80); /* Pale Parchment Text */
+  
+  --card: oklch(0.2 0.03 260); /* Dark Blue/Grey */
+  --card-foreground: oklch(0.9 0.02 80);
+  
+  --popover: oklch(0.2 0.03 260);
+  --popover-foreground: oklch(0.9 0.02 80);
+  
+  --secondary: oklch(0.25 0.05 260); /* Muted Blue */
+  --secondary-foreground: oklch(0.8 0.05 260); /* Light Blue Text */
+  
+  --muted: oklch(0.25 0.02 260);
+  --muted-foreground: oklch(0.6 0.02 260);
+  
+  --accent: oklch(0.3 0.05 260); /* Highlighted Dark Blue */
+  --accent-foreground: oklch(0.95 0.05 260);
+  
+  --destructive: oklch(0.6 0.2 25); /* Bright Blood Red */
+  --destructive-foreground: oklch(0.1 0.02 25);
+  
+  --border: oklch(0.3 0.05 260); /* Subtle Blue Line */
+  --input: oklch(0.25 0.05 260);
+  --ring: oklch(0.6 0.15 260); /* Bright Arcane Glow */
+  
+  --chart-1: oklch(0.6 0.15 260); /* Arcane Blue */
+  --chart-2: oklch(0.5 0.15 300); /* Mystic Purple */
+  --chart-3: oklch(0.7 0.15 40); /* Ember Orange */
+  --chart-4: oklch(0.4 0.1 160); /* Forest Green */
+  --chart-5: oklch(0.8 0.1 80); /* Gold */
+  
+  --sidebar: oklch(0.1 0.02 260); /* Almost Black */
+  --sidebar-foreground: oklch(0.8 0.02 260);
+  --sidebar-accent: oklch(0.2 0.05 260);
+  --sidebar-accent-foreground: oklch(0.95 0.05 260);
+  --sidebar-border: oklch(0.2 0.05 260);
+  --sidebar-ring: oklch(0.6 0.15 260);
 }
 
 @layer base {
@@ -118,7 +143,18 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground font-serif;
+    /* Subtle parchment texture overlay */
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.05'/%3E%3C/svg%3E");
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Cinzel Decorative', serif;
+    letter-spacing: 0.05em;
+  }
+  
+  code, pre, .font-mono {
+    font-family: 'Fira Code', monospace;
   }
   button:not(:disabled),
   [role="button"]:not([aria-disabled="true"]),
