@@ -105,4 +105,4 @@
 - [x] Build PDF/document upload card in Library Shelves (drag-and-drop, progress indicator, status feedback)
 - [x] Add "Next Unreviewed" auto-advance CTA button to Archivist's Desk (jumps to oldest critical/high unresolved item)
 - [x] Write vitest tests for pipeline procedures (8 new tests, 96 total passing)
-- [ ] Push updated codebase to GitHub
+- [x] Push updated codebase to GitHub (origin/main is up to date — checkpoint auto-committed)
