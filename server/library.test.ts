@@ -402,3 +402,140 @@ describe("hitl", () => {
     }
   });
 });
+
+// ─── Pipeline Procedure Tests ────────────────────────────────────────────────
+
+describe("pipeline", () => {
+  const adminCaller = appRouter.createCaller(createAdminContext());
+  const userCaller = appRouter.createCaller(createUserContext());
+
+  let testDocId: number;
+  let testPageId: number;
+
+  beforeAll(async () => {
+    // Create a document to use as the pipeline target
+    const docResult = await adminCaller.library.createDocument({
+      filename: "pipeline_test.pdf",
+      title: "Pipeline Integration Test",
+      totalPages: 5,
+    });
+    testDocId = docResult.id;
+  });
+
+  describe("pipeline.ingestPage", () => {
+    it("ingests a page and creates a document_pages record", async () => {
+      const result = await userCaller.pipeline.ingestPage({
+        documentId: testDocId,
+        pageNumber: 1,
+        imageUrl: "https://example.com/pipeline_page1.png",
+        thumbnailUrl: "https://example.com/pipeline_page1_thumb.png",
+        phash: "pipeline_hash_001",
+        imageWidth: 1240,
+        imageHeight: 1754,
+      });
+      expect(result.success).toBe(true);
+      expect(result.pageId).toBeGreaterThan(0);
+      expect(result.isDuplicate).toBe(false);
+      testPageId = result.pageId;
+    });
+
+    it("detects a duplicate page by phash", async () => {
+      const result = await userCaller.pipeline.ingestPage({
+        documentId: testDocId,
+        pageNumber: 99,
+        imageUrl: "https://example.com/pipeline_page_dup.png",
+        phash: "pipeline_hash_001", // same phash as above
+      });
+      expect(result.isDuplicate).toBe(true);
+      expect(result.duplicateOfPageId).toBe(testPageId);
+    });
+
+    it("returns NOT_FOUND for nonexistent document", async () => {
+      await expect(userCaller.pipeline.ingestPage({
+        documentId: 999999,
+        pageNumber: 1,
+        imageUrl: "https://example.com/missing.png",
+      })).rejects.toThrow("999999 not found");
+    });
+  });
+
+  describe("pipeline.submitOcrResult", () => {
+    it("submits an OCR result for a page", async () => {
+      const result = await userCaller.pipeline.submitOcrResult({
+        pageId: testPageId,
+        rawText: "Orc Warrior: AC 13, HP 15, STR 16",
+        structuredData: { type: "monster", name: "Orc Warrior", ac: 13, hp: 15 },
+        confidence: 91,
+        status: "pass2_complete",
+        pass1Model: "llava-1.6",
+        pass2Model: "claude-3.5-sonnet",
+        auditLog: [
+          { timestamp: new Date().toISOString(), action: "pass1_complete", model: "llava-1.6" },
+          { timestamp: new Date().toISOString(), action: "pass2_complete", model: "claude-3.5-sonnet" },
+        ],
+      });
+      expect(result.success).toBe(true);
+      expect(result.ocrResultId).toBeGreaterThan(0);
+      expect(result.autoFlagged).toBe(false); // confidence 91 > threshold
+    });
+
+    it("auto-flags low-confidence OCR results", async () => {
+      // Add a second page to test auto-flagging
+      const page2 = await userCaller.pipeline.ingestPage({
+        documentId: testDocId,
+        pageNumber: 2,
+        imageUrl: "https://example.com/pipeline_page2.png",
+      });
+
+      const result = await userCaller.pipeline.submitOcrResult({
+        pageId: page2.pageId,
+        rawText: "Unreadable smudged text...",
+        confidence: 32, // below threshold → should auto-flag
+        status: "pass2_complete",
+      });
+      expect(result.success).toBe(true);
+      expect(result.autoFlagged).toBe(true);
+      expect(result.hitlId).toBeGreaterThan(0);
+    });
+
+    it("returns NOT_FOUND for nonexistent page", async () => {
+      await expect(userCaller.pipeline.submitOcrResult({
+        pageId: 999999,
+        rawText: "test",
+        confidence: 80,
+        status: "pass2_complete",
+      })).rejects.toThrow("999999 not found");
+    });
+  });
+
+  describe("pipeline.flagPage", () => {
+    it("manually flags a page for HITL review", async () => {
+      const result = await userCaller.pipeline.flagPage({
+        pageId: testPageId,
+        reason: "Consensus failure between models",
+        flagCategory: "consensus_failure",
+        priority: "high",
+      });
+      expect(result.success).toBe(true);
+      expect(result.id).toBeGreaterThan(0);
+    });
+
+    it("returns NOT_FOUND for nonexistent page", async () => {
+      await expect(userCaller.pipeline.flagPage({
+        pageId: 999999,
+        reason: "Test flag",
+        flagCategory: "manual_review",
+        priority: "low",
+      })).rejects.toThrow("999999 not found");
+    });
+  });
+
+  // Cleanup
+  afterAll(async () => {
+    try {
+      await adminCaller.library.deleteDocument({ id: testDocId });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+});

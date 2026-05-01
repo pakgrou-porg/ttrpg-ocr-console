@@ -27,7 +27,7 @@ import {
   Loader2, SkipForward, ArrowUpCircle, BookOpen, FileText,
   ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
   ZoomIn, ZoomOut, RotateCw, Maximize2, Minimize2, ImageOff,
-  Edit3, Search, X, Filter,
+  Edit3, Search, X, Filter, FastForward,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -241,8 +241,33 @@ export default function ArchivistsDesk() {
         </div>
       )}
 
-      {/* Filters */}
+      {/* Filters + Next Unreviewed CTA */}
       <div className="flex items-center gap-3 flex-wrap">
+        {/* Next Unreviewed — prominent CTA */}
+        {(() => {
+          const nextUnreviewed = items?.find(i => i.status === "queued" || i.status === "in_progress");
+          const unreviewedCount = items?.filter(i => i.status === "queued" || i.status === "in_progress").length ?? 0;
+          return nextUnreviewed ? (
+            <Button
+              className="gap-2 h-9 bg-primary hover:bg-primary/90 shadow-[0_0_12px_rgba(139,92,246,0.3)] hover:shadow-[0_0_18px_rgba(139,92,246,0.45)] transition-all"
+              onClick={() => setSelectedItemId(nextUnreviewed.id)}
+            >
+              <FastForward className="w-4 h-4" />
+              Next Unreviewed
+              <Badge variant="secondary" className="ml-0.5 bg-white/20 text-white border-0 text-xs">
+                {unreviewedCount}
+              </Badge>
+            </Button>
+          ) : (
+            <Button variant="outline" className="gap-2 h-9" disabled>
+              <CheckCircle2 className="w-4 h-4 text-green-500" />
+              All Reviewed
+            </Button>
+          );
+        })()}
+
+        <Separator orientation="vertical" className="h-6" />
+
         <div className="flex items-center gap-2">
           <Filter className="w-4 h-4 text-muted-foreground" />
           <span className="text-sm text-muted-foreground">Filters:</span>

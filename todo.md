@@ -96,4 +96,13 @@
 - [x] Build HITL Review page (Archivist's Desk) with editing capabilities
 - [x] Add Archivist's Desk to navigation and routing
 - [x] Write vitest tests for library and HITL procedures (30 test cases)
-- [ ] Push full codebase to GitHub via PAT
+- [x] Push full codebase to GitHub via PAT (https://github.com/pakgrou-porg/ttrpg-ocr-console)
+
+## Phase: Pipeline Integration, Upload Flow & HITL UX
+
+- [x] Add pipeline tRPC procedures: ingestPage, submitOcrResult, flagPage (with phash duplicate detection + auto-flagging)
+- [x] Add REST upload endpoint /api/upload/document (multer + S3 + document record creation)
+- [x] Build PDF/document upload card in Library Shelves (drag-and-drop, progress indicator, status feedback)
+- [x] Add "Next Unreviewed" auto-advance CTA button to Archivist's Desk (jumps to oldest critical/high unresolved item)
+- [x] Write vitest tests for pipeline procedures (8 new tests, 96 total passing)
+- [ ] Push updated codebase to GitHub

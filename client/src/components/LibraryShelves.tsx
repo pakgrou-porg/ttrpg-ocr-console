@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useCallback } from "react";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -7,11 +7,12 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { toast } from "sonner";
 import {
   ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
   ZoomIn, ZoomOut, RotateCw, Maximize2, Minimize2,
   BookOpen, FileText, AlertTriangle, CheckCircle2, Flag,
-  Search, X, Loader2, ImageOff, Eye, Edit3,
+  Search, X, Loader2, ImageOff, Eye, Edit3, Upload, Plus, CheckCircle,
 } from "lucide-react";
 import {
   Select,
@@ -68,6 +69,160 @@ function StatusBadge({ status }: { status: string }) {
     <Badge variant="outline" className={styles[status] ?? "bg-muted text-muted-foreground"}>
       {status.replace(/_/g, " ")}
     </Badge>
+  );
+}
+
+// ─── Upload Document Card ─────────────────────────────────────────────────
+
+function UploadDocumentCard({ onUploaded }: { onUploaded: (id: number) => void }) {
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [title, setTitle] = useState("");
+  const [gameSystem, setGameSystem] = useState("");
+  const [edition, setEdition] = useState("");
+  const [publisher, setPublisher] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const utils = trpc.useUtils();
+
+  const handleFile = useCallback((file: File) => {
+    if (file.type !== "application/pdf") {
+      toast.error("Only PDF files are accepted.");
+      return;
+    }
+    if (file.size > 200 * 1024 * 1024) {
+      toast.error("File is too large. Maximum size is 200 MB.");
+      return;
+    }
+    // Auto-fill title from filename
+    const nameWithoutExt = file.name.replace(/\.pdf$/i, "").replace(/[_-]/g, " ");
+    setTitle(nameWithoutExt);
+    setSelectedFile(file);
+    setShowForm(true);
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    const file = e.dataTransfer.files[0];
+    if (file) handleFile(file);
+  }, [handleFile]);
+
+  const handleUpload = async () => {
+    if (!selectedFile) return;
+    setIsUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", selectedFile);
+      if (title.trim()) formData.append("title", title.trim());
+      if (gameSystem.trim()) formData.append("gameSystem", gameSystem.trim());
+      if (edition.trim()) formData.append("edition", edition.trim());
+      if (publisher.trim()) formData.append("publisher", publisher.trim());
+
+      const res = await fetch("/api/upload/document", {
+        method: "POST",
+        body: formData,
+        credentials: "include",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Upload failed.");
+
+      toast.success(`"${data.filename}" registered in the library.`);
+      await utils.library.listDocuments.invalidate();
+      onUploaded(data.id);
+      // Reset form
+      setSelectedFile(null);
+      setShowForm(false);
+      setTitle(""); setGameSystem(""); setEdition(""); setPublisher("");
+    } catch (err: any) {
+      toast.error(err.message ?? "Upload failed.");
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  if (showForm && selectedFile) {
+    return (
+      <div className="p-3 rounded-lg border border-primary/30 bg-primary/5 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <FileText className="w-4 h-4 text-primary" />
+            <span className="truncate max-w-[160px]">{selectedFile.name}</span>
+          </div>
+          <button onClick={() => { setShowForm(false); setSelectedFile(null); }}>
+            <X className="w-4 h-4 text-muted-foreground hover:text-foreground" />
+          </button>
+        </div>
+        <div className="space-y-2">
+          <Input
+            placeholder="Title (optional)"
+            className="h-8 text-xs bg-background/50"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+          />
+          <Input
+            placeholder="Game System (e.g. D&D 5e)"
+            className="h-8 text-xs bg-background/50"
+            value={gameSystem}
+            onChange={(e) => setGameSystem(e.target.value)}
+          />
+          <div className="flex gap-2">
+            <Input
+              placeholder="Edition"
+              className="h-8 text-xs bg-background/50 flex-1"
+              value={edition}
+              onChange={(e) => setEdition(e.target.value)}
+            />
+            <Input
+              placeholder="Publisher"
+              className="h-8 text-xs bg-background/50 flex-1"
+              value={publisher}
+              onChange={(e) => setPublisher(e.target.value)}
+            />
+          </div>
+        </div>
+        <Button
+          size="sm"
+          className="w-full h-8 gap-1.5"
+          onClick={handleUpload}
+          disabled={isUploading}
+        >
+          {isUploading ? (
+            <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Uploading...</>
+          ) : (
+            <><CheckCircle className="w-3.5 h-3.5" /> Register Document</>
+          )}
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
+      onDragLeave={() => setIsDragOver(false)}
+      onDrop={handleDrop}
+      onClick={() => fileInputRef.current?.click()}
+      className={`flex flex-col items-center justify-center gap-2 p-4 rounded-lg border-2 border-dashed cursor-pointer transition-all duration-200 ${
+        isDragOver
+          ? "border-primary bg-primary/10 scale-[1.01]"
+          : "border-border/50 hover:border-primary/40 hover:bg-muted/20"
+      }`}
+    >
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".pdf,application/pdf"
+        className="hidden"
+        onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
+      />
+      <Upload className={`w-6 h-6 transition-colors ${isDragOver ? "text-primary" : "text-muted-foreground/50"}`} />
+      <div className="text-center">
+        <p className="text-xs font-medium text-muted-foreground">Drop PDF here or click to browse</p>
+        <p className="text-[10px] text-muted-foreground/60 mt-0.5">Max 200 MB</p>
+      </div>
+    </div>
   );
 }
 
@@ -631,7 +786,9 @@ export default function LibraryShelves({
                 Library Shelves
               </CardTitle>
             </CardHeader>
-            <CardContent className="px-3 pb-3">
+            <CardContent className="px-3 pb-3 space-y-3">
+              <UploadDocumentCard onUploaded={handleSelectDocument} />
+              <Separator className="opacity-30" />
               <DocumentSelector
                 selectedDocId={selectedDocId}
                 onSelect={handleSelectDocument}

@@ -1,4 +1,4 @@
-import { and, eq, gte } from "drizzle-orm";
+import { and, asc, eq, gte } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { desc, sql } from "drizzle-orm";
 import {
@@ -671,11 +671,20 @@ export async function getPageById(id: number) {
   return result.length > 0 ? result[0] : undefined;
 }
 
+export async function getPageByPhash(phash: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(documentPages).where(eq(documentPages.phash, phash)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
 export async function createDocumentPage(page: InsertDocumentPage) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const result = await db.insert(documentPages).values(page);
-  return result[0].insertId;
+  const newId = result[0].insertId;
+  const created = await db.select().from(documentPages).where(eq(documentPages.id, newId)).limit(1);
+  return created[0]!;
 }
 
 export async function updateDocumentPage(id: number, updates: Partial<InsertDocumentPage>) {
@@ -704,7 +713,9 @@ export async function createOcrResult(ocrResult: InsertOcrResult) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const result = await db.insert(ocrResults).values(ocrResult);
-  return result[0].insertId;
+  const newId = result[0].insertId;
+  const created = await db.select().from(ocrResults).where(eq(ocrResults.id, newId)).limit(1);
+  return created[0]!;
 }
 
 export async function updateOcrResult(id: number, updates: Partial<InsertOcrResult>) {
@@ -715,7 +726,9 @@ export async function updateOcrResult(id: number, updates: Partial<InsertOcrResu
 
 // ─── HITL Queue ─────────────────────────────────────────────────────────────
 
-export async function getAllHitlItems(options?: { status?: string; priority?: string; limit?: number }) {
+const PRIORITY_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+
+export async function getAllHitlItems(options?: { status?: string; priority?: string; limit?: number; orderByPriority?: boolean }) {
   const db = await getDb();
   if (!db) return [];
   const conditions = [];
@@ -723,10 +736,22 @@ export async function getAllHitlItems(options?: { status?: string; priority?: st
   if (options?.priority) conditions.push(eq(hitlQueue.priority, options.priority as any));
 
   const query = db.select().from(hitlQueue);
+  let results: any[];
   if (conditions.length > 0) {
-    return query.where(and(...conditions)).orderBy(desc(hitlQueue.createdAt)).limit(options?.limit ?? 100);
+    results = await query.where(and(...conditions)).orderBy(asc(hitlQueue.createdAt)).limit(options?.limit ?? 100);
+  } else {
+    results = await query.orderBy(desc(hitlQueue.createdAt)).limit(options?.limit ?? 100);
   }
-  return query.orderBy(desc(hitlQueue.createdAt)).limit(options?.limit ?? 100);
+  if (options?.orderByPriority) {
+    results = results.sort((a, b) => {
+      const pa = PRIORITY_ORDER[a.priority] ?? 99;
+      const pb = PRIORITY_ORDER[b.priority] ?? 99;
+      if (pa !== pb) return pa - pb;
+      return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+    });
+    if (options.limit) results = results.slice(0, options.limit);
+  }
+  return results;
 }
 
 export async function getHitlItemById(id: number) {
@@ -746,7 +771,9 @@ export async function createHitlItem(item: InsertHitlQueueItem) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const result = await db.insert(hitlQueue).values(item);
-  return result[0].insertId;
+  const newId = result[0].insertId;
+  const created = await db.select().from(hitlQueue).where(eq(hitlQueue.id, newId)).limit(1);
+  return created[0]!;
 }
 
 export async function updateHitlItem(id: number, updates: Partial<InsertHitlQueueItem>) {

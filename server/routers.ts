@@ -19,10 +19,10 @@ import {
   getAllLlmProviders, getLlmProviderById, createLlmProvider, updateLlmProvider, deleteLlmProvider,
   getAllModelAssignments, getModelAssignmentsByStage, createModelAssignment, updateModelAssignment, deleteModelAssignment,
   getAllDbConnections, getDbConnectionById, createDbConnection, updateDbConnection, deleteDbConnection, setActiveDbConnection,
-  getAllDocuments, getDocumentById, createDocument, updateDocument, deleteDocument, searchDocuments,
-  getPagesByDocumentId, getPageById, createDocumentPage, updateDocumentPage,
+  getDocumentById, getAllDocuments, createDocument, updateDocument, deleteDocument, searchDocuments,
+  getPagesByDocumentId, getPageById, getPageByPhash, createDocumentPage, updateDocumentPage,
   getOcrResultByPageId, getOcrResultById, createOcrResult, updateOcrResult,
-  getAllHitlItems, getHitlItemById, getHitlItemsByPageId, createHitlItem, updateHitlItem, getHitlStats,
+  getHitlItemById, getHitlItemsByPageId, getAllHitlItems, createHitlItem, updateHitlItem, getHitlStats,
 } from "./db";
 import { encryptSecret, decryptSecret, maskSecret } from "./crypto";
 import { ENV } from "./_core/env";
@@ -978,8 +978,8 @@ export const appRouter = router({
         imageHeight: z.number().int().optional(),
       }))
       .mutation(async ({ input }) => {
-        const id = await createDocumentPage(input);
-        return { success: true, id };
+        const page = await createDocumentPage(input);
+        return { success: true, id: page.id };
       }),
 
     /** Add or update OCR result for a page (admin only — used by pipeline) */
@@ -1007,8 +1007,8 @@ export const appRouter = router({
           await updateOcrResult(existing.id, updates as any);
           return { success: true, id: existing.id, action: "updated" };
         } else {
-          const id = await createOcrResult(input as any);
-          return { success: true, id, action: "created" };
+          const created = await createOcrResult(input as any);
+          return { success: true, id: created.id, action: "created" };
         }
       }),
 
@@ -1087,10 +1087,10 @@ export const appRouter = router({
         priority: z.enum(HITL_PRIORITIES).default("medium"),
       }))
       .mutation(async ({ input }) => {
-        const id = await createHitlItem(input);
+        const item = await createHitlItem(input);
         // Also mark the page as flagged
         await updateDocumentPage(input.pageId, { isFlagged: true });
-        return { success: true, id };
+        return { success: true, id: item.id };
       }),
 
     /** Assign a HITL item to a reviewer */
@@ -1172,6 +1172,264 @@ export const appRouter = router({
           resolvedAt: new Date(),
         });
         return { success: true };
+      }),
+
+    /** Get the next unreviewed item (oldest critical/high/medium/low queued or in_progress) */
+    nextUnreviewed: protectedProcedure
+      .input(z.object({
+        currentId: z.number().int().optional(),
+      }).optional())
+      .query(async () => {
+        // Priority order: critical > high > medium > low, then oldest first
+        const items = await getAllHitlItems({
+          status: "queued" as any,
+          limit: 1,
+          orderByPriority: true,
+        });
+        if (items.length > 0) return items[0];
+        // Fall back to in_progress
+        const inProgress = await getAllHitlItems({
+          status: "in_progress" as any,
+          limit: 1,
+          orderByPriority: true,
+        });
+        return inProgress[0] ?? null;
+      }),
+  }),
+
+  // ─── Pipeline Integration API ───────────────────────────────────────────────
+  // These endpoints are called by the Python OCR pipeline (llm_ocr_processor.py)
+  // using the SCHEDULED_TASK_COOKIE for authentication.
+  //
+  // Usage from Python pipeline:
+  //   import requests
+  //   session = requests.Session()
+  //   session.cookies.set('app_session_id', SCHEDULED_TASK_COOKIE)
+  //   session.post(f'{BASE_URL}/api/trpc/pipeline.ingestPage', json={...})
+  //
+  // Or via curl:
+  //   curl -X POST 'https://your-site.manus.space/api/trpc/pipeline.ingestPage' \
+  //     -H 'Content-Type: application/json' \
+  //     -H 'Cookie: app_session_id=$SCHEDULED_TASK_COOKIE' \
+  //     -d '{"documentId":1,"pageNumber":5,"imageUrl":"https://..."}'
+  pipeline: router({
+    /**
+     * Register a new page image from the PDF conversion pipeline.
+     * Called after pdf-to-png conversion for each page.
+     */
+    ingestPage: protectedProcedure
+      .input(z.object({
+        documentId: z.number().int(),
+        pageNumber: z.number().int().min(1),
+        imageUrl: z.string().url(),
+        thumbnailUrl: z.string().url().optional(),
+        phash: z.string().max(64).optional(),
+        imageWidth: z.number().int().optional(),
+        imageHeight: z.number().int().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        // Verify document exists
+        const doc = await getDocumentById(input.documentId);
+        if (!doc) {
+          throw new TRPCError({ code: "NOT_FOUND", message: `Document ${input.documentId} not found.` });
+        }
+        // Check for phash duplicate across all documents
+        if (input.phash) {
+          const allPages = await getPagesByDocumentId(input.documentId);
+          // Also check across other documents via phash lookup
+          const phashDuplicate = await getPageByPhash(input.phash);
+          if (phashDuplicate) {
+            return {
+              success: true,
+              pageId: phashDuplicate.id,
+              isDuplicate: true,
+              duplicateOfPageId: phashDuplicate.id,
+              action: "duplicate" as const,
+            };
+          }
+          // Also check within same document by page number
+          const existing = allPages.find(p => p.pageNumber === input.pageNumber);
+          if (existing) {
+            return { success: true, pageId: existing.id, isDuplicate: false, action: "existing" as const };
+          }
+        } else {
+          // No phash: check by page number only
+          const pages = await getPagesByDocumentId(input.documentId);
+          const existing = pages.find(p => p.pageNumber === input.pageNumber);
+          if (existing) {
+            return { success: true, pageId: existing.id, isDuplicate: false, action: "existing" as const };
+          }
+        }
+        const page = await createDocumentPage({
+          documentId: input.documentId,
+          pageNumber: input.pageNumber,
+          imageUrl: input.imageUrl,
+          thumbnailUrl: input.thumbnailUrl,
+          phash: input.phash,
+          imageWidth: input.imageWidth,
+          imageHeight: input.imageHeight,
+        });
+        return { success: true, pageId: page.id, isDuplicate: false, action: "created" as const };
+      }),
+
+    /**
+     * Submit OCR results for a page from the two-pass OCR pipeline.
+     * Automatically flags low-confidence results into the HITL queue.
+     * Called after Pass 2 (cloud LLM) completes.
+     */
+    submitOcrResult: protectedProcedure
+      .input(z.object({
+        pageId: z.number().int(),
+        rawText: z.string().optional(),
+        structuredData: z.record(z.string(), z.unknown()).optional(),
+        confidence: z.number().min(0).max(100).optional(),
+        status: z.enum(OCR_RESULT_STATUSES).optional(),
+        pass1Model: z.string().max(128).optional(),
+        pass2Model: z.string().max(128).optional(),
+        layoutMetadata: z.record(z.string(), z.unknown()).optional(),
+        auditLog: z.array(z.object({
+          timestamp: z.string(),
+          action: z.string(),
+          model: z.string().optional(),
+          detail: z.string().optional(),
+        })).optional(),
+        // Auto-flagging thresholds
+        confidenceThreshold: z.number().min(0).max(100).default(70),
+        flagReason: z.string().max(512).optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const { confidenceThreshold, flagReason, ...ocrData } = input;
+
+        // Verify page exists
+        const page = await getPageById(input.pageId);
+        if (!page) {
+          throw new TRPCError({ code: "NOT_FOUND", message: `Page ${input.pageId} not found.` });
+        }
+
+        // Upsert OCR result
+        const existing = await getOcrResultByPageId(input.pageId);
+        let ocrResultId: number;
+        if (existing) {
+          await updateOcrResult(existing.id, {
+            rawText: ocrData.rawText,
+            structuredData: ocrData.structuredData,
+            confidence: ocrData.confidence,
+            status: (ocrData.status ?? "pass2_complete") as any,
+            pass1Model: ocrData.pass1Model,
+            pass2Model: ocrData.pass2Model,
+            layoutMetadata: ocrData.layoutMetadata,
+            auditLog: ocrData.auditLog,
+          });
+          ocrResultId = existing.id;
+        } else {
+          const created = await createOcrResult({
+            pageId: input.pageId,
+            rawText: ocrData.rawText,
+            structuredData: ocrData.structuredData,
+            confidence: ocrData.confidence,
+            status: (ocrData.status ?? "pass2_complete") as any,
+            pass1Model: ocrData.pass1Model,
+            pass2Model: ocrData.pass2Model,
+            layoutMetadata: ocrData.layoutMetadata,
+            auditLog: ocrData.auditLog,
+          });
+          ocrResultId = created.id;
+        }
+
+        // Auto-flag if below confidence threshold
+        let hitlId: number | null = null;
+        const conf = ocrData.confidence ?? 100;
+        if (conf < confidenceThreshold) {
+          const priority = conf < 40 ? "critical" : conf < 55 ? "high" : conf < confidenceThreshold ? "medium" : "low";
+          const reason = flagReason ?? `Auto-flagged: confidence ${conf}% is below threshold ${confidenceThreshold}%`;
+          // Check if already flagged (avoid duplicate queue entries)
+          const existingFlags = await getHitlItemsByPageId(input.pageId);
+          const activeFlag = existingFlags.find(f => f.status === "queued" || f.status === "in_progress");
+          if (!activeFlag) {
+            const hitlItem = await createHitlItem({
+              pageId: input.pageId,
+              ocrResultId,
+              reason,
+              flagCategory: "low_confidence",
+              priority: priority as any,
+            });
+            hitlId = hitlItem.id;
+          }
+        }
+
+        return {
+          success: true,
+          ocrResultId,
+          autoFlagged: hitlId !== null,
+          hitlId,
+        };
+      }),
+
+    /**
+     * Manually flag a page for HITL review from the pipeline.
+     * Called when the pipeline detects issues (e.g., layout errors, consensus failures).
+     */
+    flagPage: protectedProcedure
+      .input(z.object({
+        pageId: z.number().int(),
+        reason: z.string().min(1).max(1024),
+        flagCategory: z.enum(["low_confidence", "layout_error", "consensus_failure", "manual_review", "other"]).default("manual_review"),
+        priority: z.enum(HITL_PRIORITIES).default("medium"),
+        metadata: z.record(z.string(), z.unknown()).optional(),
+      }))
+      .mutation(async ({ input }) => {
+        // Verify page exists
+        const page = await getPageById(input.pageId);
+        if (!page) {
+          throw new TRPCError({ code: "NOT_FOUND", message: `Page ${input.pageId} not found.` });
+        }
+        // Check for existing active flag
+        const existingFlags = await getHitlItemsByPageId(input.pageId);
+        const activeFlag = existingFlags.find(f => f.status === "queued" || f.status === "in_progress");
+        if (activeFlag) {
+          return { success: true, id: activeFlag.id, action: "existing" as const };
+        }
+        const ocrResult = await getOcrResultByPageId(input.pageId);
+        const hitlItem = await createHitlItem({
+          pageId: input.pageId,
+          ocrResultId: ocrResult?.id ?? null,
+          reason: input.reason,
+          flagCategory: input.flagCategory,
+          priority: input.priority as any,
+        });
+        return { success: true, id: hitlItem.id, action: "created" as const };
+      }),
+
+    /**
+     * Get pipeline status for a document (pages ingested, OCR complete, flagged count).
+     * Useful for the Python pipeline to check progress before resuming.
+     */
+    documentStatus: protectedProcedure
+      .input(z.object({ documentId: z.number().int() }))
+      .query(async ({ input }) => {
+        const doc = await getDocumentById(input.documentId);
+        if (!doc) {
+          throw new TRPCError({ code: "NOT_FOUND", message: `Document ${input.documentId} not found.` });
+        }
+        const pages = await getPagesByDocumentId(input.documentId);
+        const ocrDone = await Promise.all(pages.map(p => getOcrResultByPageId(p.id)));
+        const ocrCompleteCount = ocrDone.filter(r => r !== null).length;
+        const flaggedPages = await Promise.all(
+          pages.map(async p => {
+            const flags = await getHitlItemsByPageId(p.id);
+            return flags.some(f => f.status === "queued" || f.status === "in_progress") ? p.id : null;
+          })
+        );
+        return {
+          documentId: input.documentId,
+          title: doc.title ?? doc.filename,
+          status: doc.status,
+          totalPages: doc.totalPages ?? pages.length,
+          pagesIngested: pages.length,
+          ocrComplete: ocrCompleteCount,
+          flaggedCount: flaggedPages.filter(Boolean).length,
+          percentComplete: pages.length > 0 ? Math.round((ocrCompleteCount / pages.length) * 100) : 0,
+        };
       }),
   }),
 });
