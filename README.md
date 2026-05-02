@@ -94,6 +94,13 @@ See `.env.example` for the full list. The critical ones:
 
 The Python OCR pipeline communicates with the console via tRPC HTTP endpoints. All pipeline calls require a valid session cookie (use the `SCHEDULED_TASK_COOKIE` environment variable in scheduled task contexts).
 
+### Provider & Stage Configuration
+
+Before running the pipeline, configure providers and stage inscriptions:
+
+1. **The Artificers** — add one row per LLM provider instance. Paste a full URL (e.g. `http://10.0.0.1:1234/v1`) into Base URL and it auto-decomposes into host, port, and API prefix. Click **Discover Models** to fetch the model list from the provider and auto-fill `contextLength` and `maxTokens`. Use the **Vision only** toggle to filter to vision-capable models for OCR stages.
+2. **The Assignments** — inscribe each pipeline stage with a primary provider and optional fallback. Each inscription carries its own `systemPrompt`, `temperature`, and `maxTokens` overrides independent of the provider defaults.
+
 ### Register a Page (after PDF-to-PNG conversion)
 
 ```bash
@@ -132,8 +139,8 @@ curl -X POST https://your-console.manus.space/api/trpc/pipeline.submitOcrResult 
       "structuredData": { "type": "monster_stat_block", "name": "Ancient Red Dragon" },
       "layoutMetadata": { "elements": [{ "type": "heading", "bbox": [0, 0, 100, 20] }] },
       "confidence": 87,
-      "pass1Model": "llava-1.6",
-      "pass2Model": "anthropic/claude-3.5-sonnet",
+      "passNumber": 2,
+      "cloudModelUsed": "anthropic/claude-3.5-sonnet",
       "auditLog": [
         { "timestamp": "2026-05-02T12:00:00Z", "action": "pass1_complete", "model": "llava-1.6" },
         { "timestamp": "2026-05-02T12:00:05Z", "action": "pass2_complete", "model": "claude-3.5-sonnet" }
@@ -183,8 +190,8 @@ Key tables:
 | Table | Purpose |
 |---|---|
 | `users` | Authenticated users with role (`admin` / `user`) |
-| `llm_providers` | Cloud/local LLM provider configs (encrypted API keys) |
-| `stage_inscriptions` | Maps pipeline stages to primary + fallback providers with per-stage system prompt, temperature, and LLM settings |
+| `llm_providers` | Cloud/local LLM provider registry. Key columns: `displayName`, `modelId`, `baseUrl`, `port`, `apiPrefix`, `supportsChat`, `supportsVision`, `supportsEmbedding`, `defaultTemperature`, `contextLength`, `maxTokens`, `isDefault`, `encryptedApiKey` |
+| `stage_inscriptions` | Maps each pipeline stage to a primary + fallback provider with per-stage `systemPrompt`, `temperature`, `maxTokens`, and `llmSettings` JSON |
 | `db_connections` | External database connection configs |
 | `system_prompts` | Versioned prompts for all pipeline stages |
 | `ingestion_jobs` | PDF ingestion job tracking (phase 1/2/3 status) |

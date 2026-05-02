@@ -196,8 +196,8 @@ export default function TomeKnowledge() {
               </CardHeader>
               <CardContent>
                 <ol className="list-decimal list-inside space-y-3 text-sm text-muted-foreground">
-                  <li>Go to <strong className="text-foreground">The Artificers</strong> and add your LLM provider (OpenRouter, Venice.ai, or local LM Studio). Use the <em>Test Connection</em> button to verify, then <em>Discover Models</em> to cache available models.</li>
-                  <li>Navigate to <strong className="text-foreground">Arcane Mechanisms</strong> to assign models to each pipeline stage (layout analysis, content extraction, validation).</li>
+                  <li>Go to <strong className="text-foreground">The Artificers</strong> and add your LLM provider. Paste a full URL (e.g. <code className="bg-muted px-1 rounded text-xs">http://10.0.0.1:1234/v1</code>) and it auto-decomposes into host, port, and API prefix. Use <em>Discover Models</em> to fetch available models and auto-fill context length. Enable <em>Vision only</em> to filter for OCR-capable models.</li>
+                  <li>Navigate to <strong className="text-foreground">The Assignments</strong> to inscribe each pipeline stage with a primary and optional fallback provider. Each inscription has its own system prompt, temperature, and max tokens — independent of the provider defaults.</li>
                   <li>Go to <strong className="text-foreground">Incantations &amp; Runes</strong> to review and customise the system prompts for each stage.</li>
                   <li>Use <strong className="text-foreground">Summoning Rituals</strong> to create an ingestion job, or upload a PDF directly from the <strong className="text-foreground">Library Shelves</strong> tab in Enter the Arkanum.</li>
                   <li>Monitor progress in <strong className="text-foreground">Oversee the Scribes</strong>. Low-confidence pages are automatically routed to the <strong className="text-foreground">Archivist's Desk</strong> for review.</li>
@@ -363,8 +363,8 @@ export default function TomeKnowledge() {
                   <tbody className="text-muted-foreground">
                     {[
                       ["users", "Authenticated users", "openId, role (admin/user)"],
-                      ["llm_providers", "Cloud/local LLM configs", "providerType, baseUrl, encryptedApiKey, keyPrefix, keySuffix"],
-                      ["stage_inscriptions", "Stage → provider inscription", "stage, primaryProviderId, fallbackProviderId, systemPrompt, temperature"],
+                      ["llm_providers", "Cloud/local LLM provider registry", "displayName, modelId, baseUrl, port, apiPrefix, supportsChat, supportsVision, supportsEmbedding, defaultTemperature, contextLength, maxTokens, isDefault, encryptedApiKey"],
+                      ["stage_inscriptions", "Stage → provider inscription", "stage, primaryProviderId, fallbackProviderId, systemPrompt, temperature, maxTokens, llmSettings"],
                       ["pipeline_jobs", "Per-document pipeline execution", "documentId, currentPhase, currentStage, retryCount"],
                       ["page_processing_attempts", "OCR pass tracking (1–4)", "pageId, passNumber, modelUsed, attemptScore, comparisonNotes"],
                       ["db_connections", "External DB configs", "connectionType, host, encryptedPassword"],
