@@ -693,6 +693,42 @@ export const appRouter = router({
         label: s.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" "),
       }));
     }),
+
+    /**
+     * Pipeline topology — returns all stages with their active assignments
+     * and provider info, structured for the relationship visualization.
+     */
+    topology: adminProcedure.query(async () => {
+      const assignments = await getAllModelAssignments();
+      const providers = await getAllLlmProviders();
+
+      const providerMap = new Map(providers.map(p => [p.id, p]));
+
+      // Group assignments by stage
+      const stageMap = new Map<string, typeof assignments>();
+      for (const a of assignments) {
+        const list = stageMap.get(a.pipelineStage) ?? [];
+        list.push(a);
+        stageMap.set(a.pipelineStage, list);
+      }
+
+      // Build topology for every known stage (even empty ones)
+      return PIPELINE_STAGES.map(stage => ({
+        stage,
+        assignments: (stageMap.get(stage) ?? []).map(a => {
+          const provider = providerMap.get(a.providerId);
+          return {
+            id: a.id,
+            modelName: a.modelName,
+            priority: a.priority,
+            isActive: a.isActive,
+            providerName: provider?.name ?? "Unknown",
+            providerType: provider?.providerType ?? "unknown",
+            configOverrides: a.configOverrides ?? null,
+          };
+        }).sort((a, b) => a.priority - b.priority),
+      }));
+    }),
   }),
 
   // ─── Database Connections (The Vault Nexus) ───────────────────────────────

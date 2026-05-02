@@ -149,3 +149,14 @@
 - [x] Persist collapsed state in localStorage (key: ttrpg-sidebar-collapsed)
 - [x] Ensure main content area expands to fill available space when sidebar is collapsed
 - [x] Sub-menu items (Inner Sanctum) flatten to icon-only strip in collapsed mode
+
+## Phase: Pipeline Relationship Visualization
+
+- [x] Install React Flow (@xyflow/react) for interactive node/edge diagrams
+- [x] Add tRPC procedure: assignments.topology (admin-only, returns stages with assignments + provider names)
+- [x] Build PipelineVisualization component with stage nodes, provider nodes, and assignment edges
+- [x] Integrate PipelineVisualization as a "Pipeline Map" tab in TheArtificers page
+- [x] Style nodes by stage type (layout, OCR, tabular, classification, embedding, enrichment, etc.)
+- [x] Show provider name, model, priority, and active status on each assignment node
+- [x] Show priority-ordered edges from stage nodes to provider/model nodes
+- [x] Write vitest tests for assignments.topology procedure (4 tests, 127 total passing)

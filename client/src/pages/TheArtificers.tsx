@@ -8,10 +8,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import {
-  Cpu, Plus, Trash2, TestTube, Key, Loader2, CheckCircle2, XCircle, Wifi, Search, ChevronDown, ChevronUp, Zap, Edit, Info
+  Cpu, Plus, Trash2, TestTube, Key, Loader2, CheckCircle2, XCircle, Wifi, Search, ChevronDown, ChevronUp, Zap, Edit, Info, GitBranch
 } from "lucide-react";
+import { PipelineVisualization } from "@/components/PipelineVisualization";
 
 // ─── Provider Presets ─────────────────────────────────────────────────────────
 // Known cloud providers with default API base URLs and helpful descriptions.
@@ -103,6 +105,7 @@ export default function TheArtificers() {
 
   const { data: providers, isLoading, refetch } = trpc.providers.list.useQuery();
   const { data: providerTypes } = trpc.providers.types.useQuery();
+  const { data: topology, isLoading: isTopologyLoading, refetch: refetchTopology } = trpc.assignments.topology.useQuery();
 
   const createMutation = trpc.providers.create.useMutation({
     onSuccess: () => { toast.success("Provider forged successfully."); refetch(); setIsCreateOpen(false); },
@@ -394,7 +397,19 @@ export default function TheArtificers() {
         </DialogContent>
       </Dialog>
 
-      {/* Provider List */}
+      {/* Tabs: Providers list + Pipeline Map */}
+      <Tabs defaultValue="providers" className="space-y-4">
+        <TabsList className="grid w-full max-w-sm grid-cols-2">
+          <TabsTrigger value="providers" className="gap-2">
+            <Cpu className="h-4 w-4" /> Artificers
+          </TabsTrigger>
+          <TabsTrigger value="pipeline" className="gap-2" onClick={() => refetchTopology()}>
+            <GitBranch className="h-4 w-4" /> Pipeline Map
+          </TabsTrigger>
+        </TabsList>
+
+        {/* ── Artificers (Provider List) Tab ─────────────────────────── */}
+        <TabsContent value="providers" className="space-y-4">
       {isLoading ? (
         <div className="flex items-center justify-center py-12">
           <Loader2 className="h-8 w-8 animate-spin text-purple-400" />
@@ -578,6 +593,40 @@ export default function TheArtificers() {
           })}
         </div>
       )}
+        </TabsContent>
+
+        {/* ── Pipeline Map Tab ──────────────────────────────────────── */}
+        <TabsContent value="pipeline">
+          <Card>
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <GitBranch className="h-5 w-5 text-indigo-400" />
+                    Pipeline Relationship Map
+                  </CardTitle>
+                  <CardDescription className="mt-1">
+                    Shows every OCR pipeline stage and the models assigned to each. Primary models (P1) and fallback chains (F1, F2…) are displayed per stage.
+                    Drag to pan · scroll to zoom · use the minimap to navigate.
+                  </CardDescription>
+                </div>
+                <Button variant="outline" size="sm" onClick={() => refetchTopology()} disabled={isTopologyLoading}>
+                  {isTopologyLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
+                  <span className="ml-2">Refresh</span>
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="p-0">
+              <div style={{ height: "600px" }} className="rounded-b-lg overflow-hidden">
+                <PipelineVisualization
+                  topology={topology ?? []}
+                  isLoading={isTopologyLoading}
+                />
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
