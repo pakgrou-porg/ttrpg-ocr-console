@@ -214,11 +214,13 @@ describe("providers.test (Test Connection & Model Discovery)", () => {
   it("returns ok:true and models array when provider responds correctly", async () => {
     const caller = appRouter.createCaller(createAdminContext());
     // Use OpenRouter's public /models endpoint (no API key required)
+    // baseUrl is host-only; apiPrefix is the path prefix before /models
     const created = await caller.providers.create({
       name: `OpenRouter Discovery Test ${suffix}`,
       displayName: `OpenRouter Discovery Test ${suffix}`,
       providerType: "openrouter",
-      baseUrl: "https://openrouter.ai/api/v1",
+      baseUrl: "https://openrouter.ai",
+      apiPrefix: "/api/v1",
     });
     const result = await caller.providers.test({ id: created.id });
     expect(result.ok).toBe(true);

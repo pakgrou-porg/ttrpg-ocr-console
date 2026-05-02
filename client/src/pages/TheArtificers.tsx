@@ -25,13 +25,17 @@ interface ProviderPreset {
   name: string;
   displayName: string;
   baseUrl: string;
+  port?: number;
+  apiPrefix?: string;
   description: string;
   requiresApiKey: boolean;
   apiKeyHint: string;
   defaultModelId?: string;
   defaultContextLength?: number;
   defaultMaxTokens?: number;
-  capabilities: string[];
+  supportsChat: boolean;
+  supportsVision: boolean;
+  supportsEmbedding: boolean;
 }
 
 const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
@@ -39,71 +43,93 @@ const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
     name: "",
     displayName: "",
     baseUrl: "",
+    apiPrefix: "/v1",
     description: "Any OpenAI-compatible API endpoint (custom or self-hosted).",
     requiresApiKey: false,
     apiKeyHint: "Depends on provider",
-    capabilities: ["chat"],
+    supportsChat: true,
+    supportsVision: false,
+    supportsEmbedding: false,
   },
   lm_studio: {
     name: "LM Studio (Local)",
     displayName: "LM Studio — Local",
-    baseUrl: "http://localhost:1234/v1",
+    baseUrl: "http://localhost",
+    port: 1234,
+    apiPrefix: "/v1",
     description: "Local LM Studio instance. Typically runs on port 1234 with no API key required.",
     requiresApiKey: false,
     apiKeyHint: "Usually not required for local instances",
     defaultContextLength: 8192,
-    capabilities: ["chat", "vision"],
+    supportsChat: true,
+    supportsVision: true,
+    supportsEmbedding: false,
   },
   openrouter: {
     name: "OpenRouter",
     displayName: "OpenRouter",
-    baseUrl: "https://openrouter.ai/api/v1",
+    baseUrl: "https://openrouter.ai",
+    apiPrefix: "/api/v1",
     description: "OpenRouter aggregates 300+ models from multiple providers with unified billing.",
     requiresApiKey: true,
     apiKeyHint: "sk-or-v1-... (from openrouter.ai/keys)",
-    capabilities: ["chat", "vision"],
+    supportsChat: true,
+    supportsVision: true,
+    supportsEmbedding: false,
   },
   venice_ai: {
     name: "Venice.ai",
     displayName: "Venice.ai",
-    baseUrl: "https://api.venice.ai/api/v1",
+    baseUrl: "https://api.venice.ai",
+    apiPrefix: "/api/v1",
     description: "Venice.ai provides privacy-focused AI inference with uncensored models.",
     requiresApiKey: true,
     apiKeyHint: "venice-... (from venice.ai/settings/api)",
-    capabilities: ["chat"],
+    supportsChat: true,
+    supportsVision: false,
+    supportsEmbedding: false,
   },
   anthropic: {
     name: "Anthropic",
     displayName: "Anthropic — Claude",
-    baseUrl: "https://api.anthropic.com/v1",
+    baseUrl: "https://api.anthropic.com",
+    apiPrefix: "/v1",
     description: "Anthropic's Claude models. Note: uses a slightly different API format.",
     requiresApiKey: true,
     apiKeyHint: "sk-ant-... (from console.anthropic.com)",
     defaultModelId: "claude-3-5-sonnet-20241022",
     defaultContextLength: 200000,
     defaultMaxTokens: 8192,
-    capabilities: ["chat", "vision"],
+    supportsChat: true,
+    supportsVision: true,
+    supportsEmbedding: false,
   },
   google: {
     name: "Google AI (Gemini)",
     displayName: "Google — Gemini",
-    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    baseUrl: "https://generativelanguage.googleapis.com",
+    apiPrefix: "/v1beta/openai",
     description: "Google's Gemini models via the OpenAI-compatible endpoint.",
     requiresApiKey: true,
     apiKeyHint: "AIza... (from aistudio.google.com/apikey)",
     defaultModelId: "gemini-2.5-pro-preview-05-06",
     defaultContextLength: 1000000,
     defaultMaxTokens: 65536,
-    capabilities: ["chat", "vision"],
+    supportsChat: true,
+    supportsVision: true,
+    supportsEmbedding: false,
   },
   custom: {
     name: "",
     displayName: "",
     baseUrl: "",
+    apiPrefix: "/v1",
     description: "Custom endpoint. Specify your own base URL and configuration.",
     requiresApiKey: false,
     apiKeyHint: "Depends on your endpoint",
-    capabilities: ["chat"],
+    supportsChat: true,
+    supportsVision: false,
+    supportsEmbedding: false,
   },
 };
 
@@ -133,11 +159,14 @@ interface ProviderForm {
   providerType: string;
   baseUrl: string;
   port: string;
+  apiPrefix: string;
   modelId: string;
   contextLength: string;
   maxTokens: string;
   defaultTemperature: string;
-  capabilities: string;
+  supportsChat: boolean;
+  supportsVision: boolean;
+  supportsEmbedding: boolean;
   isDefault: boolean;
   apiKey: string;
   notes: string;
@@ -149,11 +178,14 @@ const EMPTY_FORM: ProviderForm = {
   providerType: "openai_compatible",
   baseUrl: "",
   port: "",
+  apiPrefix: "/v1",
   modelId: "",
   contextLength: "",
   maxTokens: "",
   defaultTemperature: "0.2",
-  capabilities: "chat",
+  supportsChat: true,
+  supportsVision: false,
+  supportsEmbedding: false,
   isDefault: false,
   apiKey: "",
   notes: "",
@@ -218,9 +250,7 @@ function ModelPicker({
       contextLength: model.contextLength ? String(model.contextLength) : f.contextLength,
       maxTokens: model.maxTokens ? String(model.maxTokens) : f.maxTokens,
       // Auto-set vision capability if selecting a vision model
-      capabilities: model.isVision
-        ? Array.from(new Set([...f.capabilities.split(",").map(s => s.trim()).filter(Boolean), "vision"])).join(", ")
-        : f.capabilities,
+      supportsVision: model.isVision ? true : f.supportsVision,
     }));
     setShowPicker(false);
     setModelSearch("");
@@ -367,16 +397,21 @@ function ProviderFormFields({
 
   const handleProviderTypeChange = (providerType: string) => {
     const p = PROVIDER_PRESETS[providerType];
+    const prev = PROVIDER_PRESETS[form.providerType];
     setForm(f => ({
       ...f,
       providerType,
-      displayName: !f.displayName || f.displayName === PROVIDER_PRESETS[f.providerType]?.displayName ? (p?.displayName ?? "") : f.displayName,
-      name: !f.name || f.name === PROVIDER_PRESETS[f.providerType]?.name ? (p?.name ?? "") : f.name,
-      baseUrl: !f.baseUrl || f.baseUrl === PROVIDER_PRESETS[f.providerType]?.baseUrl ? (p?.baseUrl ?? "") : f.baseUrl,
+      displayName: !f.displayName || f.displayName === prev?.displayName ? (p?.displayName ?? "") : f.displayName,
+      name: !f.name || f.name === prev?.name ? (p?.name ?? "") : f.name,
+      baseUrl: !f.baseUrl || f.baseUrl === prev?.baseUrl ? (p?.baseUrl ?? "") : f.baseUrl,
+      port: !f.port || f.port === String(prev?.port ?? "") ? (p?.port ? String(p.port) : "") : f.port,
+      apiPrefix: !f.apiPrefix || f.apiPrefix === (prev?.apiPrefix ?? "/v1") ? (p?.apiPrefix ?? "/v1") : f.apiPrefix,
       modelId: !f.modelId ? (p?.defaultModelId ?? "") : f.modelId,
       contextLength: !f.contextLength ? (p?.defaultContextLength ? String(p.defaultContextLength) : "") : f.contextLength,
       maxTokens: !f.maxTokens ? (p?.defaultMaxTokens ? String(p.defaultMaxTokens) : "") : f.maxTokens,
-      capabilities: p?.capabilities?.join(", ") ?? "chat",
+      supportsChat: p?.supportsChat ?? true,
+      supportsVision: p?.supportsVision ?? false,
+      supportsEmbedding: p?.supportsEmbedding ?? false,
     }));
   };
 
@@ -421,19 +456,42 @@ function ProviderFormFields({
         </div>
       </div>
 
-      {/* Base URL + Port */}
-      <div className="grid grid-cols-3 gap-3">
+      {/* Base URL + Port + API Prefix */}
+      <div className="space-y-1">
+        <p className="text-xs text-muted-foreground flex items-center gap-1">
+          <Info className="h-3 w-3" />
+          Paste a full URL (e.g. <code className="font-mono">http://10.0.0.1:1234/v1</code>) to auto-decompose into host, port, and prefix.
+        </p>
+      </div>
+      <div className="grid grid-cols-5 gap-3">
         <div className="col-span-2 space-y-2">
           <Label>
-            Base URL
+            Base URL (host only)
             {preset?.baseUrl && form.baseUrl === preset.baseUrl && (
               <Badge variant="secondary" className="ml-2 text-[10px] py-0">auto-filled</Badge>
             )}
           </Label>
           <Input
-            placeholder={preset?.baseUrl || "http://localhost:1234/v1"}
+            placeholder={preset?.baseUrl || "http://localhost"}
             value={form.baseUrl}
             onChange={e => setForm(f => ({ ...f, baseUrl: e.target.value }))}
+            onPaste={e => {
+              const pasted = e.clipboardData.getData("text").trim();
+              try {
+                const url = new URL(pasted);
+                // Only decompose if it looks like a full URL with path or port
+                if (url.pathname !== "/" || url.port) {
+                  e.preventDefault();
+                  const host = `${url.protocol}//${url.hostname}`;
+                  const port = url.port || "";
+                  const prefix = url.pathname.replace(/\/$/, "") || "/v1";
+                  setForm(f => ({ ...f, baseUrl: host, port, apiPrefix: prefix }));
+                  toast.success("URL decomposed into host, port, and API prefix.");
+                }
+              } catch {
+                // Not a valid URL, let normal paste proceed
+              }
+            }}
           />
         </div>
         <div className="space-y-2">
@@ -443,6 +501,14 @@ function ProviderFormFields({
             placeholder="1234"
             value={form.port}
             onChange={e => setForm(f => ({ ...f, port: e.target.value }))}
+          />
+        </div>
+        <div className="col-span-2 space-y-2">
+          <Label>API Prefix <span className="text-muted-foreground text-xs">(path before /models)</span></Label>
+          <Input
+            placeholder="/v1"
+            value={form.apiPrefix}
+            onChange={e => setForm(f => ({ ...f, apiPrefix: e.target.value }))}
           />
         </div>
       </div>
@@ -486,12 +552,36 @@ function ProviderFormFields({
 
       {/* Capabilities */}
       <div className="space-y-2">
-        <Label>Capabilities <span className="text-muted-foreground text-xs">(comma-separated: chat, vision)</span></Label>
-        <Input
-          placeholder="chat, vision"
-          value={form.capabilities}
-          onChange={e => setForm(f => ({ ...f, capabilities: e.target.value }))}
-        />
+        <Label>Capabilities</Label>
+        <div className="flex items-center gap-6">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={form.supportsChat}
+              onChange={e => setForm(f => ({ ...f, supportsChat: e.target.checked }))}
+              className="w-4 h-4 rounded accent-purple-500"
+            />
+            <span className="text-sm">Chat</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={form.supportsVision}
+              onChange={e => setForm(f => ({ ...f, supportsVision: e.target.checked }))}
+              className="w-4 h-4 rounded accent-purple-500"
+            />
+            <span className="text-sm flex items-center gap-1"><Eye className="h-3.5 w-3.5 text-purple-400" />Vision</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={form.supportsEmbedding}
+              onChange={e => setForm(f => ({ ...f, supportsEmbedding: e.target.checked }))}
+              className="w-4 h-4 rounded accent-purple-500"
+            />
+            <span className="text-sm">Embedding</span>
+          </label>
+        </div>
       </div>
 
       {/* API Key */}
@@ -638,11 +728,14 @@ export default function TheArtificers() {
       providerType: form.providerType as any,
       baseUrl: form.baseUrl,
       port: form.port ? Number(form.port) : undefined,
+      apiPrefix: form.apiPrefix || "/v1",
       modelId: form.modelId || undefined,
       contextLength: form.contextLength ? Number(form.contextLength) : undefined,
       maxTokens: form.maxTokens ? Number(form.maxTokens) : undefined,
       defaultTemperature: form.defaultTemperature ? Number(form.defaultTemperature) : undefined,
-      capabilities: form.capabilities ? form.capabilities.split(",").map(s => s.trim()).filter(Boolean) : undefined,
+      supportsChat: form.supportsChat,
+      supportsVision: form.supportsVision,
+      supportsEmbedding: form.supportsEmbedding,
       isDefault: form.isDefault,
       apiKey: form.apiKey || undefined,
       notes: form.notes || undefined,
@@ -657,11 +750,14 @@ export default function TheArtificers() {
       providerType: provider.providerType ?? "openai_compatible",
       baseUrl: provider.baseUrl ?? "",
       port: provider.port ? String(provider.port) : "",
+      apiPrefix: provider.apiPrefix ?? "/v1",
       modelId: provider.modelId ?? "",
       contextLength: provider.contextLength ? String(provider.contextLength) : "",
       maxTokens: provider.maxTokens ? String(provider.maxTokens) : "",
       defaultTemperature: provider.defaultTemperature !== null && provider.defaultTemperature !== undefined ? String(provider.defaultTemperature) : "0.2",
-      capabilities: Array.isArray(provider.capabilities) ? (provider.capabilities as string[]).join(", ") : "chat",
+      supportsChat: provider.supportsChat ?? true,
+      supportsVision: provider.supportsVision ?? false,
+      supportsEmbedding: provider.supportsEmbedding ?? false,
       isDefault: provider.isDefault ?? false,
       apiKey: "",
       notes: provider.notes ?? "",
@@ -678,11 +774,14 @@ export default function TheArtificers() {
       providerType: editForm.providerType as any,
       baseUrl: editForm.baseUrl || undefined,
       port: editForm.port ? Number(editForm.port) : undefined,
+      apiPrefix: editForm.apiPrefix || "/v1",
       modelId: editForm.modelId || undefined,
       contextLength: editForm.contextLength ? Number(editForm.contextLength) : undefined,
       maxTokens: editForm.maxTokens ? Number(editForm.maxTokens) : undefined,
       defaultTemperature: editForm.defaultTemperature ? Number(editForm.defaultTemperature) : undefined,
-      capabilities: editForm.capabilities ? editForm.capabilities.split(",").map(s => s.trim()).filter(Boolean) : undefined,
+      supportsChat: editForm.supportsChat,
+      supportsVision: editForm.supportsVision,
+      supportsEmbedding: editForm.supportsEmbedding,
       isDefault: editForm.isDefault,
       apiKey: editForm.apiKey || undefined,
       notes: editForm.notes || undefined,
@@ -810,7 +909,6 @@ export default function TheArtificers() {
                 const isTestingThis = testingId === provider.id;
                 const models = (provider.availableModels as string[]) ?? [];
                 const isExpanded = expandedModels[provider.id] ?? false;
-                const capabilities = (provider.capabilities as string[]) ?? [];
                 const cardDiscover = cardDiscoverState[provider.id];
                 const isDiscoveringThis = cardDiscover?.loading ?? false;
 
@@ -834,12 +932,17 @@ export default function TheArtificers() {
                             )}
                           </div>
                           <Badge variant="secondary">{provider.providerType?.split("_").map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ")}</Badge>
-                          {capabilities.map((cap: string) => (
-                            <Badge key={cap} variant="outline" className={`text-xs ${cap === "vision" ? "border-purple-500/40 text-purple-300" : ""}`}>
-                              {cap === "vision" && <Eye className="h-3 w-3 mr-1" />}
-                              {cap}
+                          {provider.supportsVision && (
+                            <Badge variant="outline" className="text-xs border-purple-500/40 text-purple-300">
+                              <Eye className="h-3 w-3 mr-1" />Vision
                             </Badge>
-                          ))}
+                          )}
+                          {provider.supportsChat && (
+                            <Badge variant="outline" className="text-xs">Chat</Badge>
+                          )}
+                          {provider.supportsEmbedding && (
+                            <Badge variant="outline" className="text-xs">Embedding</Badge>
+                          )}
                           {result && !isTestingThis && (
                             result.ok ? (
                               <Badge className="bg-green-900/30 text-green-400 border-green-700 gap-1">

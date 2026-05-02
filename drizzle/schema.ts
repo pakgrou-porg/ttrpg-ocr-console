@@ -266,10 +266,17 @@ export const llmProviders = mysqlTable("llm_providers", {
    */
   defaultTemperature: float("defaultTemperature").default(0.2),
   /**
-   * Capabilities of this provider/model.
-   * e.g. ['chat', 'vision', 'embedding', 'structured_output']
+   * API path prefix appended after host:port.
+   * e.g. "/v1" for OpenAI-compatible endpoints.
+   * Stored separately so host, port, and prefix can be assembled without duplication.
    */
-  capabilities: json("capabilities").$type<string[]>(),
+  apiPrefix: varchar("apiPrefix", { length: 64 }).default("/v1"),
+  /** Whether this provider/model supports chat completions */
+  supportsChat: boolean("supportsChat").default(true).notNull(),
+  /** Whether this provider/model supports vision (image input) */
+  supportsVision: boolean("supportsVision").default(false).notNull(),
+  /** Whether this provider/model supports text embeddings */
+  supportsEmbedding: boolean("supportsEmbedding").default(false).notNull(),
   /**
    * Whether this is the default provider for new stage inscriptions.
    * Only one provider should have isDefault = true at a time.

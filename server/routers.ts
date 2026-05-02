@@ -490,7 +490,10 @@ export const appRouter = router({
         contextLength: z.number().int().optional(),
         maxTokens: z.number().int().optional(),
         defaultTemperature: z.number().min(0).max(2).optional(),
-        capabilities: z.array(z.string()).optional(),
+        apiPrefix: z.string().max(64).optional(),
+        supportsChat: z.boolean().optional(),
+        supportsVision: z.boolean().optional(),
+        supportsEmbedding: z.boolean().optional(),
         isDefault: z.boolean().optional(),
         apiKey: z.string().optional(),
         notes: z.string().optional(),
@@ -529,11 +532,14 @@ export const appRouter = router({
           providerType: input.providerType,
           baseUrl: input.baseUrl,
           port: input.port,
+          apiPrefix: input.apiPrefix ?? "/v1",
           modelId: input.modelId,
           contextLength: input.contextLength,
           maxTokens: input.maxTokens,
           defaultTemperature: input.defaultTemperature ?? 0.2,
-          capabilities: input.capabilities ?? [],
+          supportsChat: input.supportsChat ?? true,
+          supportsVision: input.supportsVision ?? false,
+          supportsEmbedding: input.supportsEmbedding ?? false,
           isDefault: input.isDefault ?? false,
           encryptedApiKey,
           keyIv,
@@ -560,7 +566,10 @@ export const appRouter = router({
         contextLength: z.number().int().optional(),
         maxTokens: z.number().int().optional(),
         defaultTemperature: z.number().min(0).max(2).optional(),
-        capabilities: z.array(z.string()).optional(),
+        apiPrefix: z.string().max(64).optional(),
+        supportsChat: z.boolean().optional(),
+        supportsVision: z.boolean().optional(),
+        supportsEmbedding: z.boolean().optional(),
         isDefault: z.boolean().optional(),
         apiKey: z.string().optional(),
         clearApiKey: z.boolean().optional(),
@@ -575,11 +584,14 @@ export const appRouter = router({
         if (input.providerType !== undefined) updates.providerType = input.providerType;
         if (input.baseUrl !== undefined) updates.baseUrl = input.baseUrl;
         if (input.port !== undefined) updates.port = input.port;
+        if (input.apiPrefix !== undefined) updates.apiPrefix = input.apiPrefix;
         if (input.modelId !== undefined) updates.modelId = input.modelId;
         if (input.contextLength !== undefined) updates.contextLength = input.contextLength;
         if (input.maxTokens !== undefined) updates.maxTokens = input.maxTokens;
         if (input.defaultTemperature !== undefined) updates.defaultTemperature = input.defaultTemperature;
-        if (input.capabilities !== undefined) updates.capabilities = input.capabilities;
+        if (input.supportsChat !== undefined) updates.supportsChat = input.supportsChat;
+        if (input.supportsVision !== undefined) updates.supportsVision = input.supportsVision;
+        if (input.supportsEmbedding !== undefined) updates.supportsEmbedding = input.supportsEmbedding;
         if (input.isDefault !== undefined) {
           if (input.isDefault) {
             const allProviders = await getAllLlmProviders();
@@ -632,8 +644,12 @@ export const appRouter = router({
 
         const start = Date.now();
         try {
-          // Attempt to hit the models endpoint
-          const url = provider.baseUrl.replace(/\/$/, "") + "/models";
+          // Assemble the models endpoint URL without duplicating port or prefix
+          // baseUrl should be just the host (e.g. "http://10.x.x.x"), port and apiPrefix are separate
+          const host = provider.baseUrl.replace(/\/$/, "");
+          const portStr = provider.port ? `:${provider.port}` : "";
+          const prefix = (provider.apiPrefix ?? "/v1").replace(/\/$/, "");
+          const url = `${host}${portStr}${prefix}/models`;
           const headers: Record<string, string> = { "Content-Type": "application/json" };
 
           if (provider.encryptedApiKey) {
@@ -673,6 +689,7 @@ export const appRouter = router({
         apiKey: z.string().optional(),        // for cloud providers
         baseUrl: z.string().optional(),       // for local providers or custom endpoints
         port: z.number().int().optional(),    // for local providers
+        apiPrefix: z.string().max(64).optional(), // API path prefix, e.g. "/v1"
         visionOnly: z.boolean().optional(),   // filter to vision-capable models only
         providerId: z.number().int().optional(), // if set, decrypt key from stored provider
       }))
@@ -794,10 +811,19 @@ export const appRouter = router({
 
           // ── LMStudio / vLLM / local OpenAI-compatible ───────────────────────────
           if (["lm_studio", "openai_compatible", "custom"].includes(input.providerType) || input.baseUrl?.startsWith("http://") || input.baseUrl?.startsWith("https://localhost")) {
-            const base = input.baseUrl
-              ? input.baseUrl.replace(/\/$/, "")
-              : `http://localhost:${input.port ?? 1234}`;
-            const localUrl = `${base}/v1/models`;
+            // Assemble URL from separate host, port, and prefix parts to avoid duplication
+            const rawBase = input.baseUrl ?? `http://localhost`;
+            const host = rawBase.replace(/\/$/, "");
+            const portStr = input.port ? `:${input.port}` : "";
+            // Use apiPrefix from stored provider if providerId given, else from input or default to /v1
+            let prefix = "/v1";
+            if (input.providerId) {
+              const stored = await getLlmProviderById(input.providerId);
+              prefix = (stored?.apiPrefix ?? "/v1").replace(/\/$/, "");
+            } else if (input.apiPrefix) {
+              prefix = input.apiPrefix.replace(/\/$/, "");
+            }
+            const localUrl = `${host}${portStr}${prefix}/models`;
             const localHeaders: Record<string, string> = { "Content-Type": "application/json" };
             if (apiKey) localHeaders["Authorization"] = `Bearer ${apiKey}`;
 

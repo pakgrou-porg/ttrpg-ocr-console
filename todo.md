@@ -280,3 +280,18 @@
 - [x] Trim DB provider entries to 2 (LM Studio Local Vision + OpenRouter Cloud Fallback)
 - [x] All 128 tests passing
 - [x] Push to GitHub
+
+## Phase: Provider URL Decomposition + Capability Flags
+
+- [ ] Add apiPrefix column to llmProviders table (e.g. "/v1")
+- [ ] Replace capabilities JSON column with boolean flags: supportsChat, supportsVision, supportsEmbedding
+- [ ] Apply DB migration for new columns
+- [ ] Update db.ts helpers for new fields
+- [ ] Update providers.create/update input schemas in routers.ts
+- [ ] Fix URL assembly in discoverModels and testConnection to avoid duplicate port/prefix
+- [ ] Rewrite TheArtificers provider form: separate baseUrl, port, apiPrefix fields
+- [ ] Smart URL decomposition on paste: parse "http://10.x.x.x:1234/v1" into host/port/prefix
+- [ ] Replace capabilities text input with Chat / Vision / Embedding checkboxes
+- [ ] Update provider card display to show flag badges instead of capability string
+- [ ] Update providers.test.ts for new schema fields
+- [ ] Push to GitHub
