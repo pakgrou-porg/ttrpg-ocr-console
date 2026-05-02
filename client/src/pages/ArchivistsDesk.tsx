@@ -430,7 +430,7 @@ export default function ArchivistsDesk() {
               <div className="flex-1 rounded-lg border border-border/50 overflow-hidden bg-card/30">
                 {itemDetail.page ? (
                   <ImageViewer
-                    imageUrl={itemDetail.page.imageUrl}
+                    imageUrl={itemDetail.page.preprocessedPngUrl ?? itemDetail.page.rawPngUrl}
                     pageNumber={itemDetail.page.pageNumber}
                   />
                 ) : (

@@ -1,4 +1,4 @@
-import { boolean, index, int, mysqlEnum, mysqlTable, text, timestamp, varchar, json } from "drizzle-orm/mysql-core";
+import { boolean, float, index, int, mysqlEnum, mysqlTable, text, timestamp, varchar, json } from "drizzle-orm/mysql-core";
 
 export const users = mysqlTable("users", {
   id: int("id").autoincrement().primaryKey(),
@@ -138,6 +138,10 @@ export type InsertSystemConfig = typeof systemConfig.$inferInsert;
 /**
  * Ingestion jobs tracked by Oversee the Scribes.
  * Represents PDF processing pipeline jobs.
+ *
+ * Phase 1: Non-OCR tasks (document registration, intelligence, PDF→PNG, layout classification, bbox detection)
+ * Phase 2: OCR tasks (OCR extraction, quality validation, content break identification, JSON assembly, multi-pass retry)
+ * Phase 3: Artifact storage (persisting all outputs, embeddings prep)
  */
 export const ingestionJobs = mysqlTable("ingestion_jobs", {
   id: int("id").autoincrement().primaryKey(),
@@ -146,7 +150,19 @@ export const ingestionJobs = mysqlTable("ingestion_jobs", {
   /** Game system this material belongs to */
   gameSystem: varchar("gameSystem", { length: 128 }),
   /** Current status of the job */
-  status: mysqlEnum("status", ["queued", "converting", "pass1_ocr", "pass2_ocr", "enriching", "review", "completed", "failed"]).default("queued").notNull(),
+  status: mysqlEnum("status", [
+    "queued",
+    "phase1_non_ocr",
+    "phase2_ocr",
+    "phase3_storage",
+    "hitl_required",
+    "completed",
+    "failed",
+  ]).default("queued").notNull(),
+  /** Current pipeline phase (1, 2, or 3) */
+  currentPhase: int("currentPhase").default(1),
+  /** Current stage within the phase */
+  currentStage: varchar("currentStage", { length: 64 }),
   /** Total pages in the PDF */
   totalPages: int("totalPages").default(0).notNull(),
   /** Pages processed so far */
@@ -242,27 +258,106 @@ export type LlmProvider = typeof llmProviders.$inferSelect;
 export type InsertLlmProvider = typeof llmProviders.$inferInsert;
 
 /**
- * Pipeline stages that can be assigned to specific models.
+ * Pipeline stages for the TTRPG OCR pipeline.
+ *
+ * Phase 1 — Non-OCR Tasks:
+ *   document_registration   Stage 1: Establish source document metadata (filename, path, game type, version)
+ *   document_intelligence   Stage 2: LLM reads first 20 pages → scanned name, document summary, doc type classification
+ *   pdf_to_png              Stage 3: Convert PDF pages to PNGs with progressive optimisation (raw + preprocessed preserved)
+ *   layout_classification   Stage 4: Per-page layout assessment using doc metadata as context; HITL hard-stop if type unknown after 10 pages
+ *   bbox_detection          Stage 5: Identify bounding boxes for images, tables, maps, illustrations; classify content type per region
+ *   child_image_extraction  Stage 5b: Python extracts child PNGs from bbox coordinates (LLM returns coords only)
+ *
+ * Phase 2 — OCR Tasks:
+ *   ocr_extraction          Stage 6: Extract text per page using PDF raw text as rough context for quality comparison
+ *   ocr_validation          Stage 6b: Compare OCR output vs extracted text (≥0.999 threshold for auto-accept)
+ *   tabular_extraction      Stage 7: For table regions — preserve row/column context in output + extract table as child image
+ *   content_break_id        Stage 8: Identify chapter/section/subsection breaks for hierarchical summarisation and cross-page continuity
+ *   summarization           Stage 9: LLM generates chapter, section, and subsection summaries
+ *   json_assembly           Stage 10: Assemble structured per-page JSON with all extracted content, layout, continuity flags
+ *   quality_assessment      Stage 11: LLM holistic quality check (content, layout decisions, continuity); triggers multi-pass retry if needed
+ *
+ * Phase 3 — Artifact Storage:
+ *   artifact_storage        Stage 12: Persist all outputs (per-page JSONs, raw/preprocessed PNGs, child images, cross-page data)
+ *
+ * Console Experience:
+ *   voice_of_arkanum        Console AI assistant (Listen to Ramblings)
+ *   referee                 General-purpose reasoning/QA for console operations
  */
 export const PIPELINE_STAGES = [
-  "layout_analysis",
-  "bbox_detection",
-  "ocr_extraction",
-  "tabular_data",
-  "image_classification",
-  "embedding",
-  "enrichment",
-  "referee",
+  // Phase 1 — Non-OCR / Ingestion & Layout
+  "document_registration",
+  "document_intelligence",
+  "pdf_to_png",
+  "layout_analysis",        // layout detection (VLM)
+  "layout_classification",  // region type classification
+  "bbox_detection",          // bounding-box + content type
+  "content_type_classify",   // mixed-content boundary detection
+  "child_image_extraction",  // extract table/illustration child PNGs
+  // Phase 2 — OCR Extraction & Validation
+  "ocr_extraction",          // primary structured extraction (Pass 1-2)
+  "content_break_detect",    // chapter/section/subsection break detection
+  "summarisation",           // hierarchical summarisation (LLM)
+  "quality_validation",      // quality assessment LLM
+  "pass_comparison",         // multi-pass scoring & comparison
+  "ocr_validation",          // legacy alias
+  "tabular_extraction",      // table row/column extraction
+  "content_break_id",        // legacy alias
+  "summarization",           // legacy alias
+  "json_assembly",           // JSON output assembly
+  "quality_assessment",      // legacy alias
+  // Phase 3 — Artifact Storage & Embeddings
+  "artifact_storage",        // persist all artifacts
+  "embedding_generation",    // multimodal embedding generation
+  "database_load",           // final DB load step
+  // Console experience
   "voice_of_arkanum",
-  "summarization",
+  "referee",
 ] as const;
 
 export type PipelineStage = (typeof PIPELINE_STAGES)[number];
 
 /**
+ * Which phase each pipeline stage belongs to.
+ */
+export const STAGE_PHASES: Record<PipelineStage, 1 | 2 | 3 | 0> = {
+  // Phase 1
+  document_registration: 1,
+  document_intelligence: 1,
+  pdf_to_png: 1,
+  layout_analysis: 1,
+  layout_classification: 1,
+  bbox_detection: 1,
+  content_type_classify: 1,
+  child_image_extraction: 1,
+  // Phase 2
+  ocr_extraction: 2,
+  content_break_detect: 2,
+  summarisation: 2,
+  quality_validation: 2,
+  pass_comparison: 2,
+  ocr_validation: 2,
+  tabular_extraction: 2,
+  content_break_id: 2,
+  summarization: 2,
+  json_assembly: 2,
+  quality_assessment: 2,
+  // Phase 3
+  artifact_storage: 3,
+  embedding_generation: 3,
+  database_load: 3,
+  // Console experience
+  voice_of_arkanum: 0,
+  referee: 0,
+};
+
+/**
  * Model Assignment Matrix — maps specific models to pipeline stages.
  * Multiple models can be assigned to the same stage with priority ordering
  * for fallback chains.
+ *
+ * Every LLM-involved stage has a dedicated system prompt and configurable
+ * LLM settings (temperature, max_tokens, etc.) stored per assignment.
  */
 export const modelAssignments = mysqlTable("model_assignments", {
   id: int("id").autoincrement().primaryKey(),
@@ -276,11 +371,29 @@ export const modelAssignments = mysqlTable("model_assignments", {
   priority: int("priority").default(1).notNull(),
   /** Whether this assignment is currently active */
   isActive: boolean("isActive").default(true).notNull(),
-  /** Optional config overrides (temperature, max_tokens, etc.) */
-  configOverrides: json("configOverrides").$type<Record<string, unknown>>(),
+  /**
+   * Dedicated system prompt for this stage assignment.
+   * This is a hard requirement — every LLM-involved stage must have a
+   * configurable system prompt stored per assignment.
+   */
+  systemPrompt: text("systemPrompt"),
+  /**
+   * LLM temperature setting for this stage (0.0 – 2.0).
+   * Controls randomness: lower = more deterministic (good for OCR/extraction),
+   * higher = more creative (good for summarisation).
+   */
+  temperature: float("temperature").default(0.2),
+  /**
+   * Additional LLM settings as JSON (max_tokens, top_p, frequency_penalty, etc.)
+   * Merged with temperature at call time; temperature field takes precedence.
+   */
+  llmSettings: json("llmSettings").$type<Record<string, unknown>>(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-});
+}, (t) => ({
+  providerIdIdx: index("model_assignments_providerId_idx").on(t.providerId),
+  stageIdx: index("model_assignments_stage_idx").on(t.pipelineStage),
+}));
 
 export type ModelAssignment = typeof modelAssignments.$inferSelect;
 export type InsertModelAssignment = typeof modelAssignments.$inferInsert;
@@ -350,16 +463,22 @@ export type InsertDbConnection = typeof dbConnections.$inferInsert;
  */
 
 /**
+ * Document type classification — determined during Stage 2 (document intelligence)
+ * and confirmed/refined during Stage 4 (layout classification).
+ */
+export const DOCUMENT_TYPES = ["book", "guide", "periodical", "magazine", "supplement", "adventure", "unknown"] as const;
+export type DocumentType = (typeof DOCUMENT_TYPES)[number];
+
+/**
  * Source documents (PDFs) ingested into the pipeline.
  * Each document represents a single TTRPG PDF file.
  */
 export const DOCUMENT_STATUSES = [
   "pending",
-  "converting",
-  "ocr_pass1",
-  "ocr_pass2",
-  "enriching",
-  "review",
+  "phase1_non_ocr",
+  "phase2_ocr",
+  "phase3_storage",
+  "hitl_required",
   "completed",
   "failed",
 ] as const;
@@ -370,12 +489,29 @@ export const documents = mysqlTable("documents", {
   id: int("id").autoincrement().primaryKey(),
   /** Original filename of the PDF */
   filename: varchar("filename", { length: 512 }).notNull(),
-  /** Game system (e.g., "Dungeons & Dragons", "Pathfinder") */
+  /** Game system (e.g., "Dungeons & Dragons", "Pathfinder", "Advanced Dungeons & Dragons") */
   gameSystem: varchar("gameSystem", { length: 128 }),
-  /** Edition/version (e.g., "5e", "2e") */
+  /** Edition/version (e.g., "1e", "2e", "5e", "5.5e") */
   edition: varchar("edition", { length: 64 }),
-  /** Book title as it appears on the cover */
+  /** Book title as it appears on the cover (operator-supplied at registration) */
   title: varchar("title", { length: 512 }),
+  /**
+   * Scanned/internal document name as identified by the LLM from the document content.
+   * May differ from the filename or operator-supplied title.
+   * Populated during Stage 2 (document intelligence).
+   */
+  scannedName: varchar("scannedName", { length: 512 }),
+  /**
+   * High-level summary of the document purpose, LLM-generated during Stage 2.
+   * Used as metadata for all chunks in the vector store.
+   */
+  documentSummary: text("documentSummary"),
+  /**
+   * Document type classification (book/guide vs periodical/magazine).
+   * Initially set during Stage 2 (document intelligence), confirmed during Stage 4.
+   * Drives layout parsing strategy in Stage 5.
+   */
+  documentType: varchar("documentType", { length: 64 }),
   /** Publisher name */
   publisher: varchar("publisher", { length: 256 }),
   /** Total number of pages in the PDF */
@@ -387,7 +523,15 @@ export const documents = mysqlTable("documents", {
   /** Average OCR confidence across all pages (0-100) */
   avgConfidence: int("avgConfidence").default(0),
   /** Current processing status */
-  status: mysqlEnum("status", ["pending", "converting", "ocr_pass1", "ocr_pass2", "enriching", "review", "completed", "failed"]).default("pending").notNull(),
+  status: mysqlEnum("status", [
+    "pending",
+    "phase1_non_ocr",
+    "phase2_ocr",
+    "phase3_storage",
+    "hitl_required",
+    "completed",
+    "failed",
+  ]).default("pending").notNull(),
   /** Optional S3 URL for the original PDF */
   pdfUrl: varchar("pdfUrl", { length: 1024 }),
   /** Optional cover image thumbnail URL */
@@ -410,8 +554,42 @@ export type Document = typeof documents.$inferSelect;
 export type InsertDocument = typeof documents.$inferInsert;
 
 /**
+ * Layout types identified during Stage 4 (layout classification) and Stage 5 (bbox detection).
+ */
+export const LAYOUT_TYPES = [
+  "single_column",
+  "two_column",
+  "three_column",
+  "mixed",       // e.g. 2-col top + 1-col below a horizontal rule
+  "full_page_image",
+  "table_dominant",
+  "periodical_mixed", // editorial + advertising regions on same page
+  "unknown",
+] as const;
+export type LayoutType = (typeof LAYOUT_TYPES)[number];
+
+/**
+ * Content region types identified within bounding boxes.
+ */
+export const CONTENT_REGION_TYPES = [
+  "text",
+  "table",
+  "illustration",
+  "map",
+  "graphic",
+  "advertisement",
+  "header",
+  "footer",
+  "page_number",
+  "sidebar",
+  "callout",
+  "unknown",
+] as const;
+export type ContentRegionType = (typeof CONTENT_REGION_TYPES)[number];
+
+/**
  * Individual pages within a document.
- * Each page has a high-res image (local path or S3 URL) and a thumbnail.
+ * Each page has raw and preprocessed PNG images, layout metadata, and structured content.
  */
 export const documentPages = mysqlTable("document_pages", {
   id: int("id").autoincrement().primaryKey(),
@@ -419,18 +597,62 @@ export const documentPages = mysqlTable("document_pages", {
   documentId: int("documentId").notNull(),
   /** Page number within the document (1-indexed) */
   pageNumber: int("pageNumber").notNull(),
-  /** URL to the high-resolution page image (S3 or local path) */
-  imageUrl: varchar("imageUrl", { length: 1024 }),
-  /** URL to the thumbnail image (S3) */
+  /**
+   * URL to the raw original PNG (unmodified, full-resolution).
+   * Preserved permanently alongside the preprocessed version.
+   */
+  rawPngUrl: varchar("rawPngUrl", { length: 1024 }),
+  /**
+   * URL to the preprocessed PNG (optimised for LLM input — may be grayscale,
+   * quality-reduced, etc.). Preserved permanently for audit and reprocessing.
+   */
+  preprocessedPngUrl: varchar("preprocessedPngUrl", { length: 1024 }),
+  /** URL to the thumbnail image (S3) — for UI display */
   thumbnailUrl: varchar("thumbnailUrl", { length: 1024 }),
   /** Perceptual hash for duplicate detection */
   phash: varchar("phash", { length: 64 }),
-  /** Whether this page has been binarized */
-  isBinarized: boolean("isBinarized").default(false).notNull(),
-  /** Image width in pixels */
+  /** Whether a preprocessed (optimised) version was generated */
+  wasPreprocessed: boolean("wasPreprocessed").default(false).notNull(),
+  /** Which optimisation was applied (e.g., "grayscale", "quality_80", "quality_60") */
+  preprocessingApplied: varchar("preprocessingApplied", { length: 128 }),
+  /** Image width in pixels (of the preprocessed version used for analysis) */
   imageWidth: int("imageWidth"),
   /** Image height in pixels */
   imageHeight: int("imageHeight"),
+  /**
+   * Layout type identified during Stage 4/5.
+   * Drives column parsing and region extraction strategy.
+   */
+  layoutType: varchar("layoutType", { length: 64 }),
+  /**
+   * Bounding box regions identified on this page (Stage 5).
+   * Array of { regionType, bbox: {x,y,w,h}, childImageUrl, contentTypeFlags }
+   */
+  contentRegions: json("contentRegions").$type<Array<{
+    sequence: number;
+    regionType: string;
+    bbox: { x: number; y: number; w: number; h: number };
+    childImageUrl?: string;
+    contentTypeFlags?: string[];
+    isMixedBoundary?: boolean;
+  }>>(),
+  /**
+   * Cross-page continuity flags (Stage 8).
+   * Tracks whether content continues from/to adjacent pages.
+   */
+  continuityFlags: json("continuityFlags").$type<{
+    continuesFromPreviousPage: boolean;
+    continuesToNextPage: boolean;
+    midSentenceBreakAtEnd: boolean;
+    sectionContinuesFromPreviousPage: boolean;
+  }>(),
+  /**
+   * Assembled per-page structured JSON output (Stage 10).
+   * Full output including source doc refs, section info, content regions, continuity.
+   */
+  pageJsonOutput: json("pageJsonOutput").$type<Record<string, unknown>>(),
+  /** Current pipeline phase/stage status for this page */
+  phaseStatus: varchar("phaseStatus", { length: 64 }),
   /** Whether this page is flagged for HITL review */
   isFlagged: boolean("isFlagged").default(false).notNull(),
   /** Whether OCR has been completed for this page */
@@ -453,14 +675,24 @@ export type InsertDocumentPage = typeof documentPages.$inferInsert;
 
 /**
  * OCR extraction results for each page.
- * Stores both raw text and structured JSON data from the two-pass OCR pipeline.
+ * Stores both raw text and structured JSON data from the multi-pass OCR pipeline.
+ *
+ * Multi-pass retry escalation:
+ *   Pass 1: Primary assigned model (local/cloud)
+ *   Pass 2: Same model, independent re-run — contrasted with Pass 1
+ *   Pass 3: Designated cloud fallback model — independent attempt
+ *   Pass 4: Same cloud model retry — if Pass 3 still unacceptable
+ *   HITL:   If Pass 4 fails — all attempt results surfaced in Archivist's Desk
  */
 export const OCR_RESULT_STATUSES = [
   "pending",
   "pass1_complete",
   "pass2_complete",
+  "pass3_complete",
+  "pass4_complete",
   "validated",
   "corrected",
+  "hitl_required",
   "failed",
 ] as const;
 
@@ -474,16 +706,40 @@ export const ocrResults = mysqlTable("ocr_results", {
   rawText: text("rawText"),
   /** Structured data extracted by the pipeline (JSON) */
   structuredData: json("structuredData").$type<Record<string, unknown>>(),
-  /** Layout metadata from Pass 1 (bounding boxes, element types) */
+  /** Layout metadata from Stage 5 (bounding boxes, element types) */
   layoutMetadata: json("layoutMetadata").$type<Record<string, unknown>>(),
   /** Overall confidence score for this extraction (0-100) */
   confidence: int("confidence").default(0),
   /** Processing status */
-  status: mysqlEnum("status", ["pending", "pass1_complete", "pass2_complete", "validated", "corrected", "failed"]).default("pending").notNull(),
+  status: mysqlEnum("status", [
+    "pending",
+    "pass1_complete",
+    "pass2_complete",
+    "pass3_complete",
+    "pass4_complete",
+    "validated",
+    "corrected",
+    "hitl_required",
+    "failed",
+  ]).default("pending").notNull(),
   /** Which model produced the Pass 1 result */
   pass1Model: varchar("pass1Model", { length: 256 }),
-  /** Which model produced the Pass 2 result */
+  /** Which model produced the Pass 2 result (same model, independent run) */
   pass2Model: varchar("pass2Model", { length: 256 }),
+  /**
+   * Which cloud model was used for Pass 3 (designated cloud fallback).
+   * Null if quality was accepted before reaching Pass 3.
+   */
+  pass3Model: varchar("pass3Model", { length: 256 }),
+  /**
+   * Which cloud model was used for Pass 4 (same cloud model retry).
+   * Null if quality was accepted before reaching Pass 4.
+   */
+  pass4Model: varchar("pass4Model", { length: 256 }),
+  /** Quality assessment score from the LLM quality check (0-100) */
+  qualityScore: int("qualityScore"),
+  /** Notes from the quality assessment LLM comparing passes */
+  qualityNotes: text("qualityNotes"),
   /** Audit log of processing steps (JSON array) */
   auditLog: json("auditLog").$type<{ timestamp: string; action: string; model?: string; detail?: string }[]>().default([]),
   /** Human-corrected text (if HITL review was performed) */
@@ -507,14 +763,67 @@ export type OcrResult = typeof ocrResults.$inferSelect;
 export type InsertOcrResult = typeof ocrResults.$inferInsert;
 
 /**
+ * Page processing attempts — tracks each individual pass (1-4) per page.
+ * All attempt outputs are preserved so HITL operators can compare them.
+ */
+export const pageProcessingAttempts = mysqlTable("page_processing_attempts", {
+  id: int("id").autoincrement().primaryKey(),
+  /** Parent page ID */
+  pageId: int("pageId").notNull(),
+  /** Parent OCR result ID */
+  ocrResultId: int("ocrResultId").notNull(),
+  /** Pass number (1-4) */
+  passNumber: int("passNumber").notNull(),
+  /** Model used for this pass */
+  modelUsed: varchar("modelUsed", { length: 256 }).notNull(),
+  /** Provider used for this pass */
+  providerName: varchar("providerName", { length: 128 }),
+  /** Whether this was a cloud model pass (Pass 3/4) */
+  isCloudPass: boolean("isCloudPass").default(false).notNull(),
+  /** Raw text output from this pass */
+  rawTextOutput: text("rawTextOutput"),
+  /** Structured JSON output from this pass */
+  structuredOutput: json("structuredOutput").$type<Record<string, unknown>>(),
+  /** Quality score assigned to this pass (0-100) */
+  score: int("score"),
+  /** Comparison notes vs previous pass */
+  comparisonNotes: text("comparisonNotes"),
+  /** Whether this pass was accepted as the final result */
+  wasAccepted: boolean("wasAccepted").default(false).notNull(),
+  /** Processing time in milliseconds */
+  processingTimeMs: int("processingTimeMs"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  pageIdIdx: index("page_attempts_pageId_idx").on(t.pageId),
+  ocrResultIdIdx: index("page_attempts_ocrResultId_idx").on(t.ocrResultId),
+}));
+
+export type PageProcessingAttempt = typeof pageProcessingAttempts.$inferSelect;
+export type InsertPageProcessingAttempt = typeof pageProcessingAttempts.$inferInsert;
+
+/**
  * HITL (Human-in-the-Loop) review queue.
  * Pages flagged for human review are tracked here with priority and resolution status.
+ * Includes all processing attempt results for HITL operators to compare.
  */
 export const HITL_PRIORITIES = ["low", "medium", "high", "critical"] as const;
 export type HitlPriority = (typeof HITL_PRIORITIES)[number];
 
 export const HITL_STATUSES = ["queued", "in_progress", "resolved", "skipped", "escalated"] as const;
 export type HitlStatus = (typeof HITL_STATUSES)[number];
+
+/**
+ * Categories of HITL flags — helps operators filter and prioritise the queue.
+ */
+export const HITL_FLAG_CATEGORIES = [
+  "doc_type_unknown",       // Document type could not be determined within 10 pages (hard stop)
+  "ocr_quality_failed",     // All 4 passes failed quality threshold
+  "layout_ambiguous",       // Layout classification uncertain
+  "content_type_conflict",  // Content type classification conflict
+  "continuity_error",       // Cross-page continuity detection failed
+  "manual_flag",            // Manually flagged by operator
+] as const;
+export type HitlFlagCategory = (typeof HITL_FLAG_CATEGORIES)[number];
 
 export const hitlQueue = mysqlTable("hitl_queue", {
   id: int("id").autoincrement().primaryKey(),

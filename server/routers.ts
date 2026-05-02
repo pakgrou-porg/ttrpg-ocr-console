@@ -657,7 +657,7 @@ export const appRouter = router({
           modelName: input.modelName,
           pipelineStage: input.pipelineStage,
           priority: input.priority,
-          configOverrides: input.configOverrides,
+          llmSettings: input.configOverrides as Record<string, unknown> | undefined,
         });
         return { success: true, id };
       }),
@@ -670,10 +670,14 @@ export const appRouter = router({
         pipelineStage: z.enum(PIPELINE_STAGES).optional(),
         priority: z.number().int().min(1).max(10).optional(),
         isActive: z.boolean().optional(),
+        systemPrompt: z.string().optional(),
+        temperature: z.number().min(0).max(2).optional(),
         configOverrides: z.record(z.string(), z.unknown()).optional(),
       }))
       .mutation(async ({ input }) => {
-        const { id, ...updates } = input;
+        const { id, configOverrides, ...rest } = input;
+        const updates: Record<string, unknown> = { ...rest };
+        if (configOverrides !== undefined) updates.llmSettings = configOverrides;
         await updateModelAssignment(id, updates as any);
         return { success: true };
       }),
@@ -724,7 +728,7 @@ export const appRouter = router({
             isActive: a.isActive,
             providerName: provider?.name ?? "Unknown",
             providerType: provider?.providerType ?? "unknown",
-            configOverrides: a.configOverrides ?? null,
+            llmSettings: a.llmSettings ?? null,
           };
         }).sort((a, b) => a.priority - b.priority),
       }));
@@ -1039,6 +1043,8 @@ export const appRouter = router({
       .input(z.object({
         documentId: z.number().int(),
         pageNumber: z.number().int().min(1),
+        rawPngUrl: z.string().url().optional(),
+        /** @deprecated use rawPngUrl — kept for backward compat with tests */
         imageUrl: z.string().max(1024).optional(),
         thumbnailUrl: z.string().max(1024).optional(),
         phash: z.string().max(64).optional(),
@@ -1046,7 +1052,11 @@ export const appRouter = router({
         imageHeight: z.number().int().optional(),
       }))
       .mutation(async ({ input }) => {
-        const page = await createDocumentPage(input);
+        const { imageUrl, ...rest } = input;
+        const page = await createDocumentPage({
+          ...rest,
+          rawPngUrl: rest.rawPngUrl ?? imageUrl,
+        });
         return { success: true, id: page.id };
       }),
 
@@ -1289,7 +1299,7 @@ export const appRouter = router({
       .input(z.object({
         documentId: z.number().int(),
         pageNumber: z.number().int().min(1),
-        imageUrl: z.string().url(),
+        rawPngUrl: z.string().url(),
         thumbnailUrl: z.string().url().optional(),
         phash: z.string().max(64).optional(),
         imageWidth: z.number().int().optional(),
@@ -1331,7 +1341,7 @@ export const appRouter = router({
         const page = await createDocumentPage({
           documentId: input.documentId,
           pageNumber: input.pageNumber,
-          imageUrl: input.imageUrl,
+          rawPngUrl: input.rawPngUrl,
           thumbnailUrl: input.thumbnailUrl,
           phash: input.phash,
           imageWidth: input.imageWidth,

@@ -14,6 +14,10 @@ import {
   documentPages, InsertDocumentPage,
   ocrResults, InsertOcrResult,
   hitlQueue, InsertHitlQueueItem,
+  pageProcessingAttempts, InsertPageProcessingAttempt,
+  llmProviders, InsertLlmProvider,
+  modelAssignments, InsertModelAssignment,
+  dbConnections, InsertDbConnection,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
@@ -486,7 +490,7 @@ export async function pingDatabase(): Promise<{ ok: boolean; latencyMs: number }
 
 // ─── LLM Providers ──────────────────────────────────────────────────────────
 
-import { llmProviders, InsertLlmProvider, modelAssignments, InsertModelAssignment, dbConnections, InsertDbConnection } from "../drizzle/schema";
+
 
 export async function getAllLlmProviders() {
   const db = await getDb();
@@ -785,6 +789,39 @@ export async function updateHitlItem(id: number, updates: Partial<InsertHitlQueu
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.update(hitlQueue).set(updates).where(eq(hitlQueue.id, id));
+}
+
+// ─── Page Processing Attempts ───────────────────────────────────────────────
+
+export async function getAttemptsForPage(pageId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(pageProcessingAttempts)
+    .where(eq(pageProcessingAttempts.pageId, pageId))
+    .orderBy(pageProcessingAttempts.passNumber);
+}
+
+export async function getAttemptsForOcrResult(ocrResultId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(pageProcessingAttempts)
+    .where(eq(pageProcessingAttempts.ocrResultId, ocrResultId))
+    .orderBy(pageProcessingAttempts.passNumber);
+}
+
+export async function createPageProcessingAttempt(attempt: InsertPageProcessingAttempt) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(pageProcessingAttempts).values(attempt);
+  const newId = result[0].insertId;
+  const created = await db.select().from(pageProcessingAttempts).where(eq(pageProcessingAttempts.id, newId)).limit(1);
+  return created[0]!;
+}
+
+export async function updatePageProcessingAttempt(id: number, updates: Partial<InsertPageProcessingAttempt>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(pageProcessingAttempts).set(updates).where(eq(pageProcessingAttempts.id, id));
 }
 
 export async function getHitlStats() {

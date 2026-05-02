@@ -54,13 +54,14 @@ const SERVICE_DEFS: ServiceDef[] = [
     ],
   },
   {
-    id: "n8n",
-    name: "Workflow Orchestrator (n8n)",
-    description: "Manages ingestion, OCR processing, and enrichment workflow schedules.",
+    id: "pipeline_runner",
+    name: "Pipeline Runner (Python)",
+    description: "Local Python-based orchestrator executing Phase 1 (ingestion), Phase 2 (OCR), and Phase 3 (artifact storage).",
     icon: Zap,
     configFields: [
-      { key: "n8n_url", label: "n8n URL", placeholder: "http://localhost:5678" },
-      { key: "n8n_api_key", label: "n8n API Key", placeholder: "n8n_api_…", type: "password" },
+      { key: "pipeline_runner_url", label: "Pipeline API URL", placeholder: "http://localhost:8765" },
+      { key: "pipeline_batch_size", label: "Batch Size (pages)", placeholder: "5" },
+      { key: "pipeline_max_workers", label: "Max Parallel Workers", placeholder: "2" },
     ],
   },
   {

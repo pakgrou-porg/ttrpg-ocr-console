@@ -87,13 +87,13 @@ describe("library", () => {
     it("updates a document", async () => {
       const result = await adminCaller.library.updateDocument({
         id: testDocId,
-        status: "converting",
+        status: "phase1_non_ocr",
         processedPages: 10,
       });
       expect(result.success).toBe(true);
 
       const doc = await userCaller.library.getDocument({ id: testDocId });
-      expect(doc.status).toBe("converting");
+      expect(doc.status).toBe("phase1_non_ocr");
       expect(doc.processedPages).toBe(10);
     });
 
@@ -428,7 +428,7 @@ describe("pipeline", () => {
       const result = await userCaller.pipeline.ingestPage({
         documentId: testDocId,
         pageNumber: 1,
-        imageUrl: "https://example.com/pipeline_page1.png",
+        rawPngUrl: "https://example.com/pipeline_page1.png",
         thumbnailUrl: "https://example.com/pipeline_page1_thumb.png",
         phash: "pipeline_hash_001",
         imageWidth: 1240,
@@ -444,7 +444,7 @@ describe("pipeline", () => {
       const result = await userCaller.pipeline.ingestPage({
         documentId: testDocId,
         pageNumber: 99,
-        imageUrl: "https://example.com/pipeline_page_dup.png",
+        rawPngUrl: "https://example.com/pipeline_page_dup.png",
         phash: "pipeline_hash_001", // same phash as above
       });
       expect(result.isDuplicate).toBe(true);
@@ -455,7 +455,7 @@ describe("pipeline", () => {
       await expect(userCaller.pipeline.ingestPage({
         documentId: 999999,
         pageNumber: 1,
-        imageUrl: "https://example.com/missing.png",
+        rawPngUrl: "https://example.com/missing.png",
       })).rejects.toThrow("999999 not found");
     });
   });
@@ -485,7 +485,7 @@ describe("pipeline", () => {
       const page2 = await userCaller.pipeline.ingestPage({
         documentId: testDocId,
         pageNumber: 2,
-        imageUrl: "https://example.com/pipeline_page2.png",
+        rawPngUrl: "https://example.com/pipeline_page2.png",
       });
 
       const result = await userCaller.pipeline.submitOcrResult({

@@ -33,10 +33,9 @@ const INGEST_EXAMPLE = `curl -X POST https://your-console.manus.space/api/trpc/p
     "json": {
       "documentId": 42,
       "pageNumber": 1,
-      "imageUrl": "https://s3.example.com/pages/doc42-p001.png",
+      "rawPngUrl": "https://s3.example.com/pages/doc42-p001-raw.png",
       "thumbnailUrl": "https://s3.example.com/thumbs/doc42-p001-thumb.png",
       "phash": "a1b2c3d4e5f6a7b8",
-      "isBinarized": true,
       "imageWidth": 2480,
       "imageHeight": 3508
     }
@@ -47,7 +46,8 @@ const INGEST_EXAMPLE = `curl -X POST https://your-console.manus.space/api/trpc/p
 #   "pageId": 123,
 #   "isDuplicate": false
 # } } } }
-# If isDuplicate is true, duplicateOfPageId is also returned — skip OCR for this page.`;
+# If isDuplicate is true, duplicateOfPageId is also returned — skip OCR for this page.
+# Phase 1 pipeline will update preprocessedPngUrl after binarization/preprocessing.`;
 
 const OCR_SUBMIT_EXAMPLE = `curl -X POST https://your-console.manus.space/api/trpc/pipeline.submitOcrResult \\
   -H "Content-Type: application/json" \\
@@ -67,9 +67,24 @@ const OCR_SUBMIT_EXAMPLE = `curl -X POST https://your-console.manus.space/api/tr
       "confidence": 87,
       "pass1Model": "llava-1.6",
       "pass2Model": "anthropic/claude-3.5-sonnet",
+      "passNumber": 2,
+      "pageJsonOutput": {
+        "source_document": { "document_id": 42, "filename": "phb5e.pdf" },
+        "page": {
+          "page_number": 1,
+          "chapter": { "name": "Introduction", "summary": "..." },
+          "section": { "name": "What is D&D?", "summary": "...", "starts_on_this_page": true },
+          "content_regions": [
+            { "region_type": "text", "sequence": 1, "extracted_text": "Dungeons & Dragons is..." },
+            { "region_type": "table", "sequence": 2, "tabular_data": { "headers": ["Ability", "Modifier"], "rows": [["STR 10", "+0"]], "image_ref": "s3://..." } }
+          ],
+          "continuity": { "content_continues_from_previous_page": false, "content_continues_to_next_page": true, "mid_sentence_break_at_end": true }
+        }
+      },
       "auditLog": [
-        { "timestamp": "2026-05-02T12:00:00Z", "action": "pass1_complete", "model": "llava-1.6" },
-        { "timestamp": "2026-05-02T12:00:05Z", "action": "pass2_complete", "model": "claude-3.5-sonnet" }
+        { "timestamp": "2026-05-02T12:00:00Z", "action": "phase1_layout_complete", "model": "llava-1.6" },
+        { "timestamp": "2026-05-02T12:00:05Z", "action": "phase2_ocr_complete", "model": "claude-3.5-sonnet" },
+        { "timestamp": "2026-05-02T12:00:06Z", "action": "quality_validated", "score": 87 }
       ]
     }
   }'
@@ -357,7 +372,7 @@ export default function TomeKnowledge() {
                       ["ingestion_jobs", "PDF ingestion tracking", "status, sourceType, totalPages, processedPages"],
                       ["telemetry_events", "Cost & usage events", "eventType, source, metricValue, costMicros"],
                       ["documents", "Source PDF metadata", "name, gameSystem, pageCount, status, ownerUserId"],
-                      ["document_pages", "Per-page images", "documentId, pageNumber, imageUrl, phash, ocrCompleted"],
+                      ["document_pages", "Per-page images", "documentId, pageNumber, rawPngUrl, preprocessedPngUrl, phash, pageJsonOutput, continuityData"],
                       ["ocr_results", "Extracted text & data", "pageId, rawText, structuredData, confidence, status"],
                       ["hitl_queue", "Human review queue", "pageId, reason, priority, status, resolvedBy"],
                     ].map(([table, purpose, cols]) => (
@@ -382,7 +397,7 @@ export default function TomeKnowledge() {
             </CardHeader>
             <CardContent>
               <div className="flex flex-wrap items-center gap-2 text-sm">
-                {["pending", "pass1_complete", "pass2_complete", "validated", "corrected", "failed"].map((s, i, arr) => (
+                {["pending", "phase1_complete", "ocr_pass1", "ocr_pass2", "quality_check", "pass3_retry", "pass4_retry", "validated", "hitl_flagged", "corrected", "failed"].map((s, i, arr) => (
                   <span key={s} className="flex items-center gap-2">
                     <Badge variant="outline" className="font-mono text-xs">{s}</Badge>
                     {i < arr.length - 1 && <span className="text-muted-foreground">→</span>}
@@ -390,7 +405,8 @@ export default function TomeKnowledge() {
                 ))}
               </div>
               <p className="text-xs text-muted-foreground mt-3">
-                Pages with confidence &lt; 70 after <code className="bg-muted px-1 rounded">pass2_complete</code> are automatically flagged to the HITL queue with <code className="bg-muted px-1 rounded">medium</code> priority.
+                The quality validation LLM scores each extraction. If it fails, the pipeline retries with the same model (Pass 2), then escalates to a designated cloud model (Pass 3), then retries that cloud model (Pass 4).
+                If Pass 4 still fails quality, the page is flagged as <code className="bg-muted px-1 rounded">hitl_flagged</code> with all 4 pass results available to the human reviewer.
                 Human corrections set status to <code className="bg-muted px-1 rounded">corrected</code>.
               </p>
             </CardContent>

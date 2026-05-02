@@ -160,3 +160,58 @@
 - [x] Show provider name, model, priority, and active status on each assignment node
 - [x] Show priority-ordered edges from stage nodes to provider/model nodes
 - [x] Write vitest tests for assignments.topology procedure (4 tests, 127 total passing)
+
+## Phase: Pipeline Architecture Redesign (Remove n8n, Full Spec Implementation)
+
+### Schema Changes
+- [x] Remove n8n references from PIPELINE_STAGES enum and replace with full revised stage list
+- [x] Add systemPrompt (text) and temperature (float) fields to modelAssignments table
+- [x] Add llmSettingsJson (json) field to modelAssignments for additional per-stage LLM settings
+- [x] Expand documents table: add documentType (book/periodical), scannedName, documentSummary, gameVersion fields
+- [x] Expand documentPages table: add rawPngUrl, preprocessedPngUrl, layoutType, contentRegions (json), continuityFlags (json), pageJsonOutput (json), phaseStatus fields
+- [x] Add pipelineJobs table: tracks per-document pipeline execution with phase/stage progress and retry counts
+- [x] Add pageProcessingAttempts table: tracks each pass (1-4) per page with model used, output, score
+- [x] Update ingestionJobs status enum to match new phase structure (phase1_non_ocr, phase2_ocr, phase3_storage)
+- [x] Update ocrResults table: add passNumber, attemptScore, comparisonNotes, cloudModelUsed fields
+- [x] Run pnpm db:push after all schema changes
+
+### Server Changes
+- [x] Update db.ts helpers for new tables and fields
+- [x] Add tRPC procedures for pipeline job management (create job, update phase, get job status)
+- [x] Add tRPC procedures for page attempt tracking (record attempt, get all attempts for page)
+- [x] Update assignments procedures to handle systemPrompt and temperature fields
+- [x] Update topology procedure to include systemPrompt/temperature in returned data
+- [x] Remove any n8n references from routers.ts and docs
+
+### UI Changes (The Artificers / Assignments)
+- [x] Add systemPrompt textarea field to Create Assignment dialog
+- [x] Add temperature slider/input field to Create Assignment dialog  
+- [x] Add llmSettings (JSON) field to Create Assignment dialog for advanced settings
+- [x] Show system prompt preview (truncated) in assignment list rows
+- [x] Add Edit Assignment dialog with same systemPrompt/temperature/settings fields
+- [x] Update pipeline stage dropdown to use new stage names
+
+### UI Changes (Pipeline Map)
+- [x] Update stage node labels to match new pipeline stage names
+- [x] Reorganize nodes into Phase 1 (non-OCR), Phase 2 (OCR), Phase 3 (storage) visual groupings
+- [x] Show system prompt indicator on assignment nodes (icon if prompt is set)
+- [x] Update edge colors/styles to reflect phase groupings
+- [x] Add HITL escalation node and dashed fallback/conditional edges
+- [x] Add phase legend overlay
+
+### UI Changes (Tome of Knowledge)
+- [x] Remove all n8n references from documentation
+- [x] Document new Python-based pipeline phases (Phase 1, 2, 3)
+- [x] Document per-stage system prompt and temperature configuration
+- [x] Document the multi-pass retry/escalation logic (passes 1-4 + HITL)
+- [x] Document the structured JSON output format per page
+- [x] Document the dual PNG preservation strategy (rawPngUrl + preprocessedPngUrl)
+
+### UI Changes (Incantations & Runes)
+- [x] Update PROMPT_TABS to reflect new pipeline stages (P1: layout_analysis, bbox_detection; P2: ocr_extraction, content_break_detect, summarisation, quality_validation, pass_comparison)
+
+### Tests
+- [x] Update existing assignment tests to include systemPrompt/temperature fields
+- [x] Add tests for pipeline job management procedures
+- [x] Add tests for page attempt tracking procedures
+- [x] All 127 tests passing after schema and router changes

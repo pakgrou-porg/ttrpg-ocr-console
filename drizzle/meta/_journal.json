@@ -64,6 +64,13 @@
       "when": 1777723525718,
       "tag": "0008_complete_sunset_bain",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "5",
+      "when": 1777740804884,
+      "tag": "0009_black_bastion",
+      "breakpoints": true
     }
   ]
 }

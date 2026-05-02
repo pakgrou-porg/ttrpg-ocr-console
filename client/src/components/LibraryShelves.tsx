@@ -801,7 +801,7 @@ export default function LibraryShelves({
         <div className="flex-1 rounded-lg border border-border/50 overflow-hidden bg-card/30">
           {selectedPageId && pageData ? (
             <ImageViewer
-              imageUrl={pageData.page.imageUrl}
+              imageUrl={pageData.page.preprocessedPngUrl ?? pageData.page.rawPngUrl}
               pageNumber={pageData.page.pageNumber}
             />
           ) : selectedDocId ? (

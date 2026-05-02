@@ -31,6 +31,10 @@ import {
   Table,
   Users,
   Zap,
+  Shield,
+  AlertTriangle,
+  CheckCircle2,
+  Thermometer,
 } from "lucide-react";
 
 // ─── Stage metadata ─────────────────────────────────────────────────────────
@@ -42,132 +46,197 @@ export const STAGE_META: Record<string, {
   color: string;
   bgColor: string;
   borderColor: string;
-  group: "ingestion" | "local_vlm" | "cloud_llm" | "enrichment" | "output";
+  group: "phase1" | "phase2" | "phase3" | "output";
+  phase: 1 | 2 | 3;
 }> = {
+  // ── Phase 1: Ingestion & Layout ─────────────────────────────────────────
   layout_analysis: {
     label: "Layout Analysis",
-    description: "Pass 1 — local VLM detects page structure, columns, headers, and regions",
+    description: "Phase 1 — local VLM detects page structure, columns, headers, and content regions",
     icon: Layers,
     color: "text-violet-300",
     bgColor: "bg-violet-950/60",
     borderColor: "border-violet-500/60",
-    group: "local_vlm",
+    group: "phase1",
+    phase: 1,
   },
   bbox_detection: {
-    label: "BBox Detection",
-    description: "Bounding-box detection for text blocks, tables, and images",
+    label: "BBox & Content Classification",
+    description: "Phase 1 — bounding-box detection and content type classification (text, table, illustration, map, advertisement)",
     icon: Search,
     color: "text-violet-300",
     bgColor: "bg-violet-950/60",
     borderColor: "border-violet-500/60",
-    group: "local_vlm",
+    group: "phase1",
+    phase: 1,
   },
+  content_type_classify: {
+    label: "Mixed-Content Boundary",
+    description: "Phase 1 — identifies mixed-content regions (e.g. editorial vs advertising) and marks boundaries for downstream OCR handling",
+    icon: Brain,
+    color: "text-violet-300",
+    bgColor: "bg-violet-950/60",
+    borderColor: "border-violet-500/60",
+    group: "phase1",
+    phase: 1,
+  },
+  // ── Phase 2: OCR Extraction ─────────────────────────────────────────────
   ocr_extraction: {
-    label: "OCR Extraction",
-    description: "Pass 2 — cloud LLM high-fidelity text extraction with multi-model consensus",
+    label: "OCR Extraction (Pass 1–2)",
+    description: "Phase 2 — primary extraction pass: structured JSON per page, preserving reading order, tables, illustrations, and content hierarchy",
     icon: FileText,
     color: "text-blue-300",
     bgColor: "bg-blue-950/60",
     borderColor: "border-blue-500/60",
-    group: "cloud_llm",
+    group: "phase2",
+    phase: 2,
   },
-  tabular_data: {
-    label: "Tabular Data",
-    description: "Structured extraction of tables, stat blocks, and lists",
-    icon: Table,
+  content_break_detect: {
+    label: "Content Break Detection",
+    description: "Phase 2 — identifies chapter/section/subsection breaks and cross-page sentence continuity",
+    icon: GitBranch,
     color: "text-blue-300",
     bgColor: "bg-blue-950/60",
     borderColor: "border-blue-500/60",
-    group: "cloud_llm",
+    group: "phase2",
+    phase: 2,
   },
-  image_classification: {
-    label: "Image Classification",
-    description: "Classify embedded images: maps, illustrations, diagrams, portraits",
-    icon: Brain,
-    color: "text-cyan-300",
-    bgColor: "bg-cyan-950/60",
-    borderColor: "border-cyan-500/60",
-    group: "cloud_llm",
+  summarisation: {
+    label: "Hierarchical Summarisation",
+    description: "Phase 2 — LLM generates chapter, section, and subsection summaries for embeddings and RAG retrieval",
+    icon: Sparkles,
+    color: "text-blue-300",
+    bgColor: "bg-blue-950/60",
+    borderColor: "border-blue-500/60",
+    group: "phase2",
+    phase: 2,
   },
-  embedding: {
-    label: "Embedding",
-    description: "Generate vector embeddings for RAG retrieval",
+  quality_validation: {
+    label: "Quality Validation",
+    description: "Phase 2 — LLM assesses extraction quality: completeness, layout accuracy, context decisions, text continuity",
+    icon: Shield,
+    color: "text-amber-300",
+    bgColor: "bg-amber-950/60",
+    borderColor: "border-amber-500/60",
+    group: "phase2",
+    phase: 2,
+  },
+  pass3_cloud_extraction: {
+    label: "Pass 3 — Cloud Retry",
+    description: "Phase 2 — if Pass 1/2 fail quality check: designated cloud model re-extracts independently; results scored and compared",
+    icon: Cloud,
+    color: "text-orange-300",
+    bgColor: "bg-orange-950/60",
+    borderColor: "border-orange-500/60",
+    group: "phase2",
+    phase: 2,
+  },
+  pass4_cloud_extraction: {
+    label: "Pass 4 — Cloud Final",
+    description: "Phase 2 — if Pass 3 still fails: same cloud model retries; all 4 pass results preserved for HITL if still unacceptable",
+    icon: AlertTriangle,
+    color: "text-red-300",
+    bgColor: "bg-red-950/60",
+    borderColor: "border-red-500/60",
+    group: "phase2",
+    phase: 2,
+  },
+  // ── Phase 3: Artifact Storage ───────────────────────────────────────────
+  artifact_storage: {
+    label: "Artifact Storage",
+    description: "Phase 3 — persist per-page JSONs, raw PNGs, preprocessed PNGs, child/extracted images, cross-page continuity data",
+    icon: Database,
+    color: "text-emerald-300",
+    bgColor: "bg-emerald-950/60",
+    borderColor: "border-emerald-500/60",
+    group: "phase3",
+    phase: 3,
+  },
+  embedding_generation: {
+    label: "Embedding Generation",
+    description: "Phase 3 — multimodal embedding generation for text, tables, and images for hybrid RAG retrieval",
     icon: Zap,
     color: "text-emerald-300",
     bgColor: "bg-emerald-950/60",
     borderColor: "border-emerald-500/60",
-    group: "enrichment",
+    group: "phase3",
+    phase: 3,
   },
-  enrichment: {
-    label: "Enrichment",
-    description: "Build content hierarchy, generate summaries, link entities",
-    icon: Sparkles,
+  database_load: {
+    label: "Database Load",
+    description: "Phase 3 — final step: load all structured data, embeddings, and metadata into the Arkanum database",
+    icon: Database,
     color: "text-emerald-300",
     bgColor: "bg-emerald-950/60",
     borderColor: "border-emerald-500/60",
-    group: "enrichment",
+    group: "phase3",
+    phase: 3,
   },
-  referee: {
-    label: "Referee",
-    description: "Post-OCR validation and look-ahead buffer consistency check",
-    icon: GitBranch,
-    color: "text-amber-300",
-    bgColor: "bg-amber-950/60",
-    borderColor: "border-amber-500/60",
-    group: "cloud_llm",
-  },
+  // ── Output ──────────────────────────────────────────────────────────────
   voice_of_arkanum: {
     label: "Voice of Arkanum",
-    description: "Narrative synthesis — the model that speaks the lore in-game",
+    description: "Narrative synthesis — the model that speaks the lore in-game via RAG",
     icon: MessageSquare,
     color: "text-rose-300",
     bgColor: "bg-rose-950/60",
     borderColor: "border-rose-500/60",
     group: "output",
-  },
-  summarization: {
-    label: "Summarization",
-    description: "Hierarchical summarization of sections, chapters, and books",
-    icon: FileText,
-    color: "text-orange-300",
-    bgColor: "bg-orange-950/60",
-    borderColor: "border-orange-500/60",
-    group: "enrichment",
+    phase: 3,
   },
 };
 
-// ─── Pipeline flow order (left-to-right) ────────────────────────────────────
+// ─── Pipeline flow order (left-to-right columns) ─────────────────────────────
 
 const PIPELINE_FLOW: string[][] = [
-  // Column 0 — ingestion (virtual, no model)
+  // Col 0 — ingestion (virtual)
   ["__ingestion__"],
-  // Column 1 — local VLM pass
-  ["layout_analysis", "bbox_detection"],
-  // Column 2 — cloud LLM pass
-  ["ocr_extraction", "tabular_data", "image_classification"],
-  // Column 3 — validation
-  ["referee"],
-  // Column 4 — enrichment
-  ["embedding", "enrichment", "summarization"],
-  // Column 5 — output
+  // Col 1 — Phase 1: layout
+  ["layout_analysis", "bbox_detection", "content_type_classify"],
+  // Col 2 — Phase 2: extraction
+  ["ocr_extraction", "content_break_detect", "summarisation"],
+  // Col 3 — Phase 2: validation
+  ["quality_validation"],
+  // Col 4 — Phase 2: retry escalation
+  ["pass3_cloud_extraction", "pass4_cloud_extraction"],
+  // Col 5 — Phase 3: storage
+  ["artifact_storage", "embedding_generation", "database_load"],
+  // Col 6 — output
   ["voice_of_arkanum"],
 ];
 
-const FLOW_EDGES: Array<{ from: string; to: string }> = [
+const FLOW_EDGES: Array<{ from: string; to: string; style?: "normal" | "fallback" | "conditional" }> = [
+  // Ingestion → Phase 1
   { from: "__ingestion__", to: "layout_analysis" },
   { from: "__ingestion__", to: "bbox_detection" },
+  { from: "__ingestion__", to: "content_type_classify" },
+  // Phase 1 → Phase 2
   { from: "layout_analysis", to: "ocr_extraction" },
-  { from: "bbox_detection", to: "tabular_data" },
-  { from: "layout_analysis", to: "image_classification" },
-  { from: "ocr_extraction", to: "referee" },
-  { from: "tabular_data", to: "referee" },
-  { from: "image_classification", to: "referee" },
-  { from: "referee", to: "embedding" },
-  { from: "referee", to: "enrichment" },
-  { from: "referee", to: "summarization" },
-  { from: "enrichment", to: "voice_of_arkanum" },
-  { from: "summarization", to: "voice_of_arkanum" },
+  { from: "bbox_detection", to: "ocr_extraction" },
+  { from: "content_type_classify", to: "ocr_extraction" },
+  { from: "ocr_extraction", to: "content_break_detect" },
+  { from: "ocr_extraction", to: "summarisation" },
+  // Phase 2 → Quality Validation
+  { from: "content_break_detect", to: "quality_validation" },
+  { from: "summarisation", to: "quality_validation" },
+  // Quality Validation → Retry escalation (conditional)
+  { from: "quality_validation", to: "pass3_cloud_extraction", style: "fallback" },
+  { from: "pass3_cloud_extraction", to: "pass4_cloud_extraction", style: "fallback" },
+  // All paths → Phase 3
+  { from: "quality_validation", to: "artifact_storage" },
+  { from: "pass4_cloud_extraction", to: "artifact_storage" },
+  { from: "artifact_storage", to: "embedding_generation" },
+  { from: "embedding_generation", to: "database_load" },
+  // Phase 3 → Output
+  { from: "database_load", to: "voice_of_arkanum" },
 ];
+
+// ─── Phase group headers ──────────────────────────────────────────────────────
+
+const PHASE_LABELS: Record<number, { label: string; color: string }> = {
+  1: { label: "Phase 1 — Ingestion & Layout", color: "text-violet-400" },
+  2: { label: "Phase 2 — OCR Extraction & Validation", color: "text-blue-400" },
+  3: { label: "Phase 3 — Artifact Storage & Embeddings", color: "text-emerald-400" },
+};
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -178,7 +247,9 @@ export interface AssignmentInfo {
   isActive: boolean;
   providerName: string;
   providerType: string;
-  configOverrides?: Record<string, unknown> | null;
+  systemPrompt?: string | null;
+  temperature?: number | null;
+  llmSettings?: Record<string, unknown> | null;
 }
 
 export interface TopologyStage {
@@ -193,6 +264,7 @@ function StageNode({ data }: NodeProps) {
     stage: string;
     assignments: AssignmentInfo[];
     isIngestion?: boolean;
+    isHitl?: boolean;
   };
 
   if (d.isIngestion) {
@@ -201,6 +273,16 @@ function StageNode({ data }: NodeProps) {
         <Database className="w-6 h-6 text-slate-300 mb-1" />
         <span className="text-xs font-semibold text-slate-300 text-center leading-tight">PDF<br />Ingestion</span>
         <Handle type="source" position={Position.Right} className="!bg-slate-400" />
+      </div>
+    );
+  }
+
+  if (d.isHitl) {
+    return (
+      <div className="flex flex-col items-center justify-center w-32 h-20 rounded-xl border-2 border-rose-500/60 bg-rose-950/60 shadow-lg">
+        <Handle type="target" position={Position.Left} className="!bg-rose-400" />
+        <Users className="w-6 h-6 text-rose-300 mb-1" />
+        <span className="text-xs font-semibold text-rose-300 text-center leading-tight">HITL<br />Review</span>
       </div>
     );
   }
@@ -220,7 +302,7 @@ function StageNode({ data }: NodeProps) {
       {/* Header */}
       <div className={`flex items-center gap-2 px-3 py-2 border-b ${meta.borderColor}`}>
         <Icon className={`w-4 h-4 flex-shrink-0 ${meta.color}`} />
-        <span className={`text-xs font-bold uppercase tracking-wider ${meta.color}`}>{meta.label}</span>
+        <span className={`text-xs font-bold uppercase tracking-wider ${meta.color} leading-tight`}>{meta.label}</span>
       </div>
 
       {/* Assignments */}
@@ -235,7 +317,7 @@ function StageNode({ data }: NodeProps) {
               <Tooltip key={a.id}>
                 <TooltipTrigger asChild>
                   <div className="flex items-center gap-1.5 px-2 py-1.5 rounded bg-slate-700/60 border border-slate-600/40 cursor-default">
-                    {a.providerType === "local_vlm" ? (
+                    {a.providerType === "local_vlm" || a.providerType === "lm_studio" ? (
                       <Cpu className="w-3 h-3 text-violet-400 flex-shrink-0" />
                     ) : (
                       <Cloud className="w-3 h-3 text-blue-400 flex-shrink-0" />
@@ -244,13 +326,18 @@ function StageNode({ data }: NodeProps) {
                     <Badge variant="outline" className="text-[10px] px-1 py-0 h-4 border-emerald-500/50 text-emerald-400">P1</Badge>
                   </div>
                 </TooltipTrigger>
-                <TooltipContent side="right" className="max-w-xs">
+                <TooltipContent side="right" className="max-w-xs space-y-1">
                   <p className="font-semibold">{a.modelName}</p>
                   <p className="text-xs text-muted-foreground">Provider: {a.providerName}</p>
                   <p className="text-xs text-muted-foreground">Priority: {a.priority} (Primary)</p>
-                  {a.configOverrides && Object.keys(a.configOverrides).length > 0 && (
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Config: {JSON.stringify(a.configOverrides)}
+                  {a.temperature !== null && a.temperature !== undefined && (
+                    <p className="text-xs text-muted-foreground flex items-center gap-1">
+                      <Thermometer className="w-3 h-3" /> temp: {a.temperature}
+                    </p>
+                  )}
+                  {a.systemPrompt && (
+                    <p className="text-xs text-muted-foreground font-mono truncate max-w-[200px]">
+                      prompt: {a.systemPrompt.slice(0, 60)}…
                     </p>
                   )}
                 </TooltipContent>
@@ -260,7 +347,7 @@ function StageNode({ data }: NodeProps) {
               <Tooltip key={a.id}>
                 <TooltipTrigger asChild>
                   <div className="flex items-center gap-1.5 px-2 py-1.5 rounded bg-slate-800/60 border border-dashed border-slate-600/40 cursor-default">
-                    {a.providerType === "local_vlm" ? (
+                    {a.providerType === "local_vlm" || a.providerType === "lm_studio" ? (
                       <Cpu className="w-3 h-3 text-violet-400/60 flex-shrink-0" />
                     ) : (
                       <Cloud className="w-3 h-3 text-blue-400/60 flex-shrink-0" />
@@ -275,6 +362,11 @@ function StageNode({ data }: NodeProps) {
                   <p className="font-semibold">{a.modelName}</p>
                   <p className="text-xs text-muted-foreground">Provider: {a.providerName}</p>
                   <p className="text-xs text-muted-foreground">Fallback #{a.priority - 1}</p>
+                  {a.temperature !== null && a.temperature !== undefined && (
+                    <p className="text-xs text-muted-foreground flex items-center gap-1">
+                      <Thermometer className="w-3 h-3" /> temp: {a.temperature}
+                    </p>
+                  )}
                 </TooltipContent>
               </Tooltip>
             ))}
@@ -292,7 +384,7 @@ function StageNode({ data }: NodeProps) {
         <div className={`px-3 py-1 border-t ${meta.borderColor} flex items-center gap-1`}>
           <Users className="w-3 h-3 text-slate-500" />
           <span className="text-[10px] text-slate-500 truncate">
-            {Array.from(new Set(d.assignments.map(a => a.providerName))).join(", ")}
+            {Array.from(new Set(d.assignments.filter(a => a.isActive).map(a => a.providerName))).join(", ")}
           </span>
         </div>
       )}
@@ -307,9 +399,9 @@ const nodeTypes = { stage: StageNode };
 // ─── Layout helpers ──────────────────────────────────────────────────────────
 
 const COL_X_START = 40;
-const COL_X_GAP = 280;
+const COL_X_GAP = 290;
 const ROW_Y_START = 40;
-const ROW_Y_GAP = 160;
+const ROW_Y_GAP = 170;
 
 function buildNodesAndEdges(topology: TopologyStage[]): { nodes: Node[]; edges: Edge[] } {
   const assignmentMap = new Map<string, AssignmentInfo[]>();
@@ -320,7 +412,7 @@ function buildNodesAndEdges(topology: TopologyStage[]): { nodes: Node[]; edges: 
   const nodes: Node[] = [];
   const edges: Edge[] = [];
 
-  // Build nodes
+  // Build nodes from PIPELINE_FLOW
   for (let col = 0; col < PIPELINE_FLOW.length; col++) {
     const stages = PIPELINE_FLOW[col];
     const totalRows = stages.length;
@@ -328,7 +420,7 @@ function buildNodesAndEdges(topology: TopologyStage[]): { nodes: Node[]; edges: 
       const stage = stages[row];
       const yOffset = (totalRows - 1) * ROW_Y_GAP / 2;
       const x = COL_X_START + col * COL_X_GAP;
-      const y = ROW_Y_START + row * ROW_Y_GAP - yOffset + (PIPELINE_FLOW.length > 1 ? 200 : 0);
+      const y = ROW_Y_START + row * ROW_Y_GAP - yOffset + 200;
 
       if (stage === "__ingestion__") {
         nodes.push({
@@ -351,18 +443,46 @@ function buildNodesAndEdges(topology: TopologyStage[]): { nodes: Node[]; edges: 
     }
   }
 
+  // Add HITL node below pass4
+  const pass4Col = PIPELINE_FLOW.findIndex(col => col.includes("pass4_cloud_extraction"));
+  if (pass4Col >= 0) {
+    nodes.push({
+      id: "__hitl__",
+      type: "stage",
+      position: {
+        x: COL_X_START + pass4Col * COL_X_GAP,
+        y: ROW_Y_START + 3 * ROW_Y_GAP + 200,
+      },
+      data: { stage: "__hitl__", isHitl: true, assignments: [] },
+    });
+    edges.push({
+      id: "pass4->hitl",
+      source: "pass4_cloud_extraction",
+      target: "__hitl__",
+      type: "smoothstep",
+      animated: false,
+      style: { stroke: "#f43f5e", strokeWidth: 2, strokeDasharray: "6,4" },
+      label: "HITL flag",
+      labelStyle: { fill: "#f43f5e", fontSize: 10 },
+      markerEnd: { type: MarkerType.ArrowClosed, color: "#f43f5e", width: 14, height: 14 },
+    });
+  }
+
   // Build edges
-  for (const { from, to } of FLOW_EDGES) {
-    const isFallback = false; // future: detect fallback chains
+  for (const { from, to, style } of FLOW_EDGES) {
+    const isFallback = style === "fallback";
+    const isConditional = style === "conditional";
     edges.push({
       id: `${from}->${to}`,
       source: from,
       target: to,
       type: "smoothstep",
-      animated: !isFallback,
+      animated: !isFallback && !isConditional,
+      label: isFallback ? "if fails" : undefined,
+      labelStyle: isFallback ? { fill: "#f59e0b", fontSize: 10 } : undefined,
       style: {
         stroke: isFallback ? "#f59e0b" : "#6366f1",
-        strokeWidth: 1.5,
+        strokeWidth: isFallback ? 2 : 1.5,
         strokeDasharray: isFallback ? "5,5" : undefined,
       },
       markerEnd: {
@@ -417,7 +537,7 @@ export function PipelineVisualization({ topology, isLoading }: PipelineVisualiza
         nodeTypes={nodeTypes}
         fitView
         fitViewOptions={{ padding: 0.15 }}
-        minZoom={0.3}
+        minZoom={0.2}
         maxZoom={1.5}
         proOptions={{ hideAttribution: true }}
         colorMode="dark"
@@ -428,21 +548,45 @@ export function PipelineVisualization({ topology, isLoading }: PipelineVisualiza
           size={1}
           color="#334155"
         />
-        <Controls
-          className="!bg-slate-800 !border-slate-700 [&>button]:!bg-slate-800 [&>button]:!border-slate-700 [&>button]:!text-slate-300 [&>button:hover]:!bg-slate-700"
-        />
+        <Controls showInteractive={false} className="!bg-slate-800/80 !border-slate-700/50 !rounded-lg" />
         <MiniMap
-          className="!bg-slate-900 !border-slate-700"
           nodeColor={(n) => {
-            if ((n.data as any).isIngestion) return "#475569";
-            const meta = STAGE_META[(n.data as any).stage];
-            if (!meta) return "#475569";
-            const hasAssignments = ((n.data as any).assignments as AssignmentInfo[]).some(a => a.isActive);
-            return hasAssignments ? "#6366f1" : "#374151";
+            if (n.data?.isIngestion) return "#64748b";
+            if (n.data?.isHitl) return "#f43f5e";
+            const meta = STAGE_META[(n.data?.stage as string) ?? ""];
+            if (!meta) return "#64748b";
+            if (meta.phase === 1) return "#8b5cf6";
+            if (meta.phase === 2) return "#3b82f6";
+            return "#10b981";
           }}
-          maskColor="rgba(15, 23, 42, 0.7)"
+          maskColor="rgba(15,23,42,0.7)"
+          className="!bg-slate-900/80 !border-slate-700/50 !rounded-lg"
         />
       </ReactFlow>
+
+      {/* Phase legend */}
+      <div className="absolute bottom-16 left-4 flex flex-col gap-1.5 pointer-events-none">
+        <div className="flex items-center gap-2 px-2 py-1 rounded bg-slate-900/80 border border-slate-700/50">
+          <div className="w-3 h-3 rounded-sm bg-violet-500/60 border border-violet-500" />
+          <span className="text-[10px] text-violet-300 font-medium">Phase 1 — Ingestion & Layout</span>
+        </div>
+        <div className="flex items-center gap-2 px-2 py-1 rounded bg-slate-900/80 border border-slate-700/50">
+          <div className="w-3 h-3 rounded-sm bg-blue-500/60 border border-blue-500" />
+          <span className="text-[10px] text-blue-300 font-medium">Phase 2 — OCR & Validation</span>
+        </div>
+        <div className="flex items-center gap-2 px-2 py-1 rounded bg-slate-900/80 border border-slate-700/50">
+          <div className="w-3 h-3 rounded-sm bg-emerald-500/60 border border-emerald-500" />
+          <span className="text-[10px] text-emerald-300 font-medium">Phase 3 — Storage & Embeddings</span>
+        </div>
+        <div className="flex items-center gap-2 px-2 py-1 rounded bg-slate-900/80 border border-slate-700/50">
+          <div className="w-3 h-0.5 bg-amber-500" style={{ borderTop: "2px dashed #f59e0b" }} />
+          <span className="text-[10px] text-amber-300 font-medium">Conditional / Fallback path</span>
+        </div>
+        <div className="flex items-center gap-2 px-2 py-1 rounded bg-slate-900/80 border border-slate-700/50">
+          <div className="w-3 h-0.5 bg-rose-500" style={{ borderTop: "2px dashed #f43f5e" }} />
+          <span className="text-[10px] text-rose-300 font-medium">HITL escalation path</span>
+        </div>
+      </div>
     </div>
   );
 }
