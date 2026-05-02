@@ -65,9 +65,8 @@ const OCR_SUBMIT_EXAMPLE = `curl -X POST https://your-console.manus.space/api/tr
         "elements": [{ "type": "heading", "bbox": [0, 0, 100, 20] }]
       },
       "confidence": 87,
-      "pass1Model": "llava-1.6",
-      "pass2Model": "anthropic/claude-3.5-sonnet",
       "passNumber": 2,
+      "cloudModelUsed": "anthropic/claude-3.5-sonnet",
       "pageJsonOutput": {
         "source_document": { "document_id": 42, "filename": "phb5e.pdf" },
         "page": {
@@ -137,9 +136,8 @@ def post_trpc(procedure: str, data: dict) -> dict:
 page = post_trpc("pipeline.ingestPage", {
     "documentId": 42,
     "pageNumber": 1,
-    "imageUrl": "https://s3.example.com/pages/doc42-p001.png",
+    "rawPngUrl": "https://s3.example.com/pages/doc42-p001-raw.png",
     "phash": "a1b2c3d4e5f6a7b8",
-    "isBinarized": True,
 })
 
 if not page["isDuplicate"]:
@@ -149,8 +147,8 @@ if not page["isDuplicate"]:
         "rawText": extracted_text,
         "structuredData": structured_json,
         "confidence": confidence_score,
-        "pass1Model": "llava-1.6",
-        "pass2Model": "anthropic/claude-3.5-sonnet",
+        "passNumber": 1,
+        "attemptScore": confidence_score,
     })`;
 
 export default function TomeKnowledge() {
@@ -366,7 +364,9 @@ export default function TomeKnowledge() {
                     {[
                       ["users", "Authenticated users", "openId, role (admin/user)"],
                       ["llm_providers", "Cloud/local LLM configs", "providerType, baseUrl, encryptedApiKey, keyPrefix, keySuffix"],
-                      ["model_assignments", "Stage → model mapping", "pipelineStage, providerId, modelName, isActive"],
+                      ["stage_inscriptions", "Stage → provider inscription", "stage, primaryProviderId, fallbackProviderId, systemPrompt, temperature"],
+                      ["pipeline_jobs", "Per-document pipeline execution", "documentId, currentPhase, currentStage, retryCount"],
+                      ["page_processing_attempts", "OCR pass tracking (1–4)", "pageId, passNumber, modelUsed, attemptScore, comparisonNotes"],
                       ["db_connections", "External DB configs", "connectionType, host, encryptedPassword"],
                       ["system_prompts", "Versioned pipeline prompts", "name, category, promptText, version"],
                       ["ingestion_jobs", "PDF ingestion tracking", "status, sourceType, totalPages, processedPages"],

@@ -262,4 +262,4 @@
 - [x] Update providers.test.ts: add displayName to all providers.create calls, replace assignments.create with assignments.upsert
 - [x] Update features.test.ts: topology tests use new inscription+provider shape
 - [x] All 128 tests passing
-- [ ] Push to GitHub
+- [x] Push to GitHub

@@ -16,7 +16,7 @@ The console provides a human-facing interface for every stage of the pipeline:
 | **Tome of Knowledge** | Pipeline documentation and integration reference |
 | **Oversee the Scribes** | Ingestion job monitoring and management |
 | **Divination & Omens** | Telemetry, cost tracking, and usage analytics |
-| **Arcane Mechanisms** | System configuration (providers, model assignments, DB connections) |
+| **Arcane Mechanisms** | System configuration (providers, stage inscriptions, DB connections) |
 | **The Artificers** | LLM provider management with test-connection and model discovery |
 | **Summoning Rituals** | Ingestion job creation and pipeline triggering |
 | **Incantations & Runes** | System prompt management for all pipeline stages |
@@ -104,7 +104,8 @@ curl -X POST https://your-console.manus.space/api/trpc/pipeline.ingestPage \
     "json": {
       "documentId": 42,
       "pageNumber": 1,
-      "imageUrl": "https://s3.example.com/pages/doc42-p001.png",
+      "rawPngUrl": "https://s3.example.com/pages/doc42-p001.png",
+      "preprocessedPngUrl": "https://s3.example.com/pages/doc42-p001-binarized.png",
       "thumbnailUrl": "https://s3.example.com/thumbs/doc42-p001-thumb.png",
       "phash": "a1b2c3d4e5f6a7b8",
       "isBinarized": true,
@@ -183,15 +184,17 @@ Key tables:
 |---|---|
 | `users` | Authenticated users with role (`admin` / `user`) |
 | `llm_providers` | Cloud/local LLM provider configs (encrypted API keys) |
-| `model_assignments` | Maps pipeline stages to specific providers/models |
+| `stage_inscriptions` | Maps pipeline stages to primary + fallback providers with per-stage system prompt, temperature, and LLM settings |
 | `db_connections` | External database connection configs |
 | `system_prompts` | Versioned prompts for all pipeline stages |
-| `ingestion_jobs` | PDF ingestion job tracking |
+| `ingestion_jobs` | PDF ingestion job tracking (phase 1/2/3 status) |
 | `telemetry_events` | Pipeline cost and usage events |
-| `documents` | Source PDF metadata with ownership |
-| `document_pages` | Per-page image URLs and OCR status |
-| `ocr_results` | Extracted text + structured data per page |
+| `documents` | Source PDF metadata with ownership, document type, summary, game version |
+| `document_pages` | Per-page raw + preprocessed PNG URLs, layout type, content regions JSON, continuity flags, assembled page JSON output |
+| `ocr_results` | Extracted text + structured data per page (pass number, attempt score, comparison notes) |
 | `hitl_queue` | Pages flagged for human review |
+| `pipeline_jobs` | Per-document pipeline execution tracking (phase, stage, retry counts) |
+| `page_processing_attempts` | Each OCR pass (1–4) per page: model used, output, score, comparison notes |
 
 ---
 
@@ -206,14 +209,15 @@ pnpm build        # Production build
 
 ### Test Coverage
 
-96 tests across:
+128 tests across:
 - Auth (logout, session handling)
 - Provider CRUD + test connection + model discovery
-- Model assignments
+- Stage inscriptions (upsert, topology, primary/fallback provider)
 - DB connections
 - Library browsing (documents, pages, OCR results)
 - HITL queue management
 - Pipeline ingestion procedures
+- Pipeline job management + page attempt tracking
 
 ---
 
