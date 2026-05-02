@@ -263,3 +263,20 @@
 - [x] Update features.test.ts: topology tests use new inscription+provider shape
 - [x] All 128 tests passing
 - [x] Push to GitHub
+
+## Phase: Model Discovery + Provider CRUD
+
+- [x] Research OpenRouter, OpenAI, Anthropic model list APIs and vision capability metadata
+- [x] Build server tRPC procedure: providers.discoverModels (providerType, apiKey, baseUrl, port, visionOnly) — unified for cloud and local
+- [x] Local model discovery: tries OpenAI /v1/models format (works for LMStudio, vLLM, Ollama)
+- [x] Cloud model discovery: OpenRouter (public endpoint, no key needed), Anthropic (x-api-key), OpenAI (Bearer)
+- [x] Vision-only filter: OpenRouter uses architecture.input_modalities, local uses model name heuristics
+- [x] Auto-fill contextLength, maxTokens, capabilities from discovered model metadata
+- [x] Rewrite TheArtificers.tsx: fully functional add/edit/disable/delete provider actions
+- [x] Add model picker dropdown with live discovery (Discover button triggers API call, populates dropdown)
+- [x] Auto-fill contextLength and maxTokens when a model is selected from the discovered list
+- [x] Card-level Discover button: shows inline model list with vision filter and search on each provider card
+- [x] Auto-cache discovered models to provider.availableModels
+- [x] Trim DB provider entries to 2 (LM Studio Local Vision + OpenRouter Cloud Fallback)
+- [x] All 128 tests passing
+- [x] Push to GitHub

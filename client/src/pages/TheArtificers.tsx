@@ -9,12 +9,13 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
+import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import {
   Cpu, Plus, Trash2, TestTube, Key, Loader2, CheckCircle2, XCircle,
   Wifi, Search, ChevronDown, ChevronUp, Zap, Edit, Info, GitBranch, Star,
+  Eye, RefreshCw, AlertCircle,
 } from "lucide-react";
 import { PipelineVisualization } from "@/components/PipelineVisualization";
 
@@ -115,6 +116,17 @@ interface TestResult {
   error?: string;
 }
 
+interface DiscoveredModel {
+  id: string;
+  name: string;
+  contextLength: number | null;
+  maxTokens: number | null;
+  isVision: boolean;
+  modality: string | null;
+  pricingPrompt?: string | null;
+  pricingCompletion?: string | null;
+}
+
 interface ProviderForm {
   displayName: string;
   name: string;
@@ -147,6 +159,193 @@ const EMPTY_FORM: ProviderForm = {
   notes: "",
 };
 
+// ─── Model Picker Component ───────────────────────────────────────────────────
+
+function ModelPicker({
+  form,
+  setForm,
+  providerId,
+}: {
+  form: ProviderForm;
+  setForm: React.Dispatch<React.SetStateAction<ProviderForm>>;
+  providerId?: number; // if editing an existing provider, use its stored key
+}) {
+  const [discoveredModels, setDiscoveredModels] = useState<DiscoveredModel[]>([]);
+  const [isDiscovering, setIsDiscovering] = useState(false);
+  const [discoverError, setDiscoverError] = useState<string | null>(null);
+  const [visionOnly, setVisionOnly] = useState(false);
+  const [modelSearch, setModelSearch] = useState("");
+  const [showPicker, setShowPicker] = useState(false);
+
+  const discoverMutation = trpc.providers.discoverModels.useMutation({
+    onSuccess: (result) => {
+      setIsDiscovering(false);
+      if (result.ok) {
+        setDiscoveredModels(result.models as DiscoveredModel[]);
+        setShowPicker(true);
+        setDiscoverError(null);
+        toast.success(`${result.models.length} model${result.models.length !== 1 ? "s" : ""} discovered.`);
+      } else {
+        setDiscoverError(result.error ?? "Unknown error");
+        toast.error(`Discovery failed: ${result.error}`);
+      }
+    },
+    onError: (e) => {
+      setIsDiscovering(false);
+      setDiscoverError(e.message);
+      toast.error(e.message);
+    },
+  });
+
+  const handleDiscover = () => {
+    setIsDiscovering(true);
+    setDiscoverError(null);
+    setShowPicker(false);
+    discoverMutation.mutate({
+      providerType: form.providerType as any,
+      apiKey: form.apiKey || undefined,
+      baseUrl: form.baseUrl || undefined,
+      port: form.port ? Number(form.port) : undefined,
+      visionOnly,
+      providerId,
+    });
+  };
+
+  const handleSelectModel = (model: DiscoveredModel) => {
+    setForm(f => ({
+      ...f,
+      modelId: model.id,
+      contextLength: model.contextLength ? String(model.contextLength) : f.contextLength,
+      maxTokens: model.maxTokens ? String(model.maxTokens) : f.maxTokens,
+      // Auto-set vision capability if selecting a vision model
+      capabilities: model.isVision
+        ? Array.from(new Set([...f.capabilities.split(",").map(s => s.trim()).filter(Boolean), "vision"])).join(", ")
+        : f.capabilities,
+    }));
+    setShowPicker(false);
+    setModelSearch("");
+    toast.success(`Model "${model.id}" selected. Context and token limits auto-filled.`);
+  };
+
+  const filteredModels = discoveredModels.filter(m =>
+    (!visionOnly || m.isVision) &&
+    (modelSearch === "" || m.id.toLowerCase().includes(modelSearch.toLowerCase()) || m.name.toLowerCase().includes(modelSearch.toLowerCase()))
+  );
+
+  const canDiscover = ["openrouter", "openai_compatible", "lm_studio", "anthropic", "google", "custom"].includes(form.providerType);
+
+  return (
+    <div className="space-y-2">
+      <Label>Default Model ID <span className="text-muted-foreground text-xs">(used when no inscription specifies a model)</span></Label>
+      <div className="flex gap-2">
+        <Input
+          placeholder="e.g., llava-v1.6-mistral-7b, gemini-2.5-pro-preview-05-06"
+          value={form.modelId}
+          onChange={e => setForm(f => ({ ...f, modelId: e.target.value }))}
+          className="flex-1"
+        />
+        {canDiscover && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleDiscover}
+            disabled={isDiscovering}
+            className="gap-1.5 shrink-0"
+          >
+            {isDiscovering ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Search className="h-3.5 w-3.5" />}
+            Discover
+          </Button>
+        )}
+      </div>
+
+      {/* Vision-only toggle (shown when discovery is available) */}
+      {canDiscover && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Switch
+            checked={visionOnly}
+            onCheckedChange={setVisionOnly}
+            className="scale-75"
+          />
+          <Eye className="h-3 w-3" />
+          <span>Vision-capable models only (for OCR stages)</span>
+        </div>
+      )}
+
+      {/* Discovery error */}
+      {discoverError && (
+        <div className="flex items-center gap-2 text-xs text-red-400 bg-red-950/20 border border-red-700/40 rounded p-2">
+          <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+          {discoverError}
+        </div>
+      )}
+
+      {/* Model picker dropdown */}
+      {showPicker && discoveredModels.length > 0 && (
+        <div className="border rounded-lg bg-card shadow-lg overflow-hidden">
+          <div className="p-2 border-b flex items-center gap-2">
+            <Search className="h-3.5 w-3.5 text-muted-foreground" />
+            <Input
+              placeholder="Search models..."
+              value={modelSearch}
+              onChange={e => setModelSearch(e.target.value)}
+              className="h-7 text-xs border-0 p-0 focus-visible:ring-0 bg-transparent"
+            />
+            <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => setShowPicker(false)}>
+              Close
+            </Button>
+          </div>
+          <div className="max-h-64 overflow-y-auto">
+            {filteredModels.length === 0 ? (
+              <div className="py-4 text-center text-xs text-muted-foreground">No models match your filter.</div>
+            ) : (
+              filteredModels.map(model => (
+                <button
+                  key={model.id}
+                  type="button"
+                  className="w-full text-left px-3 py-2 hover:bg-muted/50 transition-colors border-b border-border/30 last:border-0"
+                  onClick={() => handleSelectModel(model)}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-mono truncate">{model.id}</span>
+                        {model.isVision && (
+                          <Badge className="text-[9px] py-0 px-1 bg-purple-900/40 text-purple-300 border-purple-700/40 gap-0.5">
+                            <Eye className="h-2.5 w-2.5" /> vision
+                          </Badge>
+                        )}
+                      </div>
+                      {model.name !== model.id && (
+                        <div className="text-[10px] text-muted-foreground truncate">{model.name}</div>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0 text-[10px] text-muted-foreground">
+                      {model.contextLength && (
+                        <span>ctx: {(model.contextLength / 1000).toFixed(0)}k</span>
+                      )}
+                      {model.maxTokens && (
+                        <span>max: {(model.maxTokens / 1000).toFixed(0)}k</span>
+                      )}
+                      {model.pricingPrompt && (
+                        <span className="text-green-600">${(Number(model.pricingPrompt) * 1_000_000).toFixed(2)}/M</span>
+                      )}
+                    </div>
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
+          <div className="px-3 py-1.5 bg-muted/30 border-t text-[10px] text-muted-foreground">
+            {filteredModels.length} model{filteredModels.length !== 1 ? "s" : ""} shown
+            {visionOnly ? " (vision-only filter active)" : ""}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Provider Form Fields ─────────────────────────────────────────────────────
 
 function ProviderFormFields({
@@ -155,12 +354,14 @@ function ProviderFormFields({
   providerTypes,
   isEdit = false,
   hasApiKey = false,
+  providerId,
 }: {
   form: ProviderForm;
   setForm: React.Dispatch<React.SetStateAction<ProviderForm>>;
   providerTypes?: { id: string; label: string }[];
   isEdit?: boolean;
   hasApiKey?: boolean;
+  providerId?: number;
 }) {
   const preset = PROVIDER_PRESETS[form.providerType];
 
@@ -169,7 +370,6 @@ function ProviderFormFields({
     setForm(f => ({
       ...f,
       providerType,
-      // Auto-populate only if not yet customised
       displayName: !f.displayName || f.displayName === PROVIDER_PRESETS[f.providerType]?.displayName ? (p?.displayName ?? "") : f.displayName,
       name: !f.name || f.name === PROVIDER_PRESETS[f.providerType]?.name ? (p?.name ?? "") : f.name,
       baseUrl: !f.baseUrl || f.baseUrl === PROVIDER_PRESETS[f.providerType]?.baseUrl ? (p?.baseUrl ?? "") : f.baseUrl,
@@ -247,15 +447,8 @@ function ProviderFormFields({
         </div>
       </div>
 
-      {/* Model ID */}
-      <div className="space-y-2">
-        <Label>Default Model ID <span className="text-muted-foreground text-xs">(used when no inscription specifies a model)</span></Label>
-        <Input
-          placeholder="e.g., llava-v1.6-mistral-7b, gemini-2.5-pro-preview-05-06"
-          value={form.modelId}
-          onChange={e => setForm(f => ({ ...f, modelId: e.target.value }))}
-        />
-      </div>
+      {/* Model Picker with Discovery */}
+      <ModelPicker form={form} setForm={setForm} providerId={providerId} />
 
       {/* Context Length + Max Tokens + Default Temperature */}
       <div className="grid grid-cols-3 gap-3">
@@ -293,7 +486,7 @@ function ProviderFormFields({
 
       {/* Capabilities */}
       <div className="space-y-2">
-        <Label>Capabilities <span className="text-muted-foreground text-xs">(comma-separated: chat, vision, embeddings…)</span></Label>
+        <Label>Capabilities <span className="text-muted-foreground text-xs">(comma-separated: chat, vision)</span></Label>
         <Input
           placeholder="chat, vision"
           value={form.capabilities}
@@ -362,8 +555,17 @@ export default function TheArtificers() {
   const [editingProvider, setEditingProvider] = useState<any>(null);
   const [testResults, setTestResults] = useState<Record<number, TestResult>>({});
   const [testingId, setTestingId] = useState<number | null>(null);
-  const [discoveringId, setDiscoveringId] = useState<number | null>(null);
   const [expandedModels, setExpandedModels] = useState<Record<number, boolean>>({});
+
+  // Per-card discover state
+  const [cardDiscoverState, setCardDiscoverState] = useState<Record<number, {
+    loading: boolean;
+    models: DiscoveredModel[];
+    error: string | null;
+    visionOnly: boolean;
+    showPicker: boolean;
+    search: string;
+  }>>({});
 
   const { data: providers, isLoading, refetch } = trpc.providers.list.useQuery();
   const { data: providerTypes } = trpc.providers.types.useQuery();
@@ -394,12 +596,33 @@ export default function TheArtificers() {
         toast.error(`Connection failed: ${(result as TestResult).error}`);
       }
       setTestingId(null);
-      setDiscoveringId(null);
     },
-    onError: (e) => {
+    onError: (e) => { toast.error(e.message); setTestingId(null); },
+  });
+
+  const discoverMutation = trpc.providers.discoverModels.useMutation({
+    onSuccess: (result, variables) => {
+      const id = variables.providerId!;
+      if (result.ok) {
+        setCardDiscoverState(prev => ({
+          ...prev,
+          [id]: { ...prev[id], loading: false, models: result.models as DiscoveredModel[], showPicker: true, error: null },
+        }));
+        toast.success(`${result.models.length} model${result.models.length !== 1 ? "s" : ""} discovered.`);
+        // Update the provider's availableModels cache
+        updateMutation.mutate({ id, availableModels: result.models.map((m: any) => m.id) });
+      } else {
+        setCardDiscoverState(prev => ({
+          ...prev,
+          [id]: { ...prev[id], loading: false, error: result.error ?? "Unknown error", showPicker: false },
+        }));
+        toast.error(`Discovery failed: ${result.error}`);
+      }
+    },
+    onError: (e, variables) => {
+      const id = variables.providerId!;
+      setCardDiscoverState(prev => ({ ...prev, [id]: { ...prev[id], loading: false, error: e.message, showPicker: false } }));
       toast.error(e.message);
-      setTestingId(null);
-      setDiscoveringId(null);
     },
   });
 
@@ -471,9 +694,20 @@ export default function TheArtificers() {
     testMutation.mutate({ id: providerId });
   };
 
-  const handleDiscoverModels = (providerId: number) => {
-    setDiscoveringId(providerId);
-    testMutation.mutate({ id: providerId });
+  const handleCardDiscover = (provider: any) => {
+    const id = provider.id;
+    const visionOnly = cardDiscoverState[id]?.visionOnly ?? false;
+    setCardDiscoverState(prev => ({
+      ...prev,
+      [id]: { loading: true, models: [], error: null, visionOnly, showPicker: false, search: "" },
+    }));
+    discoverMutation.mutate({
+      providerType: provider.providerType,
+      baseUrl: provider.baseUrl,
+      port: provider.port ?? undefined,
+      visionOnly,
+      providerId: id,
+    });
   };
 
   const toggleModelExpand = (providerId: number) => {
@@ -532,6 +766,7 @@ export default function TheArtificers() {
             providerTypes={providerTypes}
             isEdit
             hasApiKey={editingProvider?.hasApiKey}
+            providerId={editingProvider?.id}
           />
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsEditOpen(false)}>Cancel</Button>
@@ -573,15 +808,16 @@ export default function TheArtificers() {
               {providers?.map(provider => {
                 const result = testResults[provider.id];
                 const isTestingThis = testingId === provider.id;
-                const isDiscoveringThis = discoveringId === provider.id;
                 const models = (provider.availableModels as string[]) ?? [];
                 const isExpanded = expandedModels[provider.id] ?? false;
                 const capabilities = (provider.capabilities as string[]) ?? [];
+                const cardDiscover = cardDiscoverState[provider.id];
+                const isDiscoveringThis = cardDiscover?.loading ?? false;
 
                 return (
                   <Card key={provider.id} className={`transition-all ${!provider.isActive ? "opacity-60" : ""}`}>
                     <CardHeader className="pb-3">
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between flex-wrap gap-2">
                         <div className="flex items-center gap-3 flex-wrap">
                           <div className={`w-3 h-3 rounded-full flex-shrink-0 ${provider.isActive ? "bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]" : "bg-gray-500"}`} />
                           <div>
@@ -599,7 +835,10 @@ export default function TheArtificers() {
                           </div>
                           <Badge variant="secondary">{provider.providerType?.split("_").map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ")}</Badge>
                           {capabilities.map((cap: string) => (
-                            <Badge key={cap} variant="outline" className="text-xs">{cap}</Badge>
+                            <Badge key={cap} variant="outline" className={`text-xs ${cap === "vision" ? "border-purple-500/40 text-purple-300" : ""}`}>
+                              {cap === "vision" && <Eye className="h-3 w-3 mr-1" />}
+                              {cap}
+                            </Badge>
                           ))}
                           {result && !isTestingThis && (
                             result.ok ? (
@@ -615,12 +854,12 @@ export default function TheArtificers() {
                             )
                           )}
                         </div>
-                        <div className="flex items-center gap-2 flex-shrink-0">
+                        <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
                           <Button variant="outline" size="sm" onClick={() => handleTestConnection(provider.id)} disabled={isTestingThis || isDiscoveringThis} className="gap-1.5">
                             {isTestingThis ? <Loader2 className="h-4 w-4 animate-spin" /> : <TestTube className="h-4 w-4" />}
                             Test
                           </Button>
-                          <Button variant="outline" size="sm" onClick={() => handleDiscoverModels(provider.id)} disabled={isTestingThis || isDiscoveringThis} className="gap-1.5">
+                          <Button variant="outline" size="sm" onClick={() => handleCardDiscover(provider)} disabled={isTestingThis || isDiscoveringThis} className="gap-1.5">
                             {isDiscoveringThis ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
                             Discover
                           </Button>
@@ -628,18 +867,32 @@ export default function TheArtificers() {
                             <Edit className="h-4 w-4" />
                             Edit
                           </Button>
-                          <Button variant="outline" size="sm" onClick={() => updateMutation.mutate({ id: provider.id, isActive: !provider.isActive })}>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => updateMutation.mutate({ id: provider.id, isActive: !provider.isActive })}
+                            disabled={updateMutation.isPending}
+                          >
                             <Wifi className="h-4 w-4" />
                             <span className="ml-1">{provider.isActive ? "Disable" : "Enable"}</span>
                           </Button>
-                          <Button variant="destructive" size="sm" onClick={() => { if (confirm("Banish this Artificer? All stage inscriptions using this provider will be affected.")) deleteMutation.mutate({ id: provider.id }); }}>
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => {
+                              if (confirm("Banish this Artificer? All stage inscriptions using this provider will be affected.")) {
+                                deleteMutation.mutate({ id: provider.id });
+                              }
+                            }}
+                            disabled={deleteMutation.isPending}
+                          >
                             <Trash2 className="h-4 w-4" />
                           </Button>
                         </div>
                       </div>
                       <CardDescription className="ml-6">{provider.baseUrl}{provider.port ? `:${provider.port}` : ""}</CardDescription>
                     </CardHeader>
-                    <CardContent>
+                    <CardContent className="space-y-3">
                       <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm text-muted-foreground">
                         {/* API Key */}
                         <div className="flex items-center gap-1">
@@ -672,7 +925,7 @@ export default function TheArtificers() {
                         {models.length > 0 && (
                           <div className="flex items-center gap-1">
                             <Zap className="h-3.5 w-3.5 text-purple-400" />
-                            <span>{models.length} models available</span>
+                            <span>{models.length} models cached</span>
                           </div>
                         )}
                         {provider.notes && (
@@ -680,9 +933,67 @@ export default function TheArtificers() {
                         )}
                       </div>
 
-                      {/* Available Models Section */}
-                      {models.length > 0 && (
-                        <div className="mt-3">
+                      {/* Card-level discover controls */}
+                      {cardDiscover?.showPicker && cardDiscover.models.length > 0 && (
+                        <div className="border rounded-lg bg-muted/10 overflow-hidden">
+                          <div className="flex items-center gap-2 px-3 py-2 border-b bg-muted/20">
+                            <Search className="h-3.5 w-3.5 text-muted-foreground" />
+                            <Input
+                              placeholder="Filter discovered models..."
+                              value={cardDiscover.search}
+                              onChange={e => setCardDiscoverState(prev => ({ ...prev, [provider.id]: { ...prev[provider.id], search: e.target.value } }))}
+                              className="h-7 text-xs border-0 p-0 focus-visible:ring-0 bg-transparent flex-1"
+                            />
+                            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                              <Switch
+                                checked={cardDiscover.visionOnly}
+                                onCheckedChange={v => setCardDiscoverState(prev => ({ ...prev, [provider.id]: { ...prev[provider.id], visionOnly: v } }))}
+                                className="scale-75"
+                              />
+                              <Eye className="h-3 w-3" />
+                              <span>Vision only</span>
+                            </div>
+                            <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => setCardDiscoverState(prev => ({ ...prev, [provider.id]: { ...prev[provider.id], showPicker: false } }))}>
+                              Close
+                            </Button>
+                          </div>
+                          <div className="max-h-48 overflow-y-auto">
+                            {cardDiscover.models
+                              .filter(m => (!cardDiscover.visionOnly || m.isVision) && (cardDiscover.search === "" || m.id.toLowerCase().includes(cardDiscover.search.toLowerCase())))
+                              .map(model => (
+                                <div key={model.id} className="flex items-center justify-between px-3 py-1.5 border-b border-border/20 last:border-0 text-xs">
+                                  <div className="flex items-center gap-1.5 min-w-0">
+                                    <span className="font-mono truncate">{model.id}</span>
+                                    {model.isVision && (
+                                      <Badge className="text-[9px] py-0 px-1 bg-purple-900/40 text-purple-300 border-purple-700/40">
+                                        <Eye className="h-2.5 w-2.5 mr-0.5" />vision
+                                      </Badge>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center gap-3 shrink-0 text-muted-foreground">
+                                    {model.contextLength && <span>ctx: {(model.contextLength / 1000).toFixed(0)}k</span>}
+                                    {model.maxTokens && <span>max: {(model.maxTokens / 1000).toFixed(0)}k</span>}
+                                    {model.pricingPrompt && <span className="text-green-600">${(Number(model.pricingPrompt) * 1_000_000).toFixed(2)}/M</span>}
+                                  </div>
+                                </div>
+                              ))}
+                          </div>
+                          <div className="px-3 py-1.5 bg-muted/20 border-t text-[10px] text-muted-foreground">
+                            {cardDiscover.models.filter(m => !cardDiscover.visionOnly || m.isVision).length} models — click Edit to select a model and auto-fill context/token limits
+                          </div>
+                        </div>
+                      )}
+
+                      {cardDiscover?.error && (
+                        <div className="flex items-center gap-2 text-xs text-red-400 bg-red-950/20 border border-red-700/40 rounded p-2">
+                          <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                          {cardDiscover.error}
+                        </div>
+                      )}
+
+                      {/* Cached models list */}
+                      {models.length > 0 && !cardDiscover?.showPicker && (
+                        <div className="mt-1">
                           <div className="flex flex-wrap gap-1.5">
                             {(isExpanded ? models : models.slice(0, 8)).map((model: string) => (
                               <Badge key={model} variant="outline" className="text-xs font-mono">{model}</Badge>
@@ -691,7 +1002,7 @@ export default function TheArtificers() {
                           {models.length > 8 && (
                             <Button variant="ghost" size="sm" className="mt-2 text-xs text-muted-foreground hover:text-foreground gap-1" onClick={() => toggleModelExpand(provider.id)}>
                               {isExpanded ? (
-                                <><ChevronUp className="h-3 w-3" /> Show fewer models</>
+                                <><ChevronUp className="h-3 w-3" /> Show fewer</>
                               ) : (
                                 <><ChevronDown className="h-3 w-3" /> Show all {models.length} models</>
                               )}
@@ -702,13 +1013,13 @@ export default function TheArtificers() {
 
                       {/* Test result details */}
                       {result && !isTestingThis && (
-                        <div className={`mt-3 p-3 rounded-md border text-sm ${result.ok ? "border-green-700/50 bg-green-950/20" : "border-red-700/50 bg-red-950/20"}`}>
+                        <div className={`p-3 rounded-md border text-sm ${result.ok ? "border-green-700/50 bg-green-950/20" : "border-red-700/50 bg-red-950/20"}`}>
                           {result.ok ? (
                             <div className="flex items-center gap-2 text-green-400">
                               <CheckCircle2 className="h-4 w-4" />
                               <span>Connection established in <strong>{result.latencyMs}ms</strong></span>
                               {result.models && result.models.length > 0 && (
-                                <span className="text-muted-foreground">— {result.models.length} model{result.models.length !== 1 ? "s" : ""} discovered and cached</span>
+                                <span className="text-muted-foreground">— {result.models.length} model{result.models.length !== 1 ? "s" : ""} discovered</span>
                               )}
                             </div>
                           ) : (
@@ -743,7 +1054,7 @@ export default function TheArtificers() {
                   </CardDescription>
                 </div>
                 <Button variant="outline" size="sm" onClick={() => refetchTopology()} disabled={isTopologyLoading}>
-                  {isTopologyLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
+                  {isTopologyLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                   <span className="ml-2">Refresh</span>
                 </Button>
               </div>

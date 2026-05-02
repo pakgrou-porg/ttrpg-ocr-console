@@ -660,6 +660,179 @@ export const appRouter = router({
         }
       }),
 
+    /**
+     * Discover available models for a provider type.
+     * For cloud providers (openrouter, openai, anthropic): hits the provider's models API.
+     * For local providers (lmstudio, vllm): hits the OpenAI-compatible /v1/models endpoint.
+     * Returns a list of models with contextLength, maxTokens, and vision capability flag.
+     * visionOnly=true filters to only models that support image input.
+     */
+    discoverModels: adminProcedure
+      .input(z.object({
+        providerType: z.enum(PROVIDER_TYPES),
+        apiKey: z.string().optional(),        // for cloud providers
+        baseUrl: z.string().optional(),       // for local providers or custom endpoints
+        port: z.number().int().optional(),    // for local providers
+        visionOnly: z.boolean().optional(),   // filter to vision-capable models only
+        providerId: z.number().int().optional(), // if set, decrypt key from stored provider
+      }))
+      .mutation(async ({ input }) => {
+        let apiKey = input.apiKey;
+
+        // If providerId given, decrypt the stored key
+        if (!apiKey && input.providerId) {
+          const stored = await getLlmProviderById(input.providerId);
+          if (stored?.encryptedApiKey) {
+            apiKey = decryptSecret({ ciphertext: stored.encryptedApiKey, iv: stored.keyIv ?? "", authTag: stored.keyAuthTag ?? "" });
+          }
+        }
+
+        const headers: Record<string, string> = { "Content-Type": "application/json" };
+        if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+
+        try {
+          // ── OpenRouter ──────────────────────────────────────────────────────────
+          if (input.providerType === "openrouter") {
+            const url = "https://openrouter.ai/api/v1/models";
+            const res = await fetch(url, { headers, signal: AbortSignal.timeout(15000) });
+            if (!res.ok) return { ok: false, error: `HTTP ${res.status}`, models: [] };
+            const data = await res.json() as any;
+            const models = (data?.data ?? []).map((m: any) => {
+              const arch = m.architecture ?? {};
+              const tp = m.top_provider ?? {};
+              const isVision = Array.isArray(arch.input_modalities) && arch.input_modalities.includes("image");
+              return {
+                id: m.id as string,
+                name: m.name as string,
+                contextLength: (m.context_length ?? tp.context_length ?? null) as number | null,
+                maxTokens: (tp.max_completion_tokens ?? null) as number | null,
+                isVision,
+                modality: (arch.modality ?? null) as string | null,
+                pricingPrompt: m.pricing?.prompt ?? null,
+                pricingCompletion: m.pricing?.completion ?? null,
+              };
+            }).filter((m: any) => !input.visionOnly || m.isVision);
+            return { ok: true, models };
+          }
+
+          // ── OpenAI (no standalone "openai" type — handled via openai_compatible) ──
+          if (input.providerType === "openai_compatible") {
+            const base = (input.baseUrl ?? "https://api.openai.com").replace(/\/$/, "");
+            const res = await fetch(`${base}/v1/models`, { headers, signal: AbortSignal.timeout(15000) });
+            if (!res.ok) return { ok: false, error: `HTTP ${res.status}`, models: [] };
+            const data = await res.json() as any;
+            // OpenAI vision models: gpt-4o, gpt-4-turbo, gpt-4-vision, o4-mini, o3
+            const VISION_PATTERNS = ["gpt-4o", "gpt-4-turbo", "gpt-4-vision", "o4-mini", "o3", "gpt-4.1"];
+            // Known context lengths for common OpenAI models
+            const CONTEXT_MAP: Record<string, number> = {
+              "gpt-4o": 128000, "gpt-4o-mini": 128000, "gpt-4-turbo": 128000,
+              "gpt-4.1": 1047576, "gpt-4.1-mini": 1047576, "gpt-4.1-nano": 1047576,
+              "o3": 200000, "o4-mini": 200000, "o3-mini": 200000,
+            };
+            const MAX_TOKENS_MAP: Record<string, number> = {
+              "gpt-4o": 16384, "gpt-4o-mini": 16384, "gpt-4-turbo": 4096,
+              "gpt-4.1": 32768, "gpt-4.1-mini": 32768, "gpt-4.1-nano": 16384,
+              "o3": 100000, "o4-mini": 100000,
+            };
+            const models = (data?.data ?? [])
+              .filter((m: any) => m.id.startsWith("gpt-") || m.id.startsWith("o3") || m.id.startsWith("o4"))
+              .map((m: any) => {
+                const isVision = VISION_PATTERNS.some(p => m.id.includes(p));
+                const ctxKey = Object.keys(CONTEXT_MAP).find(k => m.id.startsWith(k));
+                const tkKey = Object.keys(MAX_TOKENS_MAP).find(k => m.id.startsWith(k));
+                return {
+                  id: m.id as string,
+                  name: m.id as string,
+                  contextLength: ctxKey ? CONTEXT_MAP[ctxKey] : null,
+                  maxTokens: tkKey ? MAX_TOKENS_MAP[tkKey] : null,
+                  isVision,
+                  modality: isVision ? "text+image->text" : "text->text",
+                  pricingPrompt: null,
+                  pricingCompletion: null,
+                };
+              }).filter((m: any) => !input.visionOnly || m.isVision);
+            return { ok: true, models };
+          }
+
+          // ── Anthropic ───────────────────────────────────────────────────────────
+          if (input.providerType === "anthropic") {
+            const anthropicHeaders: Record<string, string> = { "Content-Type": "application/json", "anthropic-version": "2023-06-01" };
+            if (apiKey) { anthropicHeaders["x-api-key"] = apiKey; }
+            const res = await fetch("https://api.anthropic.com/v1/models?limit=100", { headers: anthropicHeaders, signal: AbortSignal.timeout(15000) });
+            if (!res.ok) return { ok: false, error: `HTTP ${res.status}`, models: [] };
+            const data = await res.json() as any;
+            // All Claude 3+ models support vision
+            const CLAUDE_CONTEXT: Record<string, number> = {
+              "claude-opus-4": 200000, "claude-sonnet-4": 200000,
+              "claude-3-7-sonnet": 200000, "claude-3-5-sonnet": 200000,
+              "claude-3-5-haiku": 200000, "claude-3-opus": 200000,
+              "claude-3-haiku": 200000, "claude-3-sonnet": 200000,
+            };
+            const CLAUDE_MAX_TOKENS: Record<string, number> = {
+              "claude-opus-4": 32000, "claude-sonnet-4": 64000,
+              "claude-3-7-sonnet": 64000, "claude-3-5-sonnet": 8192,
+              "claude-3-5-haiku": 8192, "claude-3-opus": 4096,
+              "claude-3-haiku": 4096, "claude-3-sonnet": 4096,
+            };
+            const models = (data?.data ?? []).map((m: any) => {
+              const isVision = m.id.includes("claude-3") || m.id.includes("claude-opus-4") || m.id.includes("claude-sonnet-4");
+              const ctxKey = Object.keys(CLAUDE_CONTEXT).find(k => m.id.startsWith(k));
+              const tkKey = Object.keys(CLAUDE_MAX_TOKENS).find(k => m.id.startsWith(k));
+              return {
+                id: m.id as string,
+                name: (m.display_name ?? m.id) as string,
+                contextLength: ctxKey ? CLAUDE_CONTEXT[ctxKey] : null,
+                maxTokens: tkKey ? CLAUDE_MAX_TOKENS[tkKey] : null,
+                isVision,
+                modality: isVision ? "text+image->text" : "text->text",
+                pricingPrompt: null,
+                pricingCompletion: null,
+              };
+            }).filter((m: any) => !input.visionOnly || m.isVision);
+            return { ok: true, models };
+          }
+
+          // ── LMStudio / vLLM / local OpenAI-compatible ───────────────────────────
+          if (["lm_studio", "openai_compatible", "custom"].includes(input.providerType) || input.baseUrl?.startsWith("http://") || input.baseUrl?.startsWith("https://localhost")) {
+            const base = input.baseUrl
+              ? input.baseUrl.replace(/\/$/, "")
+              : `http://localhost:${input.port ?? 1234}`;
+            const localUrl = `${base}/v1/models`;
+            const localHeaders: Record<string, string> = { "Content-Type": "application/json" };
+            if (apiKey) localHeaders["Authorization"] = `Bearer ${apiKey}`;
+
+            const res = await fetch(localUrl, { headers: localHeaders, signal: AbortSignal.timeout(8000) });
+            if (!res.ok) return { ok: false, error: `HTTP ${res.status} from ${localUrl}`, models: [] };
+            const data = await res.json() as any;
+
+            // LMStudio and vLLM both return OpenAI-compatible { data: [ { id, object, ... } ] }
+            // Vision detection: check model ID for known vision patterns
+            const VISION_KEYWORDS = ["vision", "llava", "qwen-vl", "qvq", "minicpm-v", "cogvlm", "internvl", "phi-3-vision", "pixtral", "moondream", "bakllava", "idefics"];
+            const models = (data?.data ?? []).map((m: any) => {
+              const modelId = (m.id ?? "").toLowerCase();
+              const isVision = VISION_KEYWORDS.some(kw => modelId.includes(kw));
+              // LMStudio sometimes includes context_length in the model object
+              const contextLength = m.context_length ?? m.max_context_length ?? null;
+              return {
+                id: m.id as string,
+                name: (m.id ?? m.object ?? "unknown") as string,
+                contextLength: contextLength as number | null,
+                maxTokens: null as number | null,
+                isVision,
+                modality: isVision ? "text+image->text" : "text->text",
+                pricingPrompt: null,
+                pricingCompletion: null,
+              };
+            }).filter((m: any) => !input.visionOnly || m.isVision);
+            return { ok: true, models };
+          }
+
+          return { ok: false, error: `Model discovery not supported for provider type: ${input.providerType}`, models: [] };
+        } catch (error: any) {
+          return { ok: false, error: error.message, models: [] };
+        }
+      }),
+
     /** Get available provider types */
     types: adminProcedure.query(() => {
       return PROVIDER_TYPES.map(t => ({
