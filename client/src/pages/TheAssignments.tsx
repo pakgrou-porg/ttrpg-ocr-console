@@ -83,10 +83,10 @@ interface InscriptionDialogProps {
 
 function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose, onSaved }: InscriptionDialogProps) {
   const [primaryProviderId, setPrimaryProviderId] = useState<string>(
-    inscription?.primaryProviderId ? String(inscription.primaryProviderId) : ""
+    inscription?.primaryProviderId ? String(inscription.primaryProviderId) : "none"
   );
   const [fallbackProviderId, setFallbackProviderId] = useState<string>(
-    inscription?.fallbackProviderId ? String(inscription.fallbackProviderId) : ""
+    inscription?.fallbackProviderId ? String(inscription.fallbackProviderId) : "none"
   );
   const [systemPrompt, setSystemPrompt] = useState(inscription?.systemPrompt ?? "");
   const [temperature, setTemperature] = useState<string>(
@@ -113,8 +113,8 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
   const handleSave = () => {
     upsertMutation.mutate({
       stage: stage as any,
-      primaryProviderId: primaryProviderId ? Number(primaryProviderId) : null,
-      fallbackProviderId: fallbackProviderId ? Number(fallbackProviderId) : null,
+      primaryProviderId: primaryProviderId && primaryProviderId !== "none" ? Number(primaryProviderId) : null,
+      fallbackProviderId: fallbackProviderId && fallbackProviderId !== "none" ? Number(fallbackProviderId) : null,
       systemPrompt: systemPrompt || undefined,
       temperature: temperature !== "" ? Number(temperature) : null,
       maxTokens: maxTokens !== "" ? Number(maxTokens) : null,
@@ -154,7 +154,7 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
                 <SelectValue placeholder="Select primary provider…" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">— None —</SelectItem>
+                <SelectItem value="none">— None —</SelectItem>
                 {activeProviders.map(p => (
                   <SelectItem key={p.id} value={String(p.id)}>
                     {providerLabel(p)}
@@ -179,7 +179,7 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
                 <SelectValue placeholder="Select fallback provider…" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">— None —</SelectItem>
+                <SelectItem value="none">— None —</SelectItem>
                 {activeProviders.map(p => (
                   <SelectItem key={p.id} value={String(p.id)}>
                     {providerLabel(p)}
