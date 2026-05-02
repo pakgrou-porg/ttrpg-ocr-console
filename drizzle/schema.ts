@@ -1,4 +1,4 @@
-import { boolean, int, mysqlEnum, mysqlTable, text, timestamp, varchar, json } from "drizzle-orm/mysql-core";
+import { boolean, index, int, mysqlEnum, mysqlTable, text, timestamp, varchar, json } from "drizzle-orm/mysql-core";
 
 export const users = mysqlTable("users", {
   id: int("id").autoincrement().primaryKey(),
@@ -220,6 +220,14 @@ export const llmProviders = mysqlTable("llm_providers", {
   keyIv: varchar("keyIv", { length: 64 }),
   /** Auth tag for decryption (hex) */
   keyAuthTag: varchar("keyAuthTag", { length: 64 }),
+  // P1: Store non-sensitive display hints at write time so list views never
+  // need to decrypt the key just to show a masked version (e.g. "sk-ab••••••ef").
+  /** First 4 chars of the plaintext API key (stored at write time) */
+  keyPrefix: varchar("keyPrefix", { length: 8 }),
+  /** Last 4 chars of the plaintext API key (stored at write time) */
+  keySuffix: varchar("keySuffix", { length: 8 }),
+  /** Total length of the plaintext API key (stored at write time) */
+  keyLength: int("keyLength"),
   /** Whether this provider is currently active/enabled */
   isActive: boolean("isActive").default(true).notNull(),
   /** Optional notes about this provider */
@@ -388,6 +396,12 @@ export const documents = mysqlTable("documents", {
   ingestionJobId: int("ingestionJobId"),
   /** Additional metadata (ISBN, year, etc.) */
   metadata: json("metadata").$type<Record<string, unknown>>(),
+  /** User ID of the document owner (who uploaded it) */
+  ownerUserId: int("ownerUserId"),
+  /** User ID of the user who created/uploaded this record */
+  createdByUserId: int("createdByUserId"),
+  /** Visibility scope: private (owner only), shared (all users), global (public) */
+  visibility: mysqlEnum("visibility", ["private", "shared", "global"]).default("private").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -425,7 +439,14 @@ export const documentPages = mysqlTable("document_pages", {
   ocrConfidence: int("ocrConfidence"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-});
+}, (t) => ({
+  // P1: Index for fetching all pages of a document (most common query pattern)
+  documentIdIdx: index("document_pages_documentId_idx").on(t.documentId),
+  // P1: Index for phash-based duplicate detection
+  phashIdx: index("document_pages_phash_idx").on(t.phash),
+  // P1: Composite index for the common "get page N of document X" lookup
+  documentPageIdx: index("document_pages_doc_page_idx").on(t.documentId, t.pageNumber),
+}));
 
 export type DocumentPage = typeof documentPages.$inferSelect;
 export type InsertDocumentPage = typeof documentPages.$inferInsert;
@@ -447,7 +468,7 @@ export type OcrResultStatus = (typeof OCR_RESULT_STATUSES)[number];
 
 export const ocrResults = mysqlTable("ocr_results", {
   id: int("id").autoincrement().primaryKey(),
-  /** Parent page ID */
+  /** Parent page ID — indexed for fast lookups by page */
   pageId: int("pageId").notNull(),
   /** Raw extracted text (full-page) */
   rawText: text("rawText"),
@@ -475,7 +496,12 @@ export const ocrResults = mysqlTable("ocr_results", {
   correctedAt: timestamp("correctedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-});
+}, (t) => ({
+  // P1: Index for fetching OCR result by page (most common query)
+  pageIdIdx: index("ocr_results_pageId_idx").on(t.pageId),
+  // P1: Index for filtering by status (e.g., find all failed results)
+  statusIdx: index("ocr_results_status_idx").on(t.status),
+}));
 
 export type OcrResult = typeof ocrResults.$inferSelect;
 export type InsertOcrResult = typeof ocrResults.$inferInsert;
@@ -492,7 +518,7 @@ export type HitlStatus = (typeof HITL_STATUSES)[number];
 
 export const hitlQueue = mysqlTable("hitl_queue", {
   id: int("id").autoincrement().primaryKey(),
-  /** The page that needs review */
+  /** The page that needs review — indexed for fast lookups */
   pageId: int("pageId").notNull(),
   /** The OCR result that needs review */
   ocrResultId: int("ocrResultId"),
@@ -514,7 +540,14 @@ export const hitlQueue = mysqlTable("hitl_queue", {
   resolvedAt: timestamp("resolvedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-});
+}, (t) => ({
+  // P1: Index for fetching HITL items by page
+  pageIdIdx: index("hitl_queue_pageId_idx").on(t.pageId),
+  // P1: Composite index for the "Next Unreviewed" query (status + priority + createdAt)
+  statusPriorityIdx: index("hitl_queue_status_priority_idx").on(t.status, t.priority, t.createdAt),
+  // P1: Index for filtering by assignee
+  assignedToIdx: index("hitl_queue_assignedTo_idx").on(t.assignedTo),
+}));
 
 export type HitlQueueItem = typeof hitlQueue.$inferSelect;
 export type InsertHitlQueueItem = typeof hitlQueue.$inferInsert;

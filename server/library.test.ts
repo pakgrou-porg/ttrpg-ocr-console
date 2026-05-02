@@ -64,6 +64,7 @@ describe("library", () => {
         totalPages: 320,
       });
       expect(result.success).toBe(true);
+      expect(typeof result.id).toBe("number");
       expect(result.id).toBeGreaterThan(0);
       testDocId = result.id;
     });

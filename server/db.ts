@@ -619,7 +619,9 @@ export async function createDocument(doc: InsertDocument) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const result = await db.insert(documents).values(doc);
-  return result[0].insertId;
+  const insertId = result[0].insertId;
+  const [created] = await db.select().from(documents).where(eq(documents.id, insertId));
+  return created;
 }
 
 export async function updateDocument(id: number, updates: Partial<InsertDocument>) {
@@ -631,17 +633,20 @@ export async function updateDocument(id: number, updates: Partial<InsertDocument
 export async function deleteDocument(id: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  // Cascade: delete HITL items, OCR results, pages, then the document
-  const pages = await db.select({ id: documentPages.id }).from(documentPages).where(eq(documentPages.documentId, id));
-  const pageIds = pages.map(p => p.id);
-  if (pageIds.length > 0) {
-    for (const pid of pageIds) {
-      await db.delete(hitlQueue).where(eq(hitlQueue.pageId, pid));
-      await db.delete(ocrResults).where(eq(ocrResults.pageId, pid));
+  // P1: Wrap cascade delete in a transaction to prevent partial deletion
+  // if a concurrent write reinserts related rows during deletion.
+  await db.transaction(async (tx) => {
+    const pages = await tx.select({ id: documentPages.id }).from(documentPages).where(eq(documentPages.documentId, id));
+    const pageIds = pages.map(p => p.id);
+    if (pageIds.length > 0) {
+      for (const pid of pageIds) {
+        await tx.delete(hitlQueue).where(eq(hitlQueue.pageId, pid));
+        await tx.delete(ocrResults).where(eq(ocrResults.pageId, pid));
+      }
+      await tx.delete(documentPages).where(eq(documentPages.documentId, id));
     }
-    await db.delete(documentPages).where(eq(documentPages.documentId, id));
-  }
-  await db.delete(documents).where(eq(documents.id, id));
+    await tx.delete(documents).where(eq(documents.id, id));
+  });
 }
 
 export async function searchDocuments(query: string) {

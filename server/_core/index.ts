@@ -31,9 +31,10 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 async function startServer() {
   const app = express();
   const server = createServer(app);
-  // Configure body parser with larger size limit for file uploads
-  app.use(express.json({ limit: "50mb" }));
-  app.use(express.urlencoded({ limit: "50mb", extended: true }));
+  // P1: Global body limit is 1 MB for JSON/urlencoded requests.
+  // File uploads use the /api/upload/* routes which have their own multer limits.
+  app.use(express.json({ limit: "1mb" }));
+  app.use(express.urlencoded({ limit: "1mb", extended: true }));
   // OAuth callback under /api/oauth/callback
   registerOAuthRoutes(app);
   // File upload REST endpoints
@@ -54,10 +55,18 @@ async function startServer() {
   }
 
   const preferredPort = parseInt(process.env.PORT || "3000");
-  const port = await findAvailablePort(preferredPort);
 
-  if (port !== preferredPort) {
-    console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
+  // P1: In production, the platform assigns a specific port via PORT env var.
+  // Auto-fallback is only safe in development; in production a port conflict
+  // means the deployment is misconfigured and should fail loudly.
+  let port: number;
+  if (process.env.NODE_ENV === "production") {
+    port = preferredPort;
+  } else {
+    port = await findAvailablePort(preferredPort);
+    if (port !== preferredPort) {
+      console.log(`[Dev] Port ${preferredPort} is busy, using port ${port} instead`);
+    }
   }
 
   server.listen(port, () => {

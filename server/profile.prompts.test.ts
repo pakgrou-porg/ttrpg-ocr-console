@@ -51,7 +51,7 @@ vi.mock("./db", () => ({
   seedDefaultPrompts: vi.fn().mockResolvedValue(undefined),
 }));
 
-function createAuthContext(): TrpcContext {
+function createAuthContext(role: "admin" | "user" = "user"): TrpcContext {
   return {
     user: {
       id: 1,
@@ -59,7 +59,7 @@ function createAuthContext(): TrpcContext {
       email: "test@example.com",
       name: "Test Archivist",
       loginMethod: "manus",
-      role: "user",
+      role,
       createdAt: new Date(),
       updatedAt: new Date(),
       lastSignedIn: new Date(),
@@ -120,8 +120,8 @@ describe("prompts router", () => {
     expect(result?.category).toBe("pipeline");
   });
 
-  it("upsert: saves a prompt successfully", async () => {
-    const ctx = createAuthContext();
+  it("upsert: saves a prompt successfully (admin only after P0 fix)", async () => {
+    const ctx = createAuthContext("admin");
     const caller = appRouter.createCaller(ctx);
     const result = await caller.prompts.upsert({
       name: "pass1_layout_analysis",
@@ -132,10 +132,28 @@ describe("prompts router", () => {
     expect(result.success).toBe(true);
   });
 
-  it("seedDefaults: seeds default prompts", async () => {
-    const ctx = createAuthContext();
+  it("upsert: throws FORBIDDEN for regular users (P0 security fix)", async () => {
+    const ctx = createAuthContext("user");
+    const caller = appRouter.createCaller(ctx);
+    await expect(
+      caller.prompts.upsert({
+        name: "pass1_layout_analysis",
+        category: "pipeline",
+        promptText: "Attempt by non-admin.",
+      })
+    ).rejects.toThrow();
+  });
+
+  it("seedDefaults: seeds default prompts (admin only after P0 fix)", async () => {
+    const ctx = createAuthContext("admin");
     const caller = appRouter.createCaller(ctx);
     const result = await caller.prompts.seedDefaults();
     expect(result.success).toBe(true);
+  });
+
+  it("seedDefaults: throws FORBIDDEN for regular users (P0 security fix)", async () => {
+    const ctx = createAuthContext("user");
+    const caller = appRouter.createCaller(ctx);
+    await expect(caller.prompts.seedDefaults()).rejects.toThrow();
   });
 });

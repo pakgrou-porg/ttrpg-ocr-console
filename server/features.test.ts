@@ -33,19 +33,24 @@ function makeUnauthCtx(): TrpcContext {
 // ── Health Checks ─────────────────────────────────────────────────────────────
 
 describe("health.database", () => {
-  it("returns ok and latencyMs fields", async () => {
-    const caller = appRouter.createCaller(makeUnauthCtx());
+  it("returns ok and latencyMs fields for authenticated users", async () => {
+    const caller = appRouter.createCaller(makeCtx());
     const result = await caller.health.database();
     expect(result).toHaveProperty("ok");
     expect(result).toHaveProperty("latencyMs");
     expect(typeof result.ok).toBe("boolean");
     expect(typeof result.latencyMs).toBe("number");
   });
+
+  it("throws UNAUTHORIZED for unauthenticated users", async () => {
+    const caller = appRouter.createCaller(makeUnauthCtx());
+    await expect(caller.health.database()).rejects.toThrow();
+  });
 });
 
 describe("health.all", () => {
-  it("returns status for all services", async () => {
-    const caller = appRouter.createCaller(makeUnauthCtx());
+  it("returns status for all services for authenticated users", async () => {
+    const caller = appRouter.createCaller(makeCtx());
     const result = await caller.health.all();
     expect(result).toHaveProperty("database");
     expect(result).toHaveProperty("agents");
@@ -56,6 +61,11 @@ describe("health.all", () => {
     expect(result.agents).toHaveProperty("ok");
     expect(result.scribes).toHaveProperty("ok");
     expect(result.cloudConduit).toHaveProperty("ok");
+  });
+
+  it("throws UNAUTHORIZED for unauthenticated users", async () => {
+    const caller = appRouter.createCaller(makeUnauthCtx());
+    await expect(caller.health.all()).rejects.toThrow();
   });
 });
 
@@ -169,8 +179,8 @@ describe("telemetry.summary", () => {
 });
 
 describe("telemetry.record", () => {
-  it("records a telemetry event successfully", async () => {
-    const caller = appRouter.createCaller(makeCtx());
+  it("records a telemetry event successfully (admin only)", async () => {
+    const caller = appRouter.createCaller(makeCtx("admin"));
     const result = await caller.telemetry.record({
       eventType: "ocr_pass2",
       source: "gemini-2.5-pro",
@@ -178,6 +188,16 @@ describe("telemetry.record", () => {
       costMicros: 50,
     });
     expect(result).toEqual({ success: true });
+  });
+
+  it("throws FORBIDDEN for regular users", async () => {
+    const caller = appRouter.createCaller(makeCtx("user"));
+    await expect(
+      caller.telemetry.record({
+        eventType: "test",
+        source: "test-model",
+      })
+    ).rejects.toThrow();
   });
 
   it("throws for unauthenticated users", async () => {
@@ -247,14 +267,15 @@ describe("prompts.upsert", () => {
     expect(result).toEqual({ success: true });
   });
 
-  it("allows authenticated users to upsert prompts", async () => {
+  it("throws FORBIDDEN for regular users (admin-only since P0 security fix)", async () => {
     const caller = appRouter.createCaller(makeCtx("user"));
-    const result = await caller.prompts.upsert({
-      name: "user_test_prompt",
-      category: "console_experience",
-      description: "A user test prompt",
-      promptText: "You are a user test assistant.",
-    });
-    expect(result).toEqual({ success: true });
+    await expect(
+      caller.prompts.upsert({
+        name: "user_test_prompt",
+        category: "console_experience",
+        description: "A user test prompt",
+        promptText: "You are a user test assistant.",
+      })
+    ).rejects.toThrow();
   });
 });

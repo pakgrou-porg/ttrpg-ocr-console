@@ -106,3 +106,38 @@
 - [x] Add "Next Unreviewed" auto-advance CTA button to Archivist's Desk (jumps to oldest critical/high unresolved item)
 - [x] Write vitest tests for pipeline procedures (8 new tests, 96 total passing)
 - [x] Push updated codebase to GitHub (origin/main is up to date — checkpoint auto-committed)
+
+## Phase: P0 Security Fixes & P1 Reliability (Security Review)
+
+### P0 — Security Correctness
+- [x] Auth middleware before Multer file parsing in uploadRoutes.ts
+- [x] PDF magic-byte validation (%PDF- header check) after buffer available
+- [x] Startup guard: fail fast if JWT_SECRET missing or < 32 chars in env.ts (warns for platform-injected secrets)
+- [x] Add CREDENTIAL_ENCRYPTION_KEY env var; separate from session secret in crypto.ts
+- [x] Prompt mutations (upsert, seedDefaults) upgraded to adminProcedure
+- [x] Telemetry record write endpoint restricted to admin/server-only
+- [x] Health endpoint split: public health.ping (ok:true) vs authenticated health.database/health.all
+
+### P1 — Reliability & Data Integrity
+- [x] Randomized S3 keys using nanoid + user-scoped paths (no original filename in key)
+- [x] Add ownerUserId + createdByUserId + visibility fields to documents table
+- [x] Add DB indexes for foreign-key columns (documentId, pageId, ocrResultId, userId, providerId)
+- [x] Global JSON/urlencoded body limit reduced from 50mb to 1mb
+- [x] Production port: disable auto-fallback when NODE_ENV=production
+- [x] Secret masking: store keyPrefix/keySuffix/keyLength at write time; avoid decrypting for list views
+
+### Documentation
+- [x] Write README.md (setup, env vars, pipeline architecture, security assumptions)
+- [x] Write .env.example with all required variables
+- [x] Update Tome of Knowledge page with pipeline API integration guide
+- [ ] Add GitHub Actions CI workflow (.github/workflows/ci.yml)
+
+### Tests
+- [x] Test: upload rejects unauthenticated before reading file body
+- [x] Test: PDF magic-byte validation rejects non-PDF
+- [x] Test: prompt mutations blocked for non-admin
+- [x] Test: telemetry record blocked for non-admin
+- [x] Test: crypto round-trip, hint storage, masked display
+- [x] Test: health.ping public, health.database/all require auth
+- [x] All 123 tests passing
+- [ ] Test: document list scoped by ownership

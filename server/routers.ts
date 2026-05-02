@@ -24,7 +24,7 @@ import {
   getOcrResultByPageId, getOcrResultById, createOcrResult, updateOcrResult,
   getHitlItemById, getHitlItemsByPageId, getAllHitlItems, createHitlItem, updateHitlItem, getHitlStats,
 } from "./db";
-import { encryptSecret, decryptSecret, maskSecret } from "./crypto";
+import { encryptSecret, decryptSecret, maskSecret, storeSecretHint, renderMaskedSecret } from "./crypto";
 import { ENV } from "./_core/env";
 import { FEATURE_AREAS, PROVIDER_TYPES, PIPELINE_STAGES, DB_CONNECTION_TYPES, DOCUMENT_STATUSES, OCR_RESULT_STATUSES, HITL_PRIORITIES, HITL_STATUSES } from "../drizzle/schema";
 
@@ -46,21 +46,22 @@ export const appRouter = router({
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
       return { success: true } as const;
     }),
-  }),
-
-  // ─── Health Checks ─────────────────────────────────────────────────────────
+  }),  // ─── Health Checks ───────────────────────────────────────────────────────────
   health: router({
-    /** Ping the database and return status + latency */
-    database: publicProcedure.query(async () => {
+    // P1: Public liveness probe — returns only { ok: true } with no internal detail.
+    // Use this for load balancer / uptime monitor checks.
+    // Example: GET /api/trpc/health.ping
+    ping: publicProcedure.query(() => ({ ok: true })),
+
+    // P1: Detailed DB health is behind authentication — exposes latency and
+    // connection details that should not be visible to unauthenticated callers.
+    database: protectedProcedure.query(async () => {
       return pingDatabase();
     }),
 
-    /** Check all services and return aggregate status */
-    all: publicProcedure.query(async () => {
+    // P1: Full service status is behind authentication — exposes service topology.
+    all: protectedProcedure.query(async () => {
       const dbResult = await pingDatabase();
-
-      // For LM Studio and OpenRouter, we check if their config exists
-      // In production, these would actually ping the endpoints
       return {
         database: dbResult,
         agents: { ok: true, latencyMs: 0, detail: "Available & Ready" },
@@ -115,7 +116,9 @@ export const appRouter = router({
         return getSystemPromptByName(input.name);
       }),
 
-    upsert: protectedProcedure
+    // P0: Prompt mutations are admin-only — any user could otherwise overwrite
+    // pipeline prompts and inject malicious instructions into the OCR pipeline.
+    upsert: adminProcedure
       .input(z.object({
         name: z.string().max(128),
         category: z.enum(["pipeline", "console_experience"]),
@@ -128,7 +131,8 @@ export const appRouter = router({
         return { success: true };
       }),
 
-    seedDefaults: protectedProcedure.mutation(async () => {
+    // P0: Seeding defaults is destructive — admin-only
+    seedDefaults: adminProcedure.mutation(async () => {
       await seedDefaultPrompts();
       return { success: true };
     }),
@@ -292,8 +296,10 @@ export const appRouter = router({
 
   // ─── Telemetry (Divination & Omens) ────────────────────────────────────────
   telemetry: router({
-    /** Record a new telemetry event */
-    record: protectedProcedure
+    // P0: Telemetry writes are admin-only — any user could otherwise flood the
+    // telemetry table with fake events, skewing cost/usage metrics.
+    // The pipeline (which runs server-side) calls this via adminProcedure context.
+    record: adminProcedure
       .input(z.object({
         eventType: z.string().max(64),
         source: z.string().max(128),
@@ -436,7 +442,7 @@ export const appRouter = router({
 
   // ─── LLM Providers (The Artificers) ───────────────────────────────────────
   providers: router({
-    /** List all providers (API keys are masked) */
+    /** List all providers (API keys are masked using stored hints — no decryption) */
     list: adminProcedure.query(async () => {
       const providers = await getAllLlmProviders();
       return providers.map(p => ({
@@ -445,11 +451,14 @@ export const appRouter = router({
         keyIv: undefined,
         keyAuthTag: undefined,
         hasApiKey: !!p.encryptedApiKey,
-        maskedApiKey: p.encryptedApiKey ? maskSecret(decryptSecret({ ciphertext: p.encryptedApiKey, iv: p.keyIv ?? "", authTag: p.keyAuthTag ?? "" })) : null,
+        // P1: Use stored hint fields to render masked key without decrypting
+        maskedApiKey: (p.keyPrefix && p.keySuffix && p.keyLength)
+          ? renderMaskedSecret({ keyPrefix: p.keyPrefix, keySuffix: p.keySuffix, keyLength: p.keyLength })
+          : (p.encryptedApiKey ? maskSecret(decryptSecret({ ciphertext: p.encryptedApiKey, iv: p.keyIv ?? "", authTag: p.keyAuthTag ?? "" })) : null),
       }));
     }),
 
-    /** Get a single provider by ID (API key masked) */
+    /** Get a single provider by ID (API key masked using stored hints) */
     get: adminProcedure
       .input(z.object({ id: z.number().int() }))
       .query(async ({ input }) => {
@@ -461,7 +470,10 @@ export const appRouter = router({
           keyIv: undefined,
           keyAuthTag: undefined,
           hasApiKey: !!provider.encryptedApiKey,
-          maskedApiKey: provider.encryptedApiKey ? maskSecret(decryptSecret({ ciphertext: provider.encryptedApiKey, iv: provider.keyIv ?? "", authTag: provider.keyAuthTag ?? "" })) : null,
+          // P1: Use stored hint fields to render masked key without decrypting
+          maskedApiKey: (provider.keyPrefix && provider.keySuffix && provider.keyLength)
+            ? renderMaskedSecret({ keyPrefix: provider.keyPrefix, keySuffix: provider.keySuffix, keyLength: provider.keyLength })
+            : (provider.encryptedApiKey ? maskSecret(decryptSecret({ ciphertext: provider.encryptedApiKey, iv: provider.keyIv ?? "", authTag: provider.keyAuthTag ?? "" })) : null),
         };
       }),
 
@@ -480,11 +492,20 @@ export const appRouter = router({
         let keyIv: string | undefined;
         let keyAuthTag: string | undefined;
 
+        let keyPrefix: string | undefined;
+        let keySuffix: string | undefined;
+        let keyLength: number | undefined;
+
         if (input.apiKey) {
           const encrypted = encryptSecret(input.apiKey);
           encryptedApiKey = encrypted.ciphertext;
           keyIv = encrypted.iv;
           keyAuthTag = encrypted.authTag;
+          // P1: Store display hint at write time to avoid decrypting for list views
+          const hint = storeSecretHint(input.apiKey);
+          keyPrefix = hint.keyPrefix;
+          keySuffix = hint.keySuffix;
+          keyLength = hint.keyLength;
         }
 
         const id = await createLlmProvider({
@@ -494,6 +515,9 @@ export const appRouter = router({
           encryptedApiKey,
           keyIv,
           keyAuthTag,
+          keyPrefix,
+          keySuffix,
+          keyLength,
           notes: input.notes,
           availableModels: input.availableModels ?? [],
         });
@@ -526,11 +550,19 @@ export const appRouter = router({
           updates.encryptedApiKey = null;
           updates.keyIv = null;
           updates.keyAuthTag = null;
+          updates.keyPrefix = null;
+          updates.keySuffix = null;
+          updates.keyLength = null;
         } else if (input.apiKey) {
           const encrypted = encryptSecret(input.apiKey);
           updates.encryptedApiKey = encrypted.ciphertext;
           updates.keyIv = encrypted.iv;
           updates.keyAuthTag = encrypted.authTag;
+          // P1: Update display hint at write time
+          const hint = storeSecretHint(input.apiKey);
+          updates.keyPrefix = hint.keyPrefix;
+          updates.keySuffix = hint.keySuffix;
+          updates.keyLength = hint.keyLength;
         }
 
         await updateLlmProvider(input.id, updates as any);
@@ -932,9 +964,9 @@ export const appRouter = router({
         coverThumbnailUrl: z.string().max(1024).optional(),
         metadata: z.record(z.string(), z.unknown()).optional(),
       }))
-      .mutation(async ({ input }) => {
-        const id = await createDocument(input);
-        return { success: true, id };
+      .mutation(async ({ ctx, input }) => {
+        const doc = await createDocument({ ...input, ownerUserId: ctx.user.id });
+        return { success: true, id: doc.id };
       }),
 
     /** Update a document (admin only) */
