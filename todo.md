@@ -141,3 +141,11 @@
 - [x] Test: health.ping public, health.database/all require auth
 - [x] All 123 tests passing
 - [ ] Test: document list scoped by ownership
+
+## Phase: Collapsible Sidebar
+
+- [x] Add collapse/expand toggle button to sidebar (PanelLeftClose/PanelLeftOpen icons)
+- [x] Implement icon-only mode when sidebar is collapsed (icons + tooltips on hover)
+- [x] Persist collapsed state in localStorage (key: ttrpg-sidebar-collapsed)
+- [x] Ensure main content area expands to fill available space when sidebar is collapsed
+- [x] Sub-menu items (Inner Sanctum) flatten to icon-only strip in collapsed mode
