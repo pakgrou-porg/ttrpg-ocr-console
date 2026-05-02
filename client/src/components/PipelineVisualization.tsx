@@ -240,21 +240,29 @@ const PHASE_LABELS: Record<number, { label: string; color: string }> = {
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-export interface AssignmentInfo {
+export interface ProviderInfo {
   id: number;
-  modelName: string;
-  priority: number;
-  isActive: boolean;
-  providerName: string;
+  displayName: string;
+  name: string;
+  modelId: string | null;
   providerType: string;
+  isActive: boolean;
+}
+
+export interface InscriptionInfo {
+  id: number;
+  isActive: boolean;
   systemPrompt?: string | null;
   temperature?: number | null;
+  maxTokens?: number | null;
   llmSettings?: Record<string, unknown> | null;
 }
 
 export interface TopologyStage {
   stage: string;
-  assignments: AssignmentInfo[];
+  inscription: InscriptionInfo | null;
+  primaryProvider: ProviderInfo | null;
+  fallbackProvider: ProviderInfo | null;
 }
 
 // ─── Custom node: Stage ──────────────────────────────────────────────────────
@@ -262,7 +270,9 @@ export interface TopologyStage {
 function StageNode({ data }: NodeProps) {
   const d = data as {
     stage: string;
-    assignments: AssignmentInfo[];
+    inscription: InscriptionInfo | null;
+    primaryProvider: ProviderInfo | null;
+    fallbackProvider: ProviderInfo | null;
     isIngestion?: boolean;
     isHitl?: boolean;
   };
@@ -291,9 +301,8 @@ function StageNode({ data }: NodeProps) {
   if (!meta) return null;
   const Icon = meta.icon;
 
-  const primary = d.assignments.filter(a => a.isActive && a.priority === 1);
-  const fallbacks = d.assignments.filter(a => a.isActive && a.priority > 1).sort((a, b) => a.priority - b.priority);
-  const inactive = d.assignments.filter(a => !a.isActive);
+  const hasInscription = d.inscription !== null;
+  const isInscriptionActive = d.inscription?.isActive ?? false;
 
   return (
     <div className={`flex flex-col min-w-[200px] max-w-[240px] rounded-xl border-2 ${meta.borderColor} ${meta.bgColor} shadow-lg overflow-hidden`}>
@@ -302,89 +311,88 @@ function StageNode({ data }: NodeProps) {
       {/* Header */}
       <div className={`flex items-center gap-2 px-3 py-2 border-b ${meta.borderColor}`}>
         <Icon className={`w-4 h-4 flex-shrink-0 ${meta.color}`} />
-        <span className={`text-xs font-bold uppercase tracking-wider ${meta.color} leading-tight`}>{meta.label}</span>
+        <span className={`text-xs font-bold uppercase tracking-wider ${meta.color} leading-tight flex-1`}>{meta.label}</span>
+        {hasInscription && (
+          <div className={`w-2 h-2 rounded-full flex-shrink-0 ${isInscriptionActive ? "bg-green-400" : "bg-gray-500"}`} />
+        )}
       </div>
 
-      {/* Assignments */}
+      {/* Providers */}
       <div className="flex flex-col gap-1 p-2">
-        {d.assignments.length === 0 ? (
+        {!hasInscription ? (
           <div className="flex items-center gap-1.5 px-2 py-1.5 rounded bg-slate-700/40 border border-dashed border-slate-600/50">
-            <span className="text-xs text-slate-500 italic">No model assigned</span>
+            <span className="text-xs text-slate-500 italic">No provider inscribed</span>
           </div>
         ) : (
           <>
-            {primary.map(a => (
-              <Tooltip key={a.id}>
+            {d.primaryProvider && (
+              <Tooltip>
                 <TooltipTrigger asChild>
                   <div className="flex items-center gap-1.5 px-2 py-1.5 rounded bg-slate-700/60 border border-slate-600/40 cursor-default">
-                    {a.providerType === "local_vlm" || a.providerType === "lm_studio" ? (
+                    {d.primaryProvider.providerType === "lm_studio" || d.primaryProvider.providerType === "openai_compatible" ? (
                       <Cpu className="w-3 h-3 text-violet-400 flex-shrink-0" />
                     ) : (
                       <Cloud className="w-3 h-3 text-blue-400 flex-shrink-0" />
                     )}
-                    <span className="text-xs text-slate-200 font-medium truncate flex-1">{a.modelName}</span>
-                    <Badge variant="outline" className="text-[10px] px-1 py-0 h-4 border-emerald-500/50 text-emerald-400">P1</Badge>
+                    <span className="text-xs text-slate-200 font-medium truncate flex-1">
+                      {d.primaryProvider.modelId || d.primaryProvider.displayName}
+                    </span>
+                    <Badge variant="outline" className="text-[10px] px-1 py-0 h-4 border-emerald-500/50 text-emerald-400">Primary</Badge>
                   </div>
                 </TooltipTrigger>
                 <TooltipContent side="right" className="max-w-xs space-y-1">
-                  <p className="font-semibold">{a.modelName}</p>
-                  <p className="text-xs text-muted-foreground">Provider: {a.providerName}</p>
-                  <p className="text-xs text-muted-foreground">Priority: {a.priority} (Primary)</p>
-                  {a.temperature !== null && a.temperature !== undefined && (
+                  <p className="font-semibold">{d.primaryProvider.displayName}</p>
+                  {d.primaryProvider.modelId && (
+                    <p className="text-xs text-muted-foreground font-mono">{d.primaryProvider.modelId}</p>
+                  )}
+                  <p className="text-xs text-muted-foreground">Type: {d.primaryProvider.providerType}</p>
+                  {d.inscription?.temperature !== null && d.inscription?.temperature !== undefined && (
                     <p className="text-xs text-muted-foreground flex items-center gap-1">
-                      <Thermometer className="w-3 h-3" /> temp: {a.temperature}
+                      <Thermometer className="w-3 h-3" /> temp: {d.inscription.temperature}
                     </p>
                   )}
-                  {a.systemPrompt && (
+                  {d.inscription?.systemPrompt && (
                     <p className="text-xs text-muted-foreground font-mono truncate max-w-[200px]">
-                      prompt: {a.systemPrompt.slice(0, 60)}…
+                      prompt: {d.inscription.systemPrompt.slice(0, 60)}…
                     </p>
                   )}
                 </TooltipContent>
               </Tooltip>
-            ))}
-            {fallbacks.map(a => (
-              <Tooltip key={a.id}>
+            )}
+            {d.fallbackProvider && (
+              <Tooltip>
                 <TooltipTrigger asChild>
                   <div className="flex items-center gap-1.5 px-2 py-1.5 rounded bg-slate-800/60 border border-dashed border-slate-600/40 cursor-default">
-                    {a.providerType === "local_vlm" || a.providerType === "lm_studio" ? (
+                    {d.fallbackProvider.providerType === "lm_studio" || d.fallbackProvider.providerType === "openai_compatible" ? (
                       <Cpu className="w-3 h-3 text-violet-400/60 flex-shrink-0" />
                     ) : (
                       <Cloud className="w-3 h-3 text-blue-400/60 flex-shrink-0" />
                     )}
-                    <span className="text-xs text-slate-400 truncate flex-1">{a.modelName}</span>
-                    <Badge variant="outline" className="text-[10px] px-1 py-0 h-4 border-amber-500/50 text-amber-400">
-                      F{a.priority - 1}
-                    </Badge>
+                    <span className="text-xs text-slate-400 truncate flex-1">
+                      {d.fallbackProvider.modelId || d.fallbackProvider.displayName}
+                    </span>
+                    <Badge variant="outline" className="text-[10px] px-1 py-0 h-4 border-amber-500/50 text-amber-400">Fallback</Badge>
                   </div>
                 </TooltipTrigger>
                 <TooltipContent side="right" className="max-w-xs">
-                  <p className="font-semibold">{a.modelName}</p>
-                  <p className="text-xs text-muted-foreground">Provider: {a.providerName}</p>
-                  <p className="text-xs text-muted-foreground">Fallback #{a.priority - 1}</p>
-                  {a.temperature !== null && a.temperature !== undefined && (
-                    <p className="text-xs text-muted-foreground flex items-center gap-1">
-                      <Thermometer className="w-3 h-3" /> temp: {a.temperature}
-                    </p>
+                  <p className="font-semibold">{d.fallbackProvider.displayName}</p>
+                  {d.fallbackProvider.modelId && (
+                    <p className="text-xs text-muted-foreground font-mono">{d.fallbackProvider.modelId}</p>
                   )}
+                  <p className="text-xs text-muted-foreground">Type: {d.fallbackProvider.providerType}</p>
                 </TooltipContent>
               </Tooltip>
-            ))}
-            {inactive.length > 0 && (
-              <div className="flex items-center gap-1 mt-0.5">
-                <span className="text-[10px] text-slate-600">{inactive.length} inactive</span>
-              </div>
             )}
           </>
         )}
       </div>
 
       {/* Footer: provider summary */}
-      {d.assignments.length > 0 && (
+      {hasInscription && (d.primaryProvider || d.fallbackProvider) && (
         <div className={`px-3 py-1 border-t ${meta.borderColor} flex items-center gap-1`}>
           <Users className="w-3 h-3 text-slate-500" />
           <span className="text-[10px] text-slate-500 truncate">
-            {Array.from(new Set(d.assignments.filter(a => a.isActive).map(a => a.providerName))).join(", ")}
+            {[d.primaryProvider?.displayName, d.fallbackProvider ? `→ ${d.fallbackProvider.displayName}` : null].filter(Boolean).join(" ")}
           </span>
         </div>
       )}
@@ -404,9 +412,9 @@ const ROW_Y_START = 40;
 const ROW_Y_GAP = 170;
 
 function buildNodesAndEdges(topology: TopologyStage[]): { nodes: Node[]; edges: Edge[] } {
-  const assignmentMap = new Map<string, AssignmentInfo[]>();
+  const topologyMap = new Map<string, TopologyStage>();
   for (const t of topology) {
-    assignmentMap.set(t.stage, t.assignments);
+    topologyMap.set(t.stage, t);
   }
 
   const nodes: Node[] = [];
@@ -430,13 +438,16 @@ function buildNodesAndEdges(topology: TopologyStage[]): { nodes: Node[]; edges: 
           data: { stage, isIngestion: true, assignments: [] },
         });
       } else {
+        const t = topologyMap.get(stage);
         nodes.push({
           id: stage,
           type: "stage",
           position: { x, y },
           data: {
             stage,
-            assignments: assignmentMap.get(stage) ?? [],
+            inscription: t?.inscription ?? null,
+            primaryProvider: t?.primaryProvider ?? null,
+            fallbackProvider: t?.fallbackProvider ?? null,
           },
         });
       }
@@ -453,7 +464,7 @@ function buildNodesAndEdges(topology: TopologyStage[]): { nodes: Node[]; edges: 
         x: COL_X_START + pass4Col * COL_X_GAP,
         y: ROW_Y_START + 3 * ROW_Y_GAP + 200,
       },
-      data: { stage: "__hitl__", isHitl: true, assignments: [] },
+      data: { stage: "__hitl__", isHitl: true, inscription: null, primaryProvider: null, fallbackProvider: null },
     });
     edges.push({
       id: "pass4->hitl",

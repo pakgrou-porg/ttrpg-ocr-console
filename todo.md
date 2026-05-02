@@ -215,3 +215,51 @@
 - [x] Add tests for pipeline job management procedures
 - [x] Add tests for page attempt tracking procedures
 - [x] All 127 tests passing after schema and router changes
+
+## Phase: Provider Registry + Stage Inscriptions Redesign
+
+### Schema Changes
+- [ ] Enhance llmProviders table: add displayName, modelId, port, contextLength, maxTokens, defaultTemperature, capabilities, isDefault fields
+- [ ] Create stageInscriptions table: stage (unique), primaryProviderId, fallbackProviderId, systemPrompt, temperature, maxTokens, llmSettings, isActive
+- [ ] Remove modelAssignments table (replaced by stageInscriptions)
+- [ ] Run pnpm db:push after schema changes
+
+### Server Changes
+- [ ] Update db.ts: add stageInscriptions helpers (upsert, list, getByStage), update llmProviders helpers for new fields
+- [ ] Update routers.ts: replace assignments.* procedures with inscriptions.* procedures (list, upsert, getByStage, delete)
+- [ ] Update providers.* procedures to handle new fields (displayName, modelId, port, capabilities, isDefault, defaultTemperature)
+- [ ] Remove all modelAssignments references from routers.ts and db.ts
+
+### UI Changes (The Artificers)
+- [ ] Replace "Model Assignments" tab with "Stage Inscriptions" tab
+- [ ] Build Stage Inscriptions UI: one row per pipeline stage, primary + fallback provider pickers, system prompt, temperature, maxTokens
+- [ ] Enhance Provider Registry UI: add displayName, modelId, port, contextLength, maxTokens, defaultTemperature, capabilities, isDefault fields
+- [ ] Add "Test Connection" button per provider (sends a real ping to verify connectivity)
+- [ ] Show provider type icon and model ID in inscription provider pickers
+
+### Tests
+- [ ] Update providers.test.ts for new llmProviders fields
+- [ ] Add inscriptions.test.ts for stageInscriptions CRUD procedures
+- [ ] Remove/replace modelAssignments tests
+
+### GitHub
+- [ ] Push all changes to GitHub after checkpoint
+
+## Phase: Provider Registry + Stage Inscriptions Redesign
+
+- [x] Analyse orchestra-sdk and orchestra-dashboard repos for provider/assignment patterns
+- [x] Design new schema: enhanced llmProviders + stageInscriptions (replaces modelAssignments)
+- [x] Add displayName, port, modelId, contextLength, maxTokens, defaultTemperature, capabilities, isDefault to llmProviders
+- [x] Create stageInscriptions table: stage (unique), primaryProviderId, fallbackProviderId, systemPrompt, temperature, maxTokens, llmSettings, isActive
+- [x] Drop modelAssignments table
+- [x] Apply DB migration (db:push + manual ALTER TABLE for MySQL JSON column compatibility)
+- [x] Update db.ts helpers: getAllStageInscriptions, getStageInscriptionByStage, upsertStageInscription, updateStageInscription, deleteStageInscription
+- [x] Update routers.ts: assignments.list, byStage, upsert, update, delete, stages, topology — all using new inscription shape
+- [x] Update providers.create/update input to include new fields (displayName, modelId, port, etc.)
+- [x] Rewrite TheAssignments.tsx: one row per stage, primary/fallback provider pickers, inline prompt/temperature/maxTokens editing
+- [x] Update TheArtificers.tsx: new provider fields in Create/Edit dialogs
+- [x] Update PipelineVisualization.tsx: TopologyStage uses inscription+primaryProvider+fallbackProvider shape
+- [x] Update providers.test.ts: add displayName to all providers.create calls, replace assignments.create with assignments.upsert
+- [x] Update features.test.ts: topology tests use new inscription+provider shape
+- [x] All 128 tests passing
+- [ ] Push to GitHub

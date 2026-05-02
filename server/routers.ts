@@ -17,7 +17,7 @@ import {
   recordTelemetryEvent, getTelemetryEvents, getTelemetrySummary,
   pingDatabase,
   getAllLlmProviders, getLlmProviderById, createLlmProvider, updateLlmProvider, deleteLlmProvider,
-  getAllModelAssignments, getModelAssignmentsByStage, createModelAssignment, updateModelAssignment, deleteModelAssignment,
+  getAllStageInscriptions, getStageInscriptionByStage, upsertStageInscription, updateStageInscription, deleteStageInscription,
   getAllDbConnections, getDbConnectionById, createDbConnection, updateDbConnection, deleteDbConnection, setActiveDbConnection,
   getDocumentById, getAllDocuments, createDocument, updateDocument, deleteDocument, searchDocuments,
   getPagesByDocumentId, getPageById, getPageByPhash, createDocumentPage, updateDocumentPage,
@@ -478,11 +478,20 @@ export const appRouter = router({
       }),
 
     /** Create a new LLM provider */
+    /** Create a new LLM provider */
     create: adminProcedure
       .input(z.object({
+        displayName: z.string().max(256),
         name: z.string().max(128),
         providerType: z.enum(PROVIDER_TYPES),
         baseUrl: z.string().max(512),
+        port: z.number().int().optional(),
+        modelId: z.string().max(256).optional(),
+        contextLength: z.number().int().optional(),
+        maxTokens: z.number().int().optional(),
+        defaultTemperature: z.number().min(0).max(2).optional(),
+        capabilities: z.array(z.string()).optional(),
+        isDefault: z.boolean().optional(),
         apiKey: z.string().optional(),
         notes: z.string().optional(),
         availableModels: z.array(z.string()).optional(),
@@ -491,7 +500,6 @@ export const appRouter = router({
         let encryptedApiKey: string | undefined;
         let keyIv: string | undefined;
         let keyAuthTag: string | undefined;
-
         let keyPrefix: string | undefined;
         let keySuffix: string | undefined;
         let keyLength: number | undefined;
@@ -501,17 +509,32 @@ export const appRouter = router({
           encryptedApiKey = encrypted.ciphertext;
           keyIv = encrypted.iv;
           keyAuthTag = encrypted.authTag;
-          // P1: Store display hint at write time to avoid decrypting for list views
           const hint = storeSecretHint(input.apiKey);
           keyPrefix = hint.keyPrefix;
           keySuffix = hint.keySuffix;
           keyLength = hint.keyLength;
         }
 
+        // If this is set as default, clear isDefault on all others first
+        if (input.isDefault) {
+          const allProviders = await getAllLlmProviders();
+          for (const p of allProviders) {
+            if (p.isDefault) await updateLlmProvider(p.id, { isDefault: false });
+          }
+        }
+
         const id = await createLlmProvider({
+          displayName: input.displayName,
           name: input.name,
           providerType: input.providerType,
           baseUrl: input.baseUrl,
+          port: input.port,
+          modelId: input.modelId,
+          contextLength: input.contextLength,
+          maxTokens: input.maxTokens,
+          defaultTemperature: input.defaultTemperature ?? 0.2,
+          capabilities: input.capabilities ?? [],
+          isDefault: input.isDefault ?? false,
           encryptedApiKey,
           keyIv,
           keyAuthTag,
@@ -528,9 +551,17 @@ export const appRouter = router({
     update: adminProcedure
       .input(z.object({
         id: z.number().int(),
+        displayName: z.string().max(256).optional(),
         name: z.string().max(128).optional(),
         providerType: z.enum(PROVIDER_TYPES).optional(),
         baseUrl: z.string().max(512).optional(),
+        port: z.number().int().optional(),
+        modelId: z.string().max(256).optional(),
+        contextLength: z.number().int().optional(),
+        maxTokens: z.number().int().optional(),
+        defaultTemperature: z.number().min(0).max(2).optional(),
+        capabilities: z.array(z.string()).optional(),
+        isDefault: z.boolean().optional(),
         apiKey: z.string().optional(),
         clearApiKey: z.boolean().optional(),
         isActive: z.boolean().optional(),
@@ -539,9 +570,25 @@ export const appRouter = router({
       }))
       .mutation(async ({ input }) => {
         const updates: Record<string, unknown> = {};
+        if (input.displayName !== undefined) updates.displayName = input.displayName;
         if (input.name !== undefined) updates.name = input.name;
         if (input.providerType !== undefined) updates.providerType = input.providerType;
         if (input.baseUrl !== undefined) updates.baseUrl = input.baseUrl;
+        if (input.port !== undefined) updates.port = input.port;
+        if (input.modelId !== undefined) updates.modelId = input.modelId;
+        if (input.contextLength !== undefined) updates.contextLength = input.contextLength;
+        if (input.maxTokens !== undefined) updates.maxTokens = input.maxTokens;
+        if (input.defaultTemperature !== undefined) updates.defaultTemperature = input.defaultTemperature;
+        if (input.capabilities !== undefined) updates.capabilities = input.capabilities;
+        if (input.isDefault !== undefined) {
+          if (input.isDefault) {
+            const allProviders = await getAllLlmProviders();
+            for (const p of allProviders) {
+              if (p.isDefault && p.id !== input.id) await updateLlmProvider(p.id, { isDefault: false });
+            }
+          }
+          updates.isDefault = input.isDefault;
+        }
         if (input.isActive !== undefined) updates.isActive = input.isActive;
         if (input.notes !== undefined) updates.notes = input.notes;
         if (input.availableModels !== undefined) updates.availableModels = input.availableModels;
@@ -558,7 +605,6 @@ export const appRouter = router({
           updates.encryptedApiKey = encrypted.ciphertext;
           updates.keyIv = encrypted.iv;
           updates.keyAuthTag = encrypted.authTag;
-          // P1: Update display hint at write time
           const hint = storeSecretHint(input.apiKey);
           updates.keyPrefix = hint.keyPrefix;
           updates.keySuffix = hint.keySuffix;
@@ -623,70 +669,93 @@ export const appRouter = router({
     }),
   }),
 
-  // ─── Model Assignments (The Assignments) ──────────────────────────────────
+  // ─── Stage Inscriptions (The Assignments) ────────────────────────────────────
   assignments: router({
-    /** List all model assignments with provider info */
+    /**
+     * List all stage inscriptions with primary and fallback provider info.
+     * Returns one inscription per stage (or null if no inscription exists).
+     */
     list: adminProcedure.query(async () => {
-      const assignments = await getAllModelAssignments();
+      const inscriptions = await getAllStageInscriptions();
       const providers = await getAllLlmProviders();
-      return assignments.map(a => ({
-        ...a,
-        providerName: providers.find(p => p.id === a.providerId)?.name ?? "Unknown",
+      const providerMap = new Map(providers.map(p => [p.id, p]));
+      return inscriptions.map(i => ({
+        ...i,
+        primaryProvider: i.primaryProviderId ? providerMap.get(i.primaryProviderId) ?? null : null,
+        fallbackProvider: i.fallbackProviderId ? providerMap.get(i.fallbackProviderId) ?? null : null,
       }));
     }),
 
-    /** Get assignments for a specific pipeline stage */
+    /** Get the inscription for a specific pipeline stage */
     byStage: adminProcedure
       .input(z.object({ stage: z.enum(PIPELINE_STAGES) }))
       .query(async ({ input }) => {
-        return getModelAssignmentsByStage(input.stage);
+        const inscription = await getStageInscriptionByStage(input.stage);
+        if (!inscription) return null;
+        const providers = await getAllLlmProviders();
+        const providerMap = new Map(providers.map(p => [p.id, p]));
+        return {
+          ...inscription,
+          primaryProvider: inscription.primaryProviderId ? providerMap.get(inscription.primaryProviderId) ?? null : null,
+          fallbackProvider: inscription.fallbackProviderId ? providerMap.get(inscription.fallbackProviderId) ?? null : null,
+        };
       }),
 
-    /** Create a new model assignment */
-    create: adminProcedure
+    /**
+     * Upsert a stage inscription.
+     * Creates a new inscription if none exists for the stage, or updates the existing one.
+     * A provider instance can be used as primary on multiple stages and fallback on others.
+     */
+    upsert: adminProcedure
       .input(z.object({
-        providerId: z.number().int(),
-        modelName: z.string().max(256),
-        pipelineStage: z.enum(PIPELINE_STAGES),
-        priority: z.number().int().min(1).max(10).default(1),
-        configOverrides: z.record(z.string(), z.unknown()).optional(),
+        stage: z.enum(PIPELINE_STAGES),
+        primaryProviderId: z.number().int().nullable().optional(),
+        fallbackProviderId: z.number().int().nullable().optional(),
+        systemPrompt: z.string().optional(),
+        temperature: z.number().min(0).max(2).nullable().optional(),
+        maxTokens: z.number().int().nullable().optional(),
+        llmSettings: z.record(z.string(), z.unknown()).nullable().optional(),
+        isActive: z.boolean().optional(),
       }))
       .mutation(async ({ input }) => {
-        const id = await createModelAssignment({
-          providerId: input.providerId,
-          modelName: input.modelName,
-          pipelineStage: input.pipelineStage,
-          priority: input.priority,
-          llmSettings: input.configOverrides as Record<string, unknown> | undefined,
+        const id = await upsertStageInscription({
+          stage: input.stage,
+          primaryProviderId: input.primaryProviderId ?? null,
+          fallbackProviderId: input.fallbackProviderId ?? null,
+          systemPrompt: input.systemPrompt,
+          temperature: input.temperature ?? null,
+          maxTokens: input.maxTokens ?? null,
+          llmSettings: input.llmSettings as Record<string, unknown> | null | undefined,
+          isActive: input.isActive ?? true,
         });
         return { success: true, id };
       }),
 
-    /** Update a model assignment */
+    /** Update an existing inscription by ID */
     update: adminProcedure
       .input(z.object({
         id: z.number().int(),
-        modelName: z.string().max(256).optional(),
-        pipelineStage: z.enum(PIPELINE_STAGES).optional(),
-        priority: z.number().int().min(1).max(10).optional(),
-        isActive: z.boolean().optional(),
+        primaryProviderId: z.number().int().nullable().optional(),
+        fallbackProviderId: z.number().int().nullable().optional(),
         systemPrompt: z.string().optional(),
-        temperature: z.number().min(0).max(2).optional(),
-        configOverrides: z.record(z.string(), z.unknown()).optional(),
+        temperature: z.number().min(0).max(2).nullable().optional(),
+        maxTokens: z.number().int().nullable().optional(),
+        llmSettings: z.record(z.string(), z.unknown()).nullable().optional(),
+        isActive: z.boolean().optional(),
       }))
       .mutation(async ({ input }) => {
-        const { id, configOverrides, ...rest } = input;
+        const { id, llmSettings, ...rest } = input;
         const updates: Record<string, unknown> = { ...rest };
-        if (configOverrides !== undefined) updates.llmSettings = configOverrides;
-        await updateModelAssignment(id, updates as any);
+        if (llmSettings !== undefined) updates.llmSettings = llmSettings;
+        await updateStageInscription(id, updates as any);
         return { success: true };
       }),
 
-    /** Delete a model assignment */
+    /** Delete an inscription by ID */
     delete: adminProcedure
       .input(z.object({ id: z.number().int() }))
       .mutation(async ({ input }) => {
-        await deleteModelAssignment(input.id);
+        await deleteStageInscription(input.id);
         return { success: true };
       }),
 
@@ -699,39 +768,47 @@ export const appRouter = router({
     }),
 
     /**
-     * Pipeline topology — returns all stages with their active assignments
-     * and provider info, structured for the relationship visualization.
+     * Pipeline topology — returns all stages with their inscription and provider info.
+     * Used by the Pipeline Map visualization.
      */
     topology: adminProcedure.query(async () => {
-      const assignments = await getAllModelAssignments();
+      const inscriptions = await getAllStageInscriptions();
       const providers = await getAllLlmProviders();
-
       const providerMap = new Map(providers.map(p => [p.id, p]));
+      const inscriptionMap = new Map(inscriptions.map(i => [i.stage, i]));
 
-      // Group assignments by stage
-      const stageMap = new Map<string, typeof assignments>();
-      for (const a of assignments) {
-        const list = stageMap.get(a.pipelineStage) ?? [];
-        list.push(a);
-        stageMap.set(a.pipelineStage, list);
-      }
-
-      // Build topology for every known stage (even empty ones)
-      return PIPELINE_STAGES.map(stage => ({
-        stage,
-        assignments: (stageMap.get(stage) ?? []).map(a => {
-          const provider = providerMap.get(a.providerId);
-          return {
-            id: a.id,
-            modelName: a.modelName,
-            priority: a.priority,
-            isActive: a.isActive,
-            providerName: provider?.name ?? "Unknown",
-            providerType: provider?.providerType ?? "unknown",
-            llmSettings: a.llmSettings ?? null,
-          };
-        }).sort((a, b) => a.priority - b.priority),
-      }));
+      return PIPELINE_STAGES.map(stage => {
+        const inscription = inscriptionMap.get(stage);
+        const primary = inscription?.primaryProviderId ? providerMap.get(inscription.primaryProviderId) : undefined;
+        const fallback = inscription?.fallbackProviderId ? providerMap.get(inscription.fallbackProviderId) : undefined;
+        return {
+          stage,
+          inscription: inscription ? {
+            id: inscription.id,
+            isActive: inscription.isActive,
+            systemPrompt: inscription.systemPrompt,
+            temperature: inscription.temperature,
+            maxTokens: inscription.maxTokens,
+            llmSettings: inscription.llmSettings ?? null,
+          } : null,
+          primaryProvider: primary ? {
+            id: primary.id,
+            displayName: primary.displayName,
+            name: primary.name,
+            modelId: primary.modelId,
+            providerType: primary.providerType,
+            isActive: primary.isActive,
+          } : null,
+          fallbackProvider: fallback ? {
+            id: fallback.id,
+            displayName: fallback.displayName,
+            name: fallback.name,
+            modelId: fallback.modelId,
+            providerType: fallback.providerType,
+            isActive: fallback.isActive,
+          } : null,
+        };
+      });
     }),
   }),
 

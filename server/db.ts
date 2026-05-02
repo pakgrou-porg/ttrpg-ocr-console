@@ -16,7 +16,7 @@ import {
   hitlQueue, InsertHitlQueueItem,
   pageProcessingAttempts, InsertPageProcessingAttempt,
   llmProviders, InsertLlmProvider,
-  modelAssignments, InsertModelAssignment,
+  stageInscriptions, InsertStageInscription,
   dbConnections, InsertDbConnection,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
@@ -521,45 +521,67 @@ export async function updateLlmProvider(id: number, updates: Partial<InsertLlmPr
 export async function deleteLlmProvider(id: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  // Also delete any model assignments for this provider
-  await db.delete(modelAssignments).where(eq(modelAssignments.providerId, id));
+  // Clear any inscriptions that reference this provider
+  await db.update(stageInscriptions)
+    .set({ primaryProviderId: null })
+    .where(eq(stageInscriptions.primaryProviderId, id));
+  await db.update(stageInscriptions)
+    .set({ fallbackProviderId: null })
+    .where(eq(stageInscriptions.fallbackProviderId, id));
   await db.delete(llmProviders).where(eq(llmProviders.id, id));
 }
 
-// ─── Model Assignments ──────────────────────────────────────────────────────
+// ─── Stage Inscriptions ─────────────────────────────────────────────────────
 
-export async function getAllModelAssignments() {
+export async function getAllStageInscriptions() {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(modelAssignments).orderBy(modelAssignments.pipelineStage, modelAssignments.priority);
+  return db.select().from(stageInscriptions).orderBy(stageInscriptions.stage);
 }
 
-export async function getModelAssignmentsByStage(stage: string) {
+export async function getStageInscriptionByStage(stage: string) {
   const db = await getDb();
-  if (!db) return [];
-  return db.select().from(modelAssignments)
-    .where(eq(modelAssignments.pipelineStage, stage))
-    .orderBy(modelAssignments.priority);
+  if (!db) return undefined;
+  const result = await db.select().from(stageInscriptions)
+    .where(eq(stageInscriptions.stage, stage)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
 }
 
-export async function createModelAssignment(assignment: InsertModelAssignment) {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-  const result = await db.insert(modelAssignments).values(assignment);
-  return result[0].insertId;
-}
-
-export async function updateModelAssignment(id: number, updates: Partial<InsertModelAssignment>) {
+export async function upsertStageInscription(inscription: InsertStageInscription) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(modelAssignments).set(updates).where(eq(modelAssignments.id, id));
+  // Use INSERT ... ON DUPLICATE KEY UPDATE for upsert on unique stage column
+  const existing = await getStageInscriptionByStage(inscription.stage);
+  if (existing) {
+    await db.update(stageInscriptions)
+      .set({ ...inscription, updatedAt: new Date() })
+      .where(eq(stageInscriptions.stage, inscription.stage));
+    return existing.id;
+  } else {
+    const result = await db.insert(stageInscriptions).values(inscription);
+    return result[0].insertId;
+  }
 }
 
-export async function deleteModelAssignment(id: number) {
+export async function updateStageInscription(id: number, updates: Partial<InsertStageInscription>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.delete(modelAssignments).where(eq(modelAssignments.id, id));
+  await db.update(stageInscriptions).set(updates).where(eq(stageInscriptions.id, id));
 }
+
+export async function deleteStageInscription(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(stageInscriptions).where(eq(stageInscriptions.id, id));
+}
+
+// ─── Legacy aliases for backward compatibility ──────────────────────────────
+export const getAllModelAssignments = getAllStageInscriptions;
+export const getModelAssignmentsByStage = (stage: string) =>
+  getStageInscriptionByStage(stage).then(r => r ? [r] : []);
+export const createModelAssignment = upsertStageInscription;
+export const updateModelAssignment = updateStageInscription;
+export const deleteModelAssignment = deleteStageInscription;
 
 // ─── Database Connections ───────────────────────────────────────────────────
 

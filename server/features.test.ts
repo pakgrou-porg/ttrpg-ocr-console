@@ -289,31 +289,33 @@ describe("assignments.topology", () => {
     expect(topology.length).toBeGreaterThan(0);
     for (const entry of topology) {
       expect(entry).toHaveProperty("stage");
-      expect(Array.isArray(entry.assignments)).toBe(true);
+      // New shape: inscription (nullable) + primaryProvider (nullable) + fallbackProvider (nullable)
+      expect(entry).toHaveProperty("inscription");
+      expect(entry).toHaveProperty("primaryProvider");
+      expect(entry).toHaveProperty("fallbackProvider");
     }
   });
 
-  it("returns assignments with providerName and priority when assignments exist", async () => {
+  it("returns inscription with primaryProvider when an inscription exists", async () => {
     const caller = appRouter.createCaller(makeCtx("admin"));
 
-    // Use a unique suffix for both provider name and model name to avoid stale data
     const suffix = Date.now();
     const uniqueName = `Topology Test Provider ${suffix}`;
-    const uniqueModel = `gpt-4o-topology-test-${suffix}`;
 
     const provider = await caller.providers.create({
       name: uniqueName,
+      displayName: uniqueName,
       providerType: "openai_compatible",
       baseUrl: "https://api.openai.com/v1",
       apiKey: "sk-topology-test-key",
       isActive: true,
     });
 
-    const created = await caller.assignments.create({
-      providerId: provider.id,
-      pipelineStage: "ocr_extraction",
-      modelName: uniqueModel,
-      priority: 1,
+    const inscription = await caller.assignments.upsert({
+      stage: "ocr_extraction",
+      primaryProviderId: provider.id,
+      systemPrompt: "Topology test prompt",
+      temperature: 0.1,
       isActive: true,
     });
 
@@ -321,16 +323,12 @@ describe("assignments.topology", () => {
       const topology = await caller.assignments.topology();
       const stage = topology.find(t => t.stage === "ocr_extraction");
       expect(stage).toBeDefined();
-
-      // Find by the unique model name tied to this specific test run
-      const assignment = stage!.assignments.find(a => a.modelName === uniqueModel);
-      expect(assignment).toBeDefined();
-      expect(assignment!.providerName).toBe(uniqueName);
-      expect(assignment!.priority).toBe(1);
-      expect(assignment!.isActive).toBe(true);
+      expect(stage!.inscription).not.toBeNull();
+      expect(stage!.primaryProvider).not.toBeNull();
+      expect(stage!.primaryProvider!.displayName).toBe(uniqueName);
+      expect(stage!.inscription!.systemPrompt).toBe("Topology test prompt");
     } finally {
-      // Always clean up even if assertions fail
-      await caller.assignments.delete({ id: created.id });
+      await caller.assignments.delete({ id: inscription.id });
       await caller.providers.delete({ id: provider.id });
     }
   });

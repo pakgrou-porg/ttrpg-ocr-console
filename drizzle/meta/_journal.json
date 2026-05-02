@@ -71,6 +71,20 @@
       "when": 1777740804884,
       "tag": "0009_black_bastion",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "5",
+      "when": 1777744385149,
+      "tag": "0010_clever_famine",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "5",
+      "when": 1777744651743,
+      "tag": "0011_misty_bromley",
+      "breakpoints": true
     }
   ]
 }

@@ -1,93 +1,131 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import {
-  GitBranch, Plus, Trash2, Loader2, Layers, ChevronDown, ChevronUp,
-  Settings2, Thermometer, FileText, Edit3, Check, X,
+  GitBranch, Loader2, Layers, ChevronDown, ChevronUp,
+  Settings2, Thermometer, FileText, Check, Cpu, Cloud,
+  AlertCircle, Pencil, Trash2, Hash,
 } from "lucide-react";
 
-// ─── Phase groupings for visual organisation ─────────────────────────────────
+// ─── Phase groupings ──────────────────────────────────────────────────────────
 
-const PHASE_GROUPS: Record<string, { label: string; description: string; color: string }> = {
+const PHASE_GROUPS: Record<string, { label: string; description: string; color: string; badgeClass: string }> = {
   "Phase 1 — Ingestion & Layout": {
     label: "Phase 1 — Ingestion & Layout",
-    description: "Non-OCR tasks: document registration, PDF conversion, layout classification, bbox detection",
+    description: "Non-OCR tasks: document registration, PDF conversion, layout classification, bbox detection, child image extraction",
     color: "text-blue-400",
+    badgeClass: "border-blue-500/50 text-blue-400 bg-blue-950/30",
   },
   "Phase 2 — OCR Extraction": {
     label: "Phase 2 — OCR Extraction",
-    description: "Multi-step OCR: layout analysis, content extraction, quality validation, retry escalation",
+    description: "Multi-step OCR: content extraction, quality validation, multi-pass retry escalation, summarisation",
     color: "text-amber-400",
+    badgeClass: "border-amber-500/50 text-amber-400 bg-amber-950/30",
   },
   "Phase 3 — Artifact Storage": {
     label: "Phase 3 — Artifact Storage",
-    description: "Persisting all pipeline outputs: JSONs, images, cross-page continuity data",
+    description: "Persisting all pipeline outputs: per-page JSONs, raw/preprocessed PNGs, embeddings, database load",
     color: "text-green-400",
+    badgeClass: "border-green-500/50 text-green-400 bg-green-950/30",
   },
 };
 
 const STAGE_PHASE_MAP: Record<string, string> = {
-  layout_analysis:        "Phase 1 — Ingestion & Layout",
-  bbox_detection:         "Phase 1 — Ingestion & Layout",
-  content_type_classify:  "Phase 1 — Ingestion & Layout",
-  ocr_extraction:         "Phase 2 — OCR Extraction",
-  content_break_detect:   "Phase 2 — OCR Extraction",
-  quality_validation:     "Phase 2 — OCR Extraction",
-  pass2_cloud_extraction: "Phase 2 — OCR Extraction",
-  pass3_cloud_extraction: "Phase 2 — OCR Extraction",
-  pass4_cloud_extraction: "Phase 2 — OCR Extraction",
-  summarisation:          "Phase 2 — OCR Extraction",
-  artifact_storage:       "Phase 3 — Artifact Storage",
-  embedding_generation:   "Phase 3 — Artifact Storage",
-  database_load:          "Phase 3 — Artifact Storage",
+  document_registration:   "Phase 1 — Ingestion & Layout",
+  document_intelligence:   "Phase 1 — Ingestion & Layout",
+  pdf_to_png:              "Phase 1 — Ingestion & Layout",
+  layout_analysis:         "Phase 1 — Ingestion & Layout",
+  layout_classification:   "Phase 1 — Ingestion & Layout",
+  bbox_detection:          "Phase 1 — Ingestion & Layout",
+  content_type_classify:   "Phase 1 — Ingestion & Layout",
+  child_image_extraction:  "Phase 1 — Ingestion & Layout",
+  ocr_extraction:          "Phase 2 — OCR Extraction",
+  content_break_detect:    "Phase 2 — OCR Extraction",
+  quality_validation:      "Phase 2 — OCR Extraction",
+  pass_comparison:         "Phase 2 — OCR Extraction",
+  pass2_cloud_extraction:  "Phase 2 — OCR Extraction",
+  pass3_cloud_extraction:  "Phase 2 — OCR Extraction",
+  pass4_cloud_extraction:  "Phase 2 — OCR Extraction",
+  summarisation:           "Phase 2 — OCR Extraction",
+  artifact_storage:        "Phase 3 — Artifact Storage",
+  embedding_generation:    "Phase 3 — Artifact Storage",
+  database_load:           "Phase 3 — Artifact Storage",
 };
 
-// ─── Edit Assignment Dialog ───────────────────────────────────────────────────
+// ─── Inscription Edit Dialog ──────────────────────────────────────────────────
 
-interface EditDialogProps {
-  assignment: {
-    id: number;
-    modelName: string;
-    pipelineStage: string;
-    priority: number;
-    isActive: boolean;
-    providerName: string;
+interface InscriptionDialogProps {
+  stage: string;
+  stageLabel: string;
+  inscription: {
+    id?: number;
+    primaryProviderId?: number | null;
+    fallbackProviderId?: number | null;
     systemPrompt?: string | null;
     temperature?: number | null;
-    llmSettings?: Record<string, unknown> | null;
-  };
+    maxTokens?: number | null;
+    isActive?: boolean;
+  } | null;
+  providers: { id: number; displayName: string; name: string; modelId: string | null; providerType: string; isActive: boolean }[];
   onClose: () => void;
+  onSaved: () => void;
 }
 
-function EditAssignmentDialog({ assignment, onClose }: EditDialogProps) {
-  const [systemPrompt, setSystemPrompt] = useState(assignment.systemPrompt ?? "");
+function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose, onSaved }: InscriptionDialogProps) {
+  const [primaryProviderId, setPrimaryProviderId] = useState<string>(
+    inscription?.primaryProviderId ? String(inscription.primaryProviderId) : ""
+  );
+  const [fallbackProviderId, setFallbackProviderId] = useState<string>(
+    inscription?.fallbackProviderId ? String(inscription.fallbackProviderId) : ""
+  );
+  const [systemPrompt, setSystemPrompt] = useState(inscription?.systemPrompt ?? "");
   const [temperature, setTemperature] = useState<string>(
-    assignment.temperature !== null && assignment.temperature !== undefined
-      ? String(assignment.temperature)
+    inscription?.temperature !== null && inscription?.temperature !== undefined
+      ? String(inscription.temperature)
       : ""
   );
+  const [maxTokens, setMaxTokens] = useState<string>(
+    inscription?.maxTokens !== null && inscription?.maxTokens !== undefined
+      ? String(inscription.maxTokens)
+      : ""
+  );
+  const [isActive, setIsActive] = useState(inscription?.isActive ?? true);
 
-  const updateMutation = trpc.assignments.update.useMutation({
-    onSuccess: () => { toast.success("Assignment updated."); onClose(); },
+  const upsertMutation = trpc.assignments.upsert.useMutation({
+    onSuccess: () => {
+      toast.success(`Inscription saved for ${stageLabel}.`);
+      onSaved();
+      onClose();
+    },
     onError: (e) => toast.error(e.message),
   });
 
   const handleSave = () => {
-    updateMutation.mutate({
-      id: assignment.id,
+    upsertMutation.mutate({
+      stage: stage as any,
+      primaryProviderId: primaryProviderId ? Number(primaryProviderId) : null,
+      fallbackProviderId: fallbackProviderId ? Number(fallbackProviderId) : null,
       systemPrompt: systemPrompt || undefined,
-      temperature: temperature !== "" ? Number(temperature) : undefined,
+      temperature: temperature !== "" ? Number(temperature) : null,
+      maxTokens: maxTokens !== "" ? Number(maxTokens) : null,
+      isActive,
     });
   };
+
+  const activeProviders = providers.filter(p => p.isActive);
+
+  const providerLabel = (p: typeof providers[0]) =>
+    `${p.displayName || p.name}${p.modelId ? ` — ${p.modelId}` : ""}`;
 
   return (
     <Dialog open onOpenChange={onClose}>
@@ -95,45 +133,96 @@ function EditAssignmentDialog({ assignment, onClose }: EditDialogProps) {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Settings2 className="h-5 w-5 text-amber-400" />
-            Configure Assignment
+            Inscribe Stage: {stageLabel}
           </DialogTitle>
           <DialogDescription>
-            <span className="font-mono text-sm">{assignment.modelName}</span>
-            {" "}via {assignment.providerName} — stage:{" "}
-            <span className="font-mono text-xs">{assignment.pipelineStage}</span>
+            Configure the primary and fallback providers for{" "}
+            <span className="font-mono text-xs">{stage}</span>, along with the stage-specific
+            system prompt and generation settings.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-5">
-          {/* System Prompt */}
+          {/* Primary Provider */}
           <div className="space-y-2">
             <Label className="flex items-center gap-2">
-              <FileText className="h-4 w-4 text-amber-400" />
-              System Prompt
-              <span className="text-muted-foreground text-xs font-normal">(stage-specific instructions for this model)</span>
+              <Cpu className="h-4 w-4 text-violet-400" />
+              Primary Provider
             </Label>
-            <Textarea
-              placeholder={`Enter the system prompt for the ${assignment.pipelineStage} stage…\n\nExample: "You are an expert document layout analyzer for TTRPG materials. Your task is to identify all distinct visual elements and their bounding boxes."`}
-              value={systemPrompt}
-              onChange={e => setSystemPrompt(e.target.value)}
-              className="min-h-[200px] font-mono text-xs resize-y bg-muted/30"
-            />
+            <Select value={primaryProviderId} onValueChange={setPrimaryProviderId}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select primary provider…" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">— None —</SelectItem>
+                {activeProviders.map(p => (
+                  <SelectItem key={p.id} value={String(p.id)}>
+                    {providerLabel(p)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <p className="text-xs text-muted-foreground">
-              This prompt is injected as the system message for every LLM call at this stage.
-              Leave blank to use the global default from the System Prompts library.
+              The first provider to be called for this stage. Typically a local model for cost efficiency.
+            </p>
+          </div>
+
+          {/* Fallback Provider */}
+          <div className="space-y-2">
+            <Label className="flex items-center gap-2">
+              <Cloud className="h-4 w-4 text-blue-400" />
+              Fallback Provider
+              <span className="text-muted-foreground text-xs font-normal">(optional)</span>
+            </Label>
+            <Select value={fallbackProviderId} onValueChange={setFallbackProviderId}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select fallback provider…" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">— None —</SelectItem>
+                {activeProviders.map(p => (
+                  <SelectItem key={p.id} value={String(p.id)}>
+                    {providerLabel(p)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Used when the primary provider fails or is unavailable. Typically a cloud model.
             </p>
           </div>
 
           <Separator />
 
-          {/* Temperature */}
+          {/* System Prompt */}
           <div className="space-y-2">
             <Label className="flex items-center gap-2">
-              <Thermometer className="h-4 w-4 text-amber-400" />
-              Temperature
-              <span className="text-muted-foreground text-xs font-normal">(0.0 = deterministic, 1.0 = creative)</span>
+              <FileText className="h-4 w-4 text-amber-400" />
+              System Prompt
+              <span className="text-muted-foreground text-xs font-normal">(stage-specific instructions)</span>
             </Label>
-            <div className="flex items-center gap-3">
+            <Textarea
+              placeholder={`Enter the system prompt for the ${stageLabel} stage…\n\nExample: "You are an expert document layout analyzer for TTRPG materials. Your task is to identify all distinct visual elements and their bounding boxes on the page."`}
+              value={systemPrompt}
+              onChange={e => setSystemPrompt(e.target.value)}
+              className="min-h-[160px] font-mono text-xs resize-y bg-muted/30"
+            />
+            <p className="text-xs text-muted-foreground">
+              Injected as the system message for every LLM call at this stage.
+              Leave blank to use no system prompt (or the provider default).
+            </p>
+          </div>
+
+          <Separator />
+
+          {/* Temperature + Max Tokens */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label className="flex items-center gap-2">
+                <Thermometer className="h-4 w-4 text-amber-400" />
+                Temperature
+                <span className="text-muted-foreground text-xs font-normal">(0.0–2.0)</span>
+              </Label>
               <Input
                 type="number"
                 min={0}
@@ -142,10 +231,10 @@ function EditAssignmentDialog({ assignment, onClose }: EditDialogProps) {
                 placeholder="e.g. 0.1"
                 value={temperature}
                 onChange={e => setTemperature(e.target.value)}
-                className="w-32 bg-muted/30"
+                className="bg-muted/30"
               />
-              <div className="flex gap-1">
-                {[0.0, 0.1, 0.3, 0.7, 1.0].map(t => (
+              <div className="flex flex-wrap gap-1">
+                {[0.0, 0.1, 0.3, 0.5, 0.7, 1.0].map(t => (
                   <Badge
                     key={t}
                     variant="outline"
@@ -156,19 +245,52 @@ function EditAssignmentDialog({ assignment, onClose }: EditDialogProps) {
                   </Badge>
                 ))}
               </div>
+              <p className="text-xs text-muted-foreground">
+                0.0–0.1 for OCR/extraction; 0.3–0.5 for summarisation. Blank = provider default.
+              </p>
             </div>
-            <p className="text-xs text-muted-foreground">
-              Recommended: 0.0–0.1 for OCR/extraction stages, 0.3–0.5 for summarisation, 0.7+ for creative tasks.
-              Leave blank to use the provider default.
-            </p>
+
+            <div className="space-y-2">
+              <Label className="flex items-center gap-2">
+                <Hash className="h-4 w-4 text-amber-400" />
+                Max Tokens
+                <span className="text-muted-foreground text-xs font-normal">(optional)</span>
+              </Label>
+              <Input
+                type="number"
+                min={1}
+                placeholder="e.g. 4096"
+                value={maxTokens}
+                onChange={e => setMaxTokens(e.target.value)}
+                className="bg-muted/30"
+              />
+              <p className="text-xs text-muted-foreground">
+                Override the provider's max token limit for this stage. Blank = provider default.
+              </p>
+            </div>
+          </div>
+
+          <Separator />
+
+          {/* Active toggle */}
+          <div className="flex items-center justify-between rounded-lg border p-3 bg-muted/20">
+            <div>
+              <Label>Inscription Active</Label>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Inactive inscriptions are skipped during pipeline execution.
+              </p>
+            </div>
+            <Switch checked={isActive} onCheckedChange={setIsActive} />
           </div>
         </div>
 
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={handleSave} disabled={updateMutation.isPending}>
-            {updateMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Check className="h-4 w-4 mr-2" />}
-            Save Configuration
+          <Button onClick={handleSave} disabled={upsertMutation.isPending}>
+            {upsertMutation.isPending
+              ? <Loader2 className="h-4 w-4 animate-spin mr-2" />
+              : <Check className="h-4 w-4 mr-2" />}
+            Save Inscription
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -179,83 +301,60 @@ function EditAssignmentDialog({ assignment, onClose }: EditDialogProps) {
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function TheAssignments() {
-  const [isCreateOpen, setIsCreateOpen] = useState(false);
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingStage, setEditingStage] = useState<string | null>(null);
   const [expandedPhases, setExpandedPhases] = useState<Record<string, boolean>>({
     "Phase 1 — Ingestion & Layout": true,
     "Phase 2 — OCR Extraction": true,
     "Phase 3 — Artifact Storage": true,
   });
 
-  const { data: assignments, isLoading, refetch } = trpc.assignments.list.useQuery();
+  const { data: inscriptions, isLoading, refetch } = trpc.assignments.list.useQuery();
   const { data: stages } = trpc.assignments.stages.useQuery();
   const { data: providers } = trpc.providers.list.useQuery();
 
-  const createMutation = trpc.assignments.create.useMutation({
-    onSuccess: () => { toast.success("Assignment inscribed."); refetch(); setIsCreateOpen(false); },
-    onError: (e) => toast.error(e.message),
-  });
-
-  const updateMutation = trpc.assignments.update.useMutation({
-    onSuccess: () => { toast.success("Assignment updated."); refetch(); },
-    onError: (e) => toast.error(e.message),
-  });
-
   const deleteMutation = trpc.assignments.delete.useMutation({
-    onSuccess: () => { toast.success("Assignment removed."); refetch(); },
+    onSuccess: () => { toast.success("Inscription removed."); refetch(); },
     onError: (e) => toast.error(e.message),
   });
 
-  const [form, setForm] = useState({
-    providerId: 0,
-    modelName: "",
-    pipelineStage: "ocr_extraction" as string,
-    priority: 1,
-    systemPrompt: "",
-    temperature: "",
-  });
-
-  const resetForm = () => setForm({
-    providerId: 0, modelName: "", pipelineStage: "ocr_extraction", priority: 1,
-    systemPrompt: "", temperature: "",
-  });
-
-  const handleCreate = () => {
-    createMutation.mutate({
-      providerId: form.providerId,
-      modelName: form.modelName,
-      pipelineStage: form.pipelineStage as any,
-      priority: form.priority,
-      configOverrides: {
-        ...(form.systemPrompt ? { systemPrompt: form.systemPrompt } : {}),
-        ...(form.temperature !== "" ? { temperature: Number(form.temperature) } : {}),
-      },
-    });
-  };
-
-  // Group assignments by pipeline stage
-  const groupedByStage = assignments?.reduce((acc: Record<string, typeof assignments>, a) => {
-    const stage = a.pipelineStage;
-    if (!acc[stage]) acc[stage] = [];
-    acc[stage].push(a);
+  // Build a map of stage → inscription for fast lookup
+  const inscriptionByStage = (inscriptions ?? []).reduce((acc, i) => {
+    acc[i.stage] = i;
     return acc;
-  }, {} as Record<string, typeof assignments>) ?? {};
+  }, {} as Record<string, NonNullable<typeof inscriptions>[0]>);
 
   // Group stages by phase
-  const stagesByPhase = stages?.reduce((acc: Record<string, typeof stages>, s) => {
+  const stagesByPhase = (stages ?? []).reduce((acc, s) => {
     const phase = STAGE_PHASE_MAP[s.id] ?? "Other";
     if (!acc[phase]) acc[phase] = [];
     acc[phase].push(s);
     return acc;
-  }, {} as Record<string, typeof stages>) ?? {};
+  }, {} as Record<string, typeof stages>);
 
-  const editingAssignment = editingId !== null
-    ? assignments?.find(a => a.id === editingId)
+  const editingInscription = editingStage
+    ? inscriptionByStage[editingStage] ?? null
     : null;
+
+  const editingStageLabel = editingStage
+    ? (stages ?? []).find(s => s.id === editingStage)?.label ?? editingStage
+    : "";
 
   const togglePhase = (phase: string) => {
     setExpandedPhases(prev => ({ ...prev, [phase]: !prev[phase] }));
   };
+
+  const providerLabel = (p: { displayName: string; name: string; modelId: string | null }) =>
+    `${p.displayName || p.name}${p.modelId ? ` — ${p.modelId}` : ""}`;
+
+  const providerIcon = (providerType: string) => {
+    if (providerType === "lm_studio" || providerType === "openai_compatible") {
+      return <Cpu className="h-3.5 w-3.5 text-violet-400 flex-shrink-0" />;
+    }
+    return <Cloud className="h-3.5 w-3.5 text-blue-400 flex-shrink-0" />;
+  };
+
+  const totalInscribed = Object.keys(inscriptionByStage).length;
+  const totalStages = stages?.length ?? 0;
 
   return (
     <div className="space-y-6">
@@ -264,125 +363,57 @@ export default function TheAssignments() {
         <div>
           <h1 className="text-3xl font-bold font-serif flex items-center gap-3">
             <GitBranch className="h-8 w-8 text-amber-400" />
-            The Assignments
+            Stage Inscriptions
           </h1>
           <p className="text-muted-foreground mt-1">
-            Map models to pipeline stages. Each stage has its own system prompt, temperature, and fallback chain.
+            Assign a primary and fallback provider to each pipeline stage, and configure the stage-specific
+            system prompt and generation settings. A single provider can be used across multiple stages.
           </p>
         </div>
-        <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
-          <DialogTrigger asChild>
-            <Button onClick={resetForm}>
-              <Plus className="h-4 w-4 mr-2" /> Inscribe Assignment
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>Inscribe New Assignment</DialogTitle>
-              <DialogDescription>Assign a model to a pipeline stage with optional system prompt and temperature.</DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label>Pipeline Stage</Label>
-                <Select value={form.pipelineStage} onValueChange={v => setForm(f => ({ ...f, pipelineStage: v }))}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {Object.entries(stagesByPhase).map(([phase, phaseStages]) => (
-                      <div key={phase}>
-                        <div className="px-2 py-1 text-xs font-semibold text-muted-foreground uppercase tracking-wider">{phase}</div>
-                        {phaseStages?.map(s => (
-                          <SelectItem key={s.id} value={s.id}>{s.label}</SelectItem>
-                        ))}
-                      </div>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Provider</Label>
-                <Select value={form.providerId ? String(form.providerId) : ""} onValueChange={v => setForm(f => ({ ...f, providerId: Number(v) }))}>
-                  <SelectTrigger><SelectValue placeholder="Select a provider..." /></SelectTrigger>
-                  <SelectContent>
-                    {providers?.filter(p => p.isActive).map(p => (
-                      <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Model Name</Label>
-                <Input placeholder="e.g., gpt-4o, llava-v1.6, gemini-2.5-pro" value={form.modelName} onChange={e => setForm(f => ({ ...f, modelName: e.target.value }))} />
-                {form.providerId > 0 && providers?.find(p => p.id === form.providerId)?.availableModels && (
-                  <div className="flex flex-wrap gap-1 mt-1">
-                    {(providers.find(p => p.id === form.providerId)?.availableModels as string[] ?? []).slice(0, 6).map((m: string) => (
-                      <Badge key={m} variant="outline" className="text-xs cursor-pointer hover:bg-accent" onClick={() => setForm(f => ({ ...f, modelName: m }))}>
-                        {m}
-                      </Badge>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <div className="space-y-2">
-                <Label>Priority <span className="text-muted-foreground text-xs">(1 = primary, higher = fallback)</span></Label>
-                <Input type="number" min={1} max={10} value={form.priority} onChange={e => setForm(f => ({ ...f, priority: Number(e.target.value) }))} />
-              </div>
-              <Separator />
-              <div className="space-y-2">
-                <Label className="flex items-center gap-2">
-                  <FileText className="h-3.5 w-3.5 text-amber-400" />
-                  System Prompt <span className="text-muted-foreground text-xs font-normal">(optional)</span>
-                </Label>
-                <Textarea
-                  placeholder="Stage-specific system prompt…"
-                  value={form.systemPrompt}
-                  onChange={e => setForm(f => ({ ...f, systemPrompt: e.target.value }))}
-                  className="min-h-[80px] font-mono text-xs resize-y bg-muted/30"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label className="flex items-center gap-2">
-                  <Thermometer className="h-3.5 w-3.5 text-amber-400" />
-                  Temperature <span className="text-muted-foreground text-xs font-normal">(optional, 0.0–2.0)</span>
-                </Label>
-                <Input
-                  type="number" min={0} max={2} step={0.05}
-                  placeholder="e.g. 0.1"
-                  value={form.temperature}
-                  onChange={e => setForm(f => ({ ...f, temperature: e.target.value }))}
-                  className="w-32"
-                />
-              </div>
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setIsCreateOpen(false)}>Cancel</Button>
-              <Button onClick={handleCreate} disabled={!form.modelName || !form.providerId || createMutation.isPending}>
-                {createMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                Inscribe
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+        <div className="text-right">
+          <div className="text-2xl font-bold text-amber-400">{totalInscribed} / {totalStages}</div>
+          <div className="text-xs text-muted-foreground">stages inscribed</div>
+        </div>
       </div>
 
-      {/* Edit Dialog */}
-      {editingAssignment && (
-        <EditAssignmentDialog
-          assignment={editingAssignment as any}
-          onClose={() => { setEditingId(null); refetch(); }}
+      {/* Inscription Dialog */}
+      {editingStage && (
+        <InscriptionDialog
+          stage={editingStage}
+          stageLabel={editingStageLabel}
+          inscription={editingInscription ? {
+            id: editingInscription.id,
+            primaryProviderId: editingInscription.primaryProvider?.id ?? null,
+            fallbackProviderId: editingInscription.fallbackProvider?.id ?? null,
+            systemPrompt: editingInscription.systemPrompt,
+            temperature: editingInscription.temperature,
+            maxTokens: editingInscription.maxTokens,
+            isActive: editingInscription.isActive,
+          } : null}
+          providers={(providers ?? []).map(p => ({
+            id: p.id,
+            displayName: p.displayName ?? p.name,
+            name: p.name,
+            modelId: p.modelId ?? null,
+            providerType: p.providerType,
+            isActive: p.isActive,
+          }))}
+          onClose={() => setEditingStage(null)}
+          onSaved={refetch}
         />
       )}
 
-      {/* Assignment Matrix grouped by phase then stage */}
+      {/* Stage Matrix grouped by phase */}
       {isLoading ? (
         <div className="flex items-center justify-center py-12">
           <Loader2 className="h-8 w-8 animate-spin text-amber-400" />
         </div>
       ) : (
-        <div className="space-y-6">
+        <div className="space-y-4">
           {Object.entries(PHASE_GROUPS).map(([phaseKey, phaseInfo]) => {
             const phaseStages = stagesByPhase[phaseKey] ?? [];
             const isExpanded = expandedPhases[phaseKey] ?? true;
-            const totalAssignments = phaseStages.reduce((sum, s) => sum + (groupedByStage[s.id]?.length ?? 0), 0);
+            const inscribedCount = phaseStages.filter(s => inscriptionByStage[s.id]).length;
 
             return (
               <div key={phaseKey} className="rounded-xl border border-border/50 overflow-hidden">
@@ -399,103 +430,135 @@ export default function TheAssignments() {
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
-                    <Badge variant="outline" className="text-xs">
-                      {totalAssignments} assignment{totalAssignments !== 1 ? "s" : ""}
+                    <Badge variant="outline" className={`text-xs ${phaseInfo.badgeClass}`}>
+                      {inscribedCount} / {phaseStages.length} inscribed
                     </Badge>
-                    {isExpanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+                    {isExpanded
+                      ? <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                      : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
                   </div>
                 </button>
 
-                {/* Phase Stages */}
+                {/* Stage Rows */}
                 {isExpanded && (
                   <div className="divide-y divide-border/30">
                     {phaseStages.map(stage => {
-                      const stageAssignments = groupedByStage[stage.id] ?? [];
+                      const inscription = inscriptionByStage[stage.id];
+                      const hasInscription = !!inscription;
+                      const isActive = inscription?.isActive ?? false;
+
                       return (
-                        <div key={stage.id} className="p-4">
-                          <div className="flex items-center justify-between mb-3">
-                            <div className="flex items-center gap-2">
+                        <div key={stage.id} className="p-4 flex items-start gap-4">
+                          {/* Stage info */}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap mb-2">
                               <span className="font-medium text-sm">{stage.label}</span>
                               <Badge variant="secondary" className="text-xs font-mono">{stage.id}</Badge>
-                              <Badge variant={stageAssignments.length > 0 ? "default" : "outline"} className="text-xs">
-                                {stageAssignments.length} model{stageAssignments.length !== 1 ? "s" : ""}
-                              </Badge>
+                              {hasInscription && (
+                                <div className={`w-2 h-2 rounded-full flex-shrink-0 ${isActive ? "bg-green-400" : "bg-gray-500"}`} />
+                              )}
+                              {!hasInscription && (
+                                <Badge variant="outline" className="text-xs border-dashed text-muted-foreground">
+                                  <AlertCircle className="h-3 w-3 mr-1" />
+                                  Not inscribed
+                                </Badge>
+                              )}
                             </div>
+
+                            {hasInscription ? (
+                              <div className="space-y-1.5">
+                                {/* Primary Provider */}
+                                {inscription.primaryProvider ? (
+                                  <div className="flex items-center gap-2">
+                                    <Badge variant="outline" className="text-[10px] border-emerald-500/50 text-emerald-400 bg-emerald-950/20 flex-shrink-0">Primary</Badge>
+                                    {providerIcon(inscription.primaryProvider.providerType)}
+                                    <span className="text-sm font-medium truncate">
+                                      {providerLabel(inscription.primaryProvider)}
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center gap-2 text-muted-foreground">
+                                    <Badge variant="outline" className="text-[10px] border-dashed flex-shrink-0">Primary</Badge>
+                                    <span className="text-xs italic">No provider selected</span>
+                                  </div>
+                                )}
+
+                                {/* Fallback Provider */}
+                                {inscription.fallbackProvider ? (
+                                  <div className="flex items-center gap-2">
+                                    <Badge variant="outline" className="text-[10px] border-amber-500/50 text-amber-400 bg-amber-950/20 flex-shrink-0">Fallback</Badge>
+                                    {providerIcon(inscription.fallbackProvider.providerType)}
+                                    <span className="text-sm text-muted-foreground truncate">
+                                      {providerLabel(inscription.fallbackProvider)}
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center gap-2 text-muted-foreground">
+                                    <Badge variant="outline" className="text-[10px] border-dashed flex-shrink-0">Fallback</Badge>
+                                    <span className="text-xs italic">No fallback configured</span>
+                                  </div>
+                                )}
+
+                                {/* System Prompt preview */}
+                                {inscription.systemPrompt && (
+                                  <div className="flex items-start gap-1.5 mt-1">
+                                    <FileText className="h-3 w-3 text-amber-400/60 flex-shrink-0 mt-0.5" />
+                                    <p className="text-xs text-muted-foreground font-mono truncate max-w-[500px]">
+                                      {inscription.systemPrompt.slice(0, 100)}{inscription.systemPrompt.length > 100 ? "…" : ""}
+                                    </p>
+                                  </div>
+                                )}
+
+                                {/* Temperature / Max Tokens */}
+                                <div className="flex items-center gap-3 mt-0.5">
+                                  {inscription.temperature !== null && inscription.temperature !== undefined && (
+                                    <div className="flex items-center gap-1">
+                                      <Thermometer className="h-3 w-3 text-amber-400/60" />
+                                      <span className="text-xs text-muted-foreground">temp: {inscription.temperature}</span>
+                                    </div>
+                                  )}
+                                  {inscription.maxTokens !== null && inscription.maxTokens !== undefined && (
+                                    <div className="flex items-center gap-1">
+                                      <Hash className="h-3 w-3 text-amber-400/60" />
+                                      <span className="text-xs text-muted-foreground">max: {inscription.maxTokens}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            ) : (
+                              <p className="text-xs text-muted-foreground italic">
+                                Click "Inscribe" to assign a provider and configure this stage.
+                              </p>
+                            )}
                           </div>
 
-                          {stageAssignments.length > 0 ? (
-                            <div className="space-y-2">
-                              {stageAssignments
-                                .sort((a: any, b: any) => a.priority - b.priority)
-                                .map((assignment: any, idx: number) => (
-                                  <div
-                                    key={assignment.id}
-                                    className={`flex items-start justify-between p-3 rounded-lg border gap-3 ${assignment.isActive ? "bg-card" : "bg-muted opacity-60"}`}
-                                  >
-                                    <div className="flex items-start gap-3 flex-1 min-w-0">
-                                      <div className="flex items-center justify-center w-6 h-6 rounded-full bg-amber-500/20 text-amber-400 text-xs font-bold flex-shrink-0 mt-0.5">
-                                        {assignment.priority}
-                                      </div>
-                                      <div className="flex-1 min-w-0">
-                                        <div className="flex items-center gap-2 flex-wrap">
-                                          <span className="font-mono text-sm font-medium">{assignment.modelName}</span>
-                                          <span className="text-muted-foreground text-xs">via {assignment.providerName}</span>
-                                          {idx === 0 && <Badge className="bg-amber-500/20 text-amber-400 border-amber-500/30 text-xs">Primary</Badge>}
-                                          {idx > 0 && <Badge variant="outline" className="text-xs">Fallback #{idx}</Badge>}
-                                        </div>
-                                        {/* System Prompt preview */}
-                                        {assignment.systemPrompt && (
-                                          <div className="mt-1.5 flex items-start gap-1.5">
-                                            <FileText className="h-3 w-3 text-amber-400/60 flex-shrink-0 mt-0.5" />
-                                            <p className="text-xs text-muted-foreground font-mono truncate max-w-[400px]">
-                                              {assignment.systemPrompt.slice(0, 80)}{assignment.systemPrompt.length > 80 ? "…" : ""}
-                                            </p>
-                                          </div>
-                                        )}
-                                        {/* Temperature badge */}
-                                        {assignment.temperature !== null && assignment.temperature !== undefined && (
-                                          <div className="mt-1 flex items-center gap-1">
-                                            <Thermometer className="h-3 w-3 text-amber-400/60" />
-                                            <span className="text-xs text-muted-foreground">temp: {assignment.temperature}</span>
-                                          </div>
-                                        )}
-                                      </div>
-                                    </div>
-                                    <div className="flex items-center gap-1 flex-shrink-0">
-                                      <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        className="h-8 px-2 text-xs"
-                                        onClick={() => setEditingId(assignment.id)}
-                                      >
-                                        <Edit3 className="h-3.5 w-3.5 mr-1" />
-                                        Configure
-                                      </Button>
-                                      <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        className="h-8 px-2 text-xs"
-                                        onClick={() => updateMutation.mutate({ id: assignment.id, isActive: !assignment.isActive })}
-                                      >
-                                        {assignment.isActive ? "Disable" : "Enable"}
-                                      </Button>
-                                      <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        className="h-8 w-8 p-0 text-destructive"
-                                        onClick={() => { if (confirm("Remove this assignment?")) deleteMutation.mutate({ id: assignment.id }); }}
-                                      >
-                                        <Trash2 className="h-3.5 w-3.5" />
-                                      </Button>
-                                    </div>
-                                  </div>
-                                ))}
-                            </div>
-                          ) : (
-                            <div className="text-xs text-muted-foreground italic py-2 pl-9">
-                              No models assigned to this stage yet.
-                            </div>
-                          )}
+                          {/* Actions */}
+                          <div className="flex items-center gap-2 flex-shrink-0">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="gap-1.5"
+                              onClick={() => setEditingStage(stage.id)}
+                            >
+                              {hasInscription
+                                ? <><Pencil className="h-3.5 w-3.5" /> Configure</>
+                                : <><GitBranch className="h-3.5 w-3.5" /> Inscribe</>}
+                            </Button>
+                            {hasInscription && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                                onClick={() => {
+                                  if (confirm(`Remove inscription for ${stage.label}?`)) {
+                                    deleteMutation.mutate({ id: inscription.id });
+                                  }
+                                }}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
+                            )}
+                          </div>
                         </div>
                       );
                     })}

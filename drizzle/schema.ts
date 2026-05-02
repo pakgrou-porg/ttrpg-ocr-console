@@ -224,12 +224,57 @@ export type ProviderType = (typeof PROVIDER_TYPES)[number];
 
 export const llmProviders = mysqlTable("llm_providers", {
   id: int("id").autoincrement().primaryKey(),
-  /** Human-readable name for this provider instance */
+  /**
+   * Human-readable display name for this provider instance.
+   * e.g. "LMStudio Local — LLaVA Vision" or "OpenRouter — Gemini 2.5 Pro"
+   * Used in dropdowns and the Stage Inscriptions picker.
+   */
+  displayName: varchar("displayName", { length: 256 }).notNull(),
+  /**
+   * Internal/short name for this provider instance (unique identifier).
+   * e.g. "lmstudio-llava-local" or "openrouter-gemini-25-pro"
+   */
   name: varchar("name", { length: 128 }).notNull().unique(),
   /** Provider type/protocol */
   providerType: varchar("providerType", { length: 64 }).notNull(),
   /** Base URL for the API endpoint */
   baseUrl: varchar("baseUrl", { length: 512 }).notNull(),
+  /**
+   * Port number — used for local providers (LM Studio, custom).
+   * Injected into the base URL when building the endpoint.
+   */
+  port: int("port"),
+  /**
+   * The model identifier to use with this provider instance.
+   * e.g. "llava-v1.6-mistral-7b", "google/gemini-2.5-pro", "claude-3-5-sonnet"
+   * Stored here so a provider instance represents a specific model, not just a service.
+   */
+  modelId: varchar("modelId", { length: 256 }),
+  /**
+   * Maximum context window length in tokens for this provider/model.
+   * Used to enforce context budget limits during pipeline processing.
+   */
+  contextLength: int("contextLength"),
+  /**
+   * Maximum output tokens for this provider/model.
+   * Used as the default max_tokens when no inscription override is set.
+   */
+  maxTokens: int("maxTokens"),
+  /**
+   * Default temperature for this provider/model (0.0 – 2.0).
+   * Used when a stage inscription does not override the temperature.
+   */
+  defaultTemperature: float("defaultTemperature").default(0.2),
+  /**
+   * Capabilities of this provider/model.
+   * e.g. ['chat', 'vision', 'embedding', 'structured_output']
+   */
+  capabilities: json("capabilities").$type<string[]>(),
+  /**
+   * Whether this is the default provider for new stage inscriptions.
+   * Only one provider should have isDefault = true at a time.
+   */
+  isDefault: boolean("isDefault").default(false).notNull(),
   /** Encrypted API key (AES-256-GCM encrypted, stored as hex) */
   encryptedApiKey: text("encryptedApiKey"),
   /** Initialization vector for decryption (hex) */
@@ -248,7 +293,7 @@ export const llmProviders = mysqlTable("llm_providers", {
   isActive: boolean("isActive").default(true).notNull(),
   /** Optional notes about this provider */
   notes: text("notes"),
-  /** Available models on this provider (cached list) */
+  /** Available models on this provider (cached list from /v1/models discovery) */
   availableModels: json("availableModels").$type<string[]>().default([]),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
@@ -352,51 +397,78 @@ export const STAGE_PHASES: Record<PipelineStage, 1 | 2 | 3 | 0> = {
 };
 
 /**
- * Model Assignment Matrix — maps specific models to pipeline stages.
- * Multiple models can be assigned to the same stage with priority ordering
- * for fallback chains.
+ * Stage Inscriptions — maps pipeline stages to provider instances.
  *
- * Every LLM-involved stage has a dedicated system prompt and configurable
- * LLM settings (temperature, max_tokens, etc.) stored per assignment.
+ * Each stage has exactly one active inscription (upsert on stage).
+ * An inscription specifies:
+ *   - primaryProvider: the first-choice provider/model for this stage
+ *   - fallbackProvider: the cloud escalation provider (used for Pass 3/4)
+ *   - systemPrompt: the stage-specific system prompt (hard requirement)
+ *   - temperature: override (null = use provider's defaultTemperature)
+ *   - maxTokens: override (null = use provider's maxTokens)
+ *   - llmSettings: any additional per-stage LLM settings
+ *
+ * A single provider instance can be inscribed as primary on multiple stages
+ * and as fallback on others — the provider is defined once, reused everywhere.
  */
-export const modelAssignments = mysqlTable("model_assignments", {
+export const stageInscriptions = mysqlTable("stage_inscriptions", {
   id: int("id").autoincrement().primaryKey(),
-  /** Which provider this model belongs to */
-  providerId: int("providerId").notNull(),
-  /** The model identifier (e.g., "gpt-4o", "llava-v1.6", "gemini-2.5-pro") */
-  modelName: varchar("modelName", { length: 256 }).notNull(),
-  /** Which pipeline stage this model is assigned to */
-  pipelineStage: varchar("pipelineStage", { length: 64 }).notNull(),
-  /** Priority within the stage (1 = primary, 2 = first fallback, etc.) */
-  priority: int("priority").default(1).notNull(),
-  /** Whether this assignment is currently active */
-  isActive: boolean("isActive").default(true).notNull(),
   /**
-   * Dedicated system prompt for this stage assignment.
-   * This is a hard requirement — every LLM-involved stage must have a
-   * configurable system prompt stored per assignment.
+   * The pipeline stage this inscription applies to.
+   * Unique — only one active inscription per stage.
+   */
+  stage: varchar("stage", { length: 64 }).notNull().unique(),
+  /**
+   * Primary provider instance for this stage.
+   * FK to llm_providers. This is the first-choice model used in Pass 1 & 2.
+   */
+  primaryProviderId: int("primaryProviderId"),
+  /**
+   * Fallback (cloud escalation) provider for this stage.
+   * FK to llm_providers. Used when Pass 1 & 2 fail quality threshold (Pass 3 & 4).
+   * Null means no cloud fallback is configured — stage will go directly to HITL.
+   */
+  fallbackProviderId: int("fallbackProviderId"),
+  /**
+   * Dedicated system prompt for this stage.
+   * Hard requirement: every LLM-involved stage must have a configurable prompt.
+   * Fetched at runtime by both Python pipeline scripts and the console.
    */
   systemPrompt: text("systemPrompt"),
   /**
-   * LLM temperature setting for this stage (0.0 – 2.0).
-   * Controls randomness: lower = more deterministic (good for OCR/extraction),
-   * higher = more creative (good for summarisation).
+   * Temperature override for this stage (0.0 – 2.0).
+   * Null = use the primary provider's defaultTemperature.
+   * Lower = more deterministic (OCR/extraction), higher = more creative (summarisation).
    */
-  temperature: float("temperature").default(0.2),
+  temperature: float("temperature"),
   /**
-   * Additional LLM settings as JSON (max_tokens, top_p, frequency_penalty, etc.)
-   * Merged with temperature at call time; temperature field takes precedence.
+   * Max tokens override for this stage.
+   * Null = use the primary provider's maxTokens.
+   */
+  maxTokens: int("maxTokens"),
+  /**
+   * Additional LLM settings as JSON (top_p, frequency_penalty, response_format, etc.)
+   * Merged at call time; temperature and maxTokens fields take precedence over JSON values.
    */
   llmSettings: json("llmSettings").$type<Record<string, unknown>>(),
+  /** Whether this inscription is currently active */
+  isActive: boolean("isActive").default(true).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 }, (t) => ({
-  providerIdIdx: index("model_assignments_providerId_idx").on(t.providerId),
-  stageIdx: index("model_assignments_stage_idx").on(t.pipelineStage),
+  stageIdx: index("stage_inscriptions_stage_idx").on(t.stage),
+  primaryProviderIdx: index("stage_inscriptions_primary_idx").on(t.primaryProviderId),
+  fallbackProviderIdx: index("stage_inscriptions_fallback_idx").on(t.fallbackProviderId),
 }));
 
-export type ModelAssignment = typeof modelAssignments.$inferSelect;
-export type InsertModelAssignment = typeof modelAssignments.$inferInsert;
+export type StageInscription = typeof stageInscriptions.$inferSelect;
+export type InsertStageInscription = typeof stageInscriptions.$inferInsert;
+
+// Keep ModelAssignment as a deprecated alias for backward compatibility during migration
+// TODO: Remove after all references are updated
+export const modelAssignments = stageInscriptions;
+export type ModelAssignment = StageInscription;
+export type InsertModelAssignment = InsertStageInscription;
 
 /**
  * Database connections — allows switching between cloud Supabase

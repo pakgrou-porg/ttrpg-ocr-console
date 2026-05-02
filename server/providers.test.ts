@@ -72,6 +72,7 @@ describe("providers (LLM Provider Registry)", () => {
     const caller = appRouter.createCaller(createAdminContext());
     const result = await caller.providers.create({
       name: `LM Studio Local ${suffix}`,
+      displayName: `LM Studio Local ${suffix}`,
       providerType: "lm_studio",
       baseUrl: "http://localhost:1234/v1",
       apiKey: "",
@@ -85,6 +86,7 @@ describe("providers (LLM Provider Registry)", () => {
     // First create a provider with a real key
     await caller.providers.create({
       name: `OpenRouter Masked ${suffix}`,
+      displayName: `OpenRouter Masked ${suffix}`,
       providerType: "openrouter",
       baseUrl: "https://openrouter.ai/api/v1",
       apiKey: "sk-or-v1-abcdefghijklmnop",
@@ -102,6 +104,7 @@ describe("providers (LLM Provider Registry)", () => {
     const caller = appRouter.createCaller(createAdminContext());
     const created = await caller.providers.create({
       name: `To Delete ${suffix}`,
+      displayName: `To Delete ${suffix}`,
       providerType: "openai_compatible",
       baseUrl: "http://localhost:9999",
       apiKey: "",
@@ -111,7 +114,7 @@ describe("providers (LLM Provider Registry)", () => {
   });
 });
 
-describe("assignments (Model Assignment Matrix)", () => {
+describe("assignments (Stage Inscription Registry)", () => {
   it("lists available pipeline stages", async () => {
     const caller = appRouter.createCaller(createAdminContext());
     const stages = await caller.assignments.stages();
@@ -120,22 +123,47 @@ describe("assignments (Model Assignment Matrix)", () => {
     expect(stages.some((s: any) => s.id === "layout_analysis")).toBe(true);
   });
 
-  it("denies non-admin from creating assignments", async () => {
+  it("denies non-admin from upserting inscriptions", async () => {
     const caller = appRouter.createCaller(createUserContext());
     await expect(
-      caller.assignments.create({
-        pipelineStage: "layout_analysis",
-        providerId: 1,
-        modelName: "llava-v1.6",
-        priority: 1,
+      caller.assignments.upsert({
+        stage: "layout_analysis",
+        primaryProviderId: 1,
       })
     ).rejects.toThrow();
   });
 
-  it("allows admin to list assignments", async () => {
+  it("allows admin to list inscriptions", async () => {
     const caller = appRouter.createCaller(createAdminContext());
     const list = await caller.assignments.list();
     expect(Array.isArray(list)).toBe(true);
+  });
+
+  it("allows admin to upsert and delete an inscription", async () => {
+    const caller = appRouter.createCaller(createAdminContext());
+    // Create a provider first
+    const provider = await caller.providers.create({
+      name: `Inscription Test Provider ${suffix}`,
+      displayName: `Inscription Test Provider ${suffix}`,
+      providerType: "lm_studio",
+      baseUrl: "http://localhost:1234/v1",
+    });
+    // Upsert an inscription for bbox_detection
+    const result = await caller.assignments.upsert({
+      stage: "bbox_detection",
+      primaryProviderId: provider.id,
+      systemPrompt: "Test system prompt",
+      temperature: 0.1,
+    });
+    expect(result.success).toBe(true);
+    expect(result.id).toBeGreaterThan(0);
+    // Verify it appears in the list
+    const list = await caller.assignments.list();
+    const found = list.find((i: any) => i.stage === "bbox_detection" && i.primaryProvider?.id === provider.id);
+    expect(found).toBeDefined();
+    // Cleanup
+    await caller.assignments.delete({ id: result.id });
+    await caller.providers.delete({ id: provider.id });
   });
 });
 
@@ -155,6 +183,7 @@ describe("providers.test (Test Connection & Model Discovery)", () => {
     // Create a provider with an unreachable URL
     const created = await caller.providers.create({
       name: `Unreachable Provider ${suffix}`,
+      displayName: `Unreachable Provider ${suffix}`,
       providerType: "openai_compatible",
       baseUrl: "http://192.0.2.1:9999/v1",
       apiKey: "sk-test-unreachable",
@@ -171,6 +200,7 @@ describe("providers.test (Test Connection & Model Discovery)", () => {
     const caller = appRouter.createCaller(createAdminContext());
     const created = await caller.providers.create({
       name: `Bad Hostname ${suffix}`,
+      displayName: `Bad Hostname ${suffix}`,
       providerType: "openai_compatible",
       baseUrl: "http://this-host-does-not-exist-xyz123.invalid/v1",
     });
@@ -186,6 +216,7 @@ describe("providers.test (Test Connection & Model Discovery)", () => {
     // Use OpenRouter's public /models endpoint (no API key required)
     const created = await caller.providers.create({
       name: `OpenRouter Discovery Test ${suffix}`,
+      displayName: `OpenRouter Discovery Test ${suffix}`,
       providerType: "openrouter",
       baseUrl: "https://openrouter.ai/api/v1",
     });
@@ -206,6 +237,7 @@ describe("providers.test (Test Connection & Model Discovery)", () => {
     // Create a provider with no API key and a URL that will refuse connection quickly
     const created = await caller.providers.create({
       name: `No Key Provider ${suffix}`,
+      displayName: `No Key Provider ${suffix}`,
       providerType: "lm_studio",
       baseUrl: "http://127.0.0.1:19999/v1",
     });
