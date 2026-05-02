@@ -494,6 +494,7 @@ export const appRouter = router({
         supportsChat: z.boolean().optional(),
         supportsVision: z.boolean().optional(),
         supportsEmbedding: z.boolean().optional(),
+        supportsReasoning: z.boolean().optional(),
         isDefault: z.boolean().optional(),
         apiKey: z.string().optional(),
         notes: z.string().optional(),
@@ -540,6 +541,7 @@ export const appRouter = router({
           supportsChat: input.supportsChat ?? true,
           supportsVision: input.supportsVision ?? false,
           supportsEmbedding: input.supportsEmbedding ?? false,
+          supportsReasoning: input.supportsReasoning ?? false,
           isDefault: input.isDefault ?? false,
           encryptedApiKey,
           keyIv,
@@ -570,6 +572,7 @@ export const appRouter = router({
         supportsChat: z.boolean().optional(),
         supportsVision: z.boolean().optional(),
         supportsEmbedding: z.boolean().optional(),
+        supportsReasoning: z.boolean().optional(),
         isDefault: z.boolean().optional(),
         apiKey: z.string().optional(),
         clearApiKey: z.boolean().optional(),
@@ -592,6 +595,7 @@ export const appRouter = router({
         if (input.supportsChat !== undefined) updates.supportsChat = input.supportsChat;
         if (input.supportsVision !== undefined) updates.supportsVision = input.supportsVision;
         if (input.supportsEmbedding !== undefined) updates.supportsEmbedding = input.supportsEmbedding;
+        if (input.supportsReasoning !== undefined) updates.supportsReasoning = input.supportsReasoning;
         if (input.isDefault !== undefined) {
           if (input.isDefault) {
             const allProviders = await getAllLlmProviders();

@@ -36,6 +36,7 @@ interface ProviderPreset {
   supportsChat: boolean;
   supportsVision: boolean;
   supportsEmbedding: boolean;
+  supportsReasoning: boolean;
 }
 
 const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
@@ -50,6 +51,7 @@ const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
     supportsChat: true,
     supportsVision: false,
     supportsEmbedding: false,
+    supportsReasoning: false,
   },
   lm_studio: {
     name: "LM Studio (Local)",
@@ -64,6 +66,7 @@ const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
     supportsChat: true,
     supportsVision: true,
     supportsEmbedding: false,
+    supportsReasoning: false,
   },
   openrouter: {
     name: "OpenRouter",
@@ -76,6 +79,7 @@ const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
     supportsChat: true,
     supportsVision: true,
     supportsEmbedding: false,
+    supportsReasoning: false,
   },
   venice_ai: {
     name: "Venice.ai",
@@ -88,6 +92,7 @@ const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
     supportsChat: true,
     supportsVision: false,
     supportsEmbedding: false,
+    supportsReasoning: false,
   },
   anthropic: {
     name: "Anthropic",
@@ -103,6 +108,7 @@ const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
     supportsChat: true,
     supportsVision: true,
     supportsEmbedding: false,
+    supportsReasoning: false,
   },
   google: {
     name: "Google AI (Gemini)",
@@ -118,6 +124,7 @@ const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
     supportsChat: true,
     supportsVision: true,
     supportsEmbedding: false,
+    supportsReasoning: true,
   },
   custom: {
     name: "",
@@ -130,6 +137,7 @@ const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
     supportsChat: true,
     supportsVision: false,
     supportsEmbedding: false,
+    supportsReasoning: false,
   },
 };
 
@@ -167,6 +175,7 @@ interface ProviderForm {
   supportsChat: boolean;
   supportsVision: boolean;
   supportsEmbedding: boolean;
+  supportsReasoning: boolean;
   isDefault: boolean;
   apiKey: string;
   notes: string;
@@ -186,6 +195,7 @@ const EMPTY_FORM: ProviderForm = {
   supportsChat: true,
   supportsVision: false,
   supportsEmbedding: false,
+  supportsReasoning: false,
   isDefault: false,
   apiKey: "",
   notes: "",
@@ -205,7 +215,6 @@ function ModelPicker({
   const [discoveredModels, setDiscoveredModels] = useState<DiscoveredModel[]>([]);
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [discoverError, setDiscoverError] = useState<string | null>(null);
-  const [visionOnly, setVisionOnly] = useState(false);
   const [modelSearch, setModelSearch] = useState("");
   const [showPicker, setShowPicker] = useState(false);
 
@@ -238,7 +247,7 @@ function ModelPicker({
       apiKey: form.apiKey || undefined,
       baseUrl: form.baseUrl || undefined,
       port: form.port ? Number(form.port) : undefined,
-      visionOnly,
+      visionOnly: false,
       providerId,
     });
   };
@@ -258,8 +267,7 @@ function ModelPicker({
   };
 
   const filteredModels = discoveredModels.filter(m =>
-    (!visionOnly || m.isVision) &&
-    (modelSearch === "" || m.id.toLowerCase().includes(modelSearch.toLowerCase()) || m.name.toLowerCase().includes(modelSearch.toLowerCase()))
+    modelSearch === "" || m.id.toLowerCase().includes(modelSearch.toLowerCase()) || m.name.toLowerCase().includes(modelSearch.toLowerCase())
   );
 
   const canDiscover = ["openrouter", "openai_compatible", "lm_studio", "anthropic", "google", "custom"].includes(form.providerType);
@@ -288,19 +296,6 @@ function ModelPicker({
           </Button>
         )}
       </div>
-
-      {/* Vision-only toggle (shown when discovery is available) */}
-      {canDiscover && (
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <Switch
-            checked={visionOnly}
-            onCheckedChange={setVisionOnly}
-            className="scale-75"
-          />
-          <Eye className="h-3 w-3" />
-          <span>Vision-capable models only (for OCR stages)</span>
-        </div>
-      )}
 
       {/* Discovery error */}
       {discoverError && (
@@ -368,7 +363,6 @@ function ModelPicker({
           </div>
           <div className="px-3 py-1.5 bg-muted/30 border-t text-[10px] text-muted-foreground">
             {filteredModels.length} model{filteredModels.length !== 1 ? "s" : ""} shown
-            {visionOnly ? " (vision-only filter active)" : ""}
           </div>
         </div>
       )}
@@ -412,6 +406,7 @@ function ProviderFormFields({
       supportsChat: p?.supportsChat ?? true,
       supportsVision: p?.supportsVision ?? false,
       supportsEmbedding: p?.supportsEmbedding ?? false,
+      supportsReasoning: p?.supportsReasoning ?? false,
     }));
   };
 
@@ -453,6 +448,49 @@ function ProviderFormFields({
             value={form.name}
             onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
           />
+        </div>
+      </div>
+
+      {/* Capabilities */}
+      <div className="space-y-2">
+        <Label>Capabilities</Label>
+        <div className="flex items-center gap-6 flex-wrap">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={form.supportsChat}
+              onChange={e => setForm(f => ({ ...f, supportsChat: e.target.checked }))}
+              className="w-4 h-4 rounded accent-purple-500"
+            />
+            <span className="text-sm">Chat</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={form.supportsVision}
+              onChange={e => setForm(f => ({ ...f, supportsVision: e.target.checked }))}
+              className="w-4 h-4 rounded accent-purple-500"
+            />
+            <span className="text-sm flex items-center gap-1"><Eye className="h-3.5 w-3.5 text-purple-400" />Vision</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={form.supportsEmbedding}
+              onChange={e => setForm(f => ({ ...f, supportsEmbedding: e.target.checked }))}
+              className="w-4 h-4 rounded accent-purple-500"
+            />
+            <span className="text-sm">Embedding</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={form.supportsReasoning}
+              onChange={e => setForm(f => ({ ...f, supportsReasoning: e.target.checked }))}
+              className="w-4 h-4 rounded accent-purple-500"
+            />
+            <span className="text-sm flex items-center gap-1"><Zap className="h-3.5 w-3.5 text-amber-400" />Reasoning</span>
+          </label>
         </div>
       </div>
 
@@ -547,40 +585,6 @@ function ProviderFormFields({
             value={form.defaultTemperature}
             onChange={e => setForm(f => ({ ...f, defaultTemperature: e.target.value }))}
           />
-        </div>
-      </div>
-
-      {/* Capabilities */}
-      <div className="space-y-2">
-        <Label>Capabilities</Label>
-        <div className="flex items-center gap-6">
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={form.supportsChat}
-              onChange={e => setForm(f => ({ ...f, supportsChat: e.target.checked }))}
-              className="w-4 h-4 rounded accent-purple-500"
-            />
-            <span className="text-sm">Chat</span>
-          </label>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={form.supportsVision}
-              onChange={e => setForm(f => ({ ...f, supportsVision: e.target.checked }))}
-              className="w-4 h-4 rounded accent-purple-500"
-            />
-            <span className="text-sm flex items-center gap-1"><Eye className="h-3.5 w-3.5 text-purple-400" />Vision</span>
-          </label>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={form.supportsEmbedding}
-              onChange={e => setForm(f => ({ ...f, supportsEmbedding: e.target.checked }))}
-              className="w-4 h-4 rounded accent-purple-500"
-            />
-            <span className="text-sm">Embedding</span>
-          </label>
         </div>
       </div>
 
@@ -736,6 +740,7 @@ export default function TheArtificers() {
       supportsChat: form.supportsChat,
       supportsVision: form.supportsVision,
       supportsEmbedding: form.supportsEmbedding,
+      supportsReasoning: form.supportsReasoning,
       isDefault: form.isDefault,
       apiKey: form.apiKey || undefined,
       notes: form.notes || undefined,
@@ -758,6 +763,7 @@ export default function TheArtificers() {
       supportsChat: provider.supportsChat ?? true,
       supportsVision: provider.supportsVision ?? false,
       supportsEmbedding: provider.supportsEmbedding ?? false,
+      supportsReasoning: provider.supportsReasoning ?? false,
       isDefault: provider.isDefault ?? false,
       apiKey: "",
       notes: provider.notes ?? "",
@@ -782,6 +788,7 @@ export default function TheArtificers() {
       supportsChat: editForm.supportsChat,
       supportsVision: editForm.supportsVision,
       supportsEmbedding: editForm.supportsEmbedding,
+      supportsReasoning: editForm.supportsReasoning,
       isDefault: editForm.isDefault,
       apiKey: editForm.apiKey || undefined,
       notes: editForm.notes || undefined,
@@ -942,6 +949,11 @@ export default function TheArtificers() {
                           )}
                           {provider.supportsEmbedding && (
                             <Badge variant="outline" className="text-xs">Embedding</Badge>
+                          )}
+                          {provider.supportsReasoning && (
+                            <Badge variant="outline" className="text-xs border-amber-500/40 text-amber-300 gap-1">
+                              <Zap className="h-3 w-3" />Reasoning
+                            </Badge>
                           )}
                           {result && !isTestingThis && (
                             result.ok ? (

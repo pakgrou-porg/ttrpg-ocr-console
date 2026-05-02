@@ -277,6 +277,8 @@ export const llmProviders = mysqlTable("llm_providers", {
   supportsVision: boolean("supportsVision").default(false).notNull(),
   /** Whether this provider/model supports text embeddings */
   supportsEmbedding: boolean("supportsEmbedding").default(false).notNull(),
+  /** Whether this provider/model supports extended reasoning / chain-of-thought */
+  supportsReasoning: boolean("supportsReasoning").default(false).notNull(),
   /**
    * Whether this is the default provider for new stage inscriptions.
    * Only one provider should have isDefault = true at a time.

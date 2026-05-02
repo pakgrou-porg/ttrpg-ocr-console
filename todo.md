@@ -295,3 +295,15 @@
 - [ ] Update provider card display to show flag badges instead of capability string
 - [ ] Update providers.test.ts for new schema fields
 - [ ] Push to GitHub
+
+## Phase: Capability Flags Reorder + Reasoning Toggle
+
+- [x] Add supportsReasoning boolean column to llm_providers schema
+- [x] Add supportsReasoning to providers.create and providers.update input schemas in routers.ts
+- [x] Move capability flags (Chat, Vision, Embedding) directly below Display Name + Model ID in ProviderFormFields
+- [x] Add Reasoning toggle (on/off switch) alongside the other capability flags
+- [x] Remove legacy Vision-only filter button from ModelPicker discovery UI (replace with capability badges)
+- [x] Update provider card display to show Reasoning badge alongside Chat/Vision/Embedding
+- [x] Apply DB migration for supportsReasoning column
+- [x] Run all tests and fix any failures
+- [x] Save checkpoint and push to GitHub
