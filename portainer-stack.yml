@@ -59,7 +59,7 @@ services:
   # Pre-built image from GHCR. No build step required on the host.
   # Migrations are run automatically at container startup via the CMD entrypoint.
   console:
-    image: ghcr.io/pakgrou-porg/ttrpg-ocr-console:${IMAGE_TAG:-latest}
+    image: ghcr.io/pakgrou-porg/ttrpg-ocr-console:${IMAGE_TAG:-0.1.0}
     restart: unless-stopped
     ports:
       - "${HOST_PORT:-3000}:3000"
@@ -137,7 +137,7 @@ networks:
 #   MYSQL_DATABASE            ttrpg_ocr
 #   MYSQL_USER                ocr_user
 #   HOST_PORT                 3000
-#   IMAGE_TAG                 latest  (pin to a SHA like "a1b2c3d" for stability)
+#   IMAGE_TAG                 0.1.0   (pin to a SHA like "a1b2c3d" or semver tag for stability; defaults to 0.1.0)
 #   OAUTH_SERVER_URL          https://api.manus.im
 #   VITE_OAUTH_PORTAL_URL     https://manus.im
 #   VITE_APP_TITLE            TTRPG OCR Console

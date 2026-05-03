@@ -480,4 +480,10 @@
 
 - [x] Fix Dockerfile: ENOENT /app/patches/wouter@3.7.1.patch — pnpm-lock.yaml references patches/ directory but Dockerfile only copied package.json + pnpm-lock.yaml; added COPY patches ./patches in both builder and runner stages
 - [x] LLM-dependent tests already CI-safe: ramblings.generate uses vi.mock('./_core/llm') — no real API call; profile.prompts.test.ts uses 'voice_of_arkanum' as a string only
-- [ ] Tag v0.1.0 and push to GitHub to trigger the release workflow
+- [x] Tag v0.1.0 and push to GitHub to trigger the release workflow (8c90120 → v0.1.0 tag pushed; both main push and tag push triggered release.yml)
+
+## Phase: GHCR PAT Docs + CI Workflow + Stack Pin
+
+- [x] Document GHCR PAT creation and Portainer registry setup in DOCKER_DEPLOY.md (new section: "Authenticating Portainer with GHCR")
+- [x] Add .github/workflows/ci.yml — lightweight pnpm test job for PRs (no Docker build); triggers on push to main and PRs targeting main
+- [x] Pin portainer-stack.yml IMAGE_TAG default to v0.1.0 (was :latest)

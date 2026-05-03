@@ -41,6 +41,39 @@ The workflow uses `GITHUB_TOKEN` (automatically injected by GitHub Actions) to p
 
 ---
 
+## Authenticating Portainer with GHCR (Private Repository)
+
+Because the GitHub repository is private, Portainer must authenticate with GHCR before it can pull the image. This is a one-time setup.
+
+### Step 1 — Create a GitHub Personal Access Token (PAT)
+
+1. Go to [https://github.com/settings/tokens](https://github.com/settings/tokens) and click **Generate new token (classic)**.
+2. Give it a descriptive name such as `portainer-ghcr-pull`.
+3. Set the expiration to **No expiration** (or a long period — you will need to rotate it when it expires).
+4. Under **Select scopes**, tick only **`read:packages`**. No other scopes are needed.
+5. Click **Generate token** and copy the value immediately — GitHub will not show it again.
+
+### Step 2 — Add the Registry to Portainer
+
+1. In Portainer, navigate to **Settings → Registries → Add registry**.
+2. Select **GitHub Container Registry** as the registry type.
+3. Fill in the form:
+
+| Field | Value |
+|---|---|
+| Username | Your GitHub username (e.g. `pakgrou-porg`) |
+| Personal Access Token | The PAT you just created |
+
+4. Click **Add registry**.
+
+Portainer will now automatically use this credential whenever it pulls any `ghcr.io/pakgrou-porg/...` image.
+
+### Step 3 — Verify the Credential
+
+In Portainer, navigate to **Settings → Registries**, find the entry you just created, and click **Test** (the icon on the right). A green tick confirms authentication is working.
+
+---
+
 ## Option A — Portainer Stack (Recommended for Local Testing)
 
 This is the cleanest path for Portainer users. No source code or Node.js required on the host.
