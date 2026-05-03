@@ -57,7 +57,7 @@ async function requireAuth(
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 200 * 1024 * 1024, // 200 MB max
+    fileSize: 50 * 1024 * 1024, // 50 MB max (memory storage)
   },
   fileFilter: (_req, file, cb) => {
     // Accept only application/pdf MIME type as a first-pass filter.
@@ -146,7 +146,7 @@ router.post(
       });
     } catch (err: any) {
       console.error("[upload/document] Error:", err);
-      return res.status(500).json({ error: err.message ?? "Upload failed." });
+      return res.status(500).json({ error: "Upload failed. Please try again." });
     }
   }
 );

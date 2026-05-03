@@ -5,6 +5,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { Layout } from "@/components/Layout";
 import { PermissionGate } from "@/components/PermissionGate";
+import { AdminGate } from "@/components/AdminGate";
 import Home from "@/pages/Home";
 import EnterArkanum from "@/pages/EnterArkanum";
 import ListenRamblings from "@/pages/ListenRamblings";
@@ -73,24 +74,24 @@ function Router() {
           </PermissionGate>
         </Route>
         <Route path="/inner-sanctum/the-artificers">
-          <PermissionGate featureArea="the_conclave">
+          <AdminGate>
             <TheArtificers />
-          </PermissionGate>
+          </AdminGate>
         </Route>
         <Route path="/inner-sanctum/the-assignments">
-          <PermissionGate featureArea="the_conclave">
+          <AdminGate>
             <TheAssignments />
-          </PermissionGate>
+          </AdminGate>
         </Route>
         <Route path="/inner-sanctum/vault-nexus">
-          <PermissionGate featureArea="the_conclave">
+          <AdminGate>
             <TheVaultNexus />
-          </PermissionGate>
+          </AdminGate>
         </Route>
         <Route path="/inner-sanctum/the-conclave">
-          <PermissionGate featureArea="the_conclave">
+          <AdminGate>
             <TheConclave />
-          </PermissionGate>
+          </AdminGate>
         </Route>
         <Route path="/personal-sanctum" component={PersonalSanctum} />
         <Route component={NotFound} />

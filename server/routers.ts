@@ -24,7 +24,7 @@ import {
   getOcrResultByPageId, getOcrResultById, createOcrResult, updateOcrResult,
   getHitlItemById, getHitlItemsByPageId, getAllHitlItems, createHitlItem, updateHitlItem, getHitlStats,
 } from "./db";
-import { encryptSecret, decryptSecret, maskSecret, storeSecretHint, renderMaskedSecret } from "./crypto";
+import { encryptSecret, decryptSecret, storeSecretHint, renderMaskedSecret } from "./crypto";
 import { ENV } from "./_core/env";
 import { FEATURE_AREAS, PROVIDER_TYPES, PIPELINE_STAGES, DB_CONNECTION_TYPES, DOCUMENT_STATUSES, OCR_RESULT_STATUSES, HITL_PRIORITIES, HITL_STATUSES } from "../drizzle/schema";
 
@@ -62,10 +62,16 @@ export const appRouter = router({
     // P1: Full service status is behind authentication — exposes service topology.
     all: protectedProcedure.query(async () => {
       const dbResult = await pingDatabase();
+      const activeJobs = await getActiveIngestionJobs();
+      const jobCount = activeJobs.length;
       return {
         database: dbResult,
         agents: { ok: true, latencyMs: 0, detail: "Available & Ready" },
-        scribes: { ok: true, latencyMs: 0, detail: "Idle — No Active Jobs" },
+        scribes: {
+          ok: true,
+          latencyMs: 0,
+          detail: jobCount > 0 ? `Processing ${jobCount} active job${jobCount > 1 ? "s" : ""}` : "Idle — No Active Jobs",
+        },
         cloudConduit: { ok: true, latencyMs: 0, detail: "OpenRouter Active" },
       };
     }),
@@ -454,7 +460,7 @@ export const appRouter = router({
         // P1: Use stored hint fields to render masked key without decrypting
         maskedApiKey: (p.keyPrefix && p.keySuffix && p.keyLength)
           ? renderMaskedSecret({ keyPrefix: p.keyPrefix, keySuffix: p.keySuffix, keyLength: p.keyLength })
-          : (p.encryptedApiKey ? maskSecret(decryptSecret({ ciphertext: p.encryptedApiKey, iv: p.keyIv ?? "", authTag: p.keyAuthTag ?? "" })) : null),
+          : (p.encryptedApiKey ? "••••••••" : null),
       }));
     }),
 
@@ -473,7 +479,7 @@ export const appRouter = router({
           // P1: Use stored hint fields to render masked key without decrypting
           maskedApiKey: (provider.keyPrefix && provider.keySuffix && provider.keyLength)
             ? renderMaskedSecret({ keyPrefix: provider.keyPrefix, keySuffix: provider.keySuffix, keyLength: provider.keyLength })
-            : (provider.encryptedApiKey ? maskSecret(decryptSecret({ ciphertext: provider.encryptedApiKey, iv: provider.keyIv ?? "", authTag: provider.keyAuthTag ?? "" })) : null),
+            : (provider.encryptedApiKey ? "••••••••" : null),
         };
       }),
 
@@ -1224,25 +1230,30 @@ export const appRouter = router({
 
   // ─── Library (Documents & Pages — Enter the Arkanum) ─────────────────────
   library: router({
-    /** List all documents with summary info */
+    /** List documents visible to the current user (own + public, or all for admins) */
     listDocuments: protectedProcedure
       .input(z.object({
         gameSystem: z.string().optional(),
         status: z.enum(DOCUMENT_STATUSES).optional(),
       }).optional())
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
         const docs = await getAllDocuments();
         let filtered = docs;
+        if (ctx.user.role !== "admin") {
+          filtered = filtered.filter(d => d.ownerUserId === ctx.user.id || d.visibility !== "private");
+        }
         if (input?.gameSystem) filtered = filtered.filter(d => d.gameSystem === input.gameSystem);
         if (input?.status) filtered = filtered.filter(d => d.status === input.status);
         return filtered;
       }),
 
-    /** Search documents by title, filename, or game system */
+    /** Search documents by title, filename, or game system (scoped by ownership for non-admins) */
     searchDocuments: protectedProcedure
       .input(z.object({ query: z.string().min(1).max(256) }))
-      .query(async ({ input }) => {
-        return searchDocuments(input.query);
+      .query(async ({ ctx, input }) => {
+        const results = await searchDocuments(input.query);
+        if (ctx.user.role === "admin") return results;
+        return results.filter(d => d.ownerUserId === ctx.user.id || d.visibility !== "private");
       }),
 
     /** Get a single document by ID */
@@ -1651,8 +1662,7 @@ export const appRouter = router({
           model: z.string().optional(),
           detail: z.string().optional(),
         })).optional(),
-        // Auto-flagging thresholds
-        confidenceThreshold: z.number().min(0).max(100).default(70),
+        confidenceThreshold: z.number().min(10).max(95).default(70),
         flagReason: z.string().max(512).optional(),
       }))
       .mutation(async ({ input }) => {

@@ -9,8 +9,7 @@ export type FeatureArea =
   | "divination_omens"
   | "arcane_mechanisms"
   | "summoning_rituals"
-  | "incantations_runes"
-  | "the_conclave";
+  | "incantations_runes";
 
 interface PermissionResult {
   /** Whether the user has access to this feature area */
@@ -71,15 +70,3 @@ export function usePermission(featureArea: FeatureArea): PermissionResult {
   };
 }
 
-/**
- * Higher-order component wrapper that gates access to a page based on permissions.
- * Usage: wrap your page component with withPermission("feature_area")
- */
-export function usePermissionGate(featureArea: FeatureArea): {
-  allowed: boolean;
-  loading: boolean;
-  restrictedGame: string | null;
-  restrictedVersion: string | null;
-} {
-  return usePermission(featureArea);
-}
