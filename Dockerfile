@@ -48,13 +48,15 @@ COPY patches ./patches
 # Install production dependencies only
 RUN pnpm install --no-frozen-lockfile --prod
 
-# Copy the built artefacts from the builder stage
+# Copy the built artefacts from the builder stage.
+# Vite outputs to dist/public/ (see vite.config.ts outDir: path.resolve(__dirname, 'dist/public')).
+# The Express server outputs to dist/index.js.
+# Both live under dist/ — a single COPY covers everything.
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/client/dist ./client/dist
 COPY --from=builder /app/drizzle ./drizzle
 
-# The server reads static files from client/dist at runtime.
-# The dist/ directory contains the bundled Express server (index.js).
+# dist/index.js  — bundled Express server
+# dist/public/    — compiled Vite/React frontend (served as static files)
 
 # Expose the application port (default 3000; overridable via PORT env var)
 EXPOSE 3000

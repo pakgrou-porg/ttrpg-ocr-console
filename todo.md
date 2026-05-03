@@ -487,3 +487,4 @@
 - [x] Document GHCR PAT creation and Portainer registry setup in DOCKER_DEPLOY.md (new section: "Authenticating Portainer with GHCR")
 - [x] Add .github/workflows/ci.yml — lightweight pnpm test job for PRs (no Docker build); triggers on push to main and PRs targeting main
 - [x] Pin portainer-stack.yml IMAGE_TAG default to v0.1.0 (was :latest)
+- [x] Fix Dockerfile: COPY --from=builder /app/client/dist was wrong path — Vite outDir is dist/public/ (not client/dist/); removed the incorrect COPY line; dist/ COPY now covers both index.js and dist/public/
