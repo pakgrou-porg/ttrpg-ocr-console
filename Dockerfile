@@ -10,12 +10,15 @@ RUN npm install -g pnpm@10.4.1
 
 WORKDIR /app
 
-# Copy dependency manifests first for layer caching
+# Copy dependency manifests AND patches directory first for layer caching.
+# The patches/ directory contains pnpm patch files (e.g. wouter@3.7.1.patch)
+# referenced in pnpm-lock.yaml. pnpm install fails with ENOENT if they are absent.
 COPY package.json pnpm-lock.yaml ./
+COPY patches ./patches
 
 # Install all dependencies (including devDependencies needed for the build).
-# --no-frozen-lockfile is used here because the lockfile was generated on a
-# different platform (host) than the Docker build environment (QEMU arm64).
+# --no-frozen-lockfile is used because the lockfile was generated on the host
+# and may differ slightly in the Docker build environment.
 # Lockfile integrity is validated by the CI test job before this step runs.
 RUN pnpm install --no-frozen-lockfile
 
@@ -38,8 +41,9 @@ RUN npm install -g pnpm@10.4.1
 
 WORKDIR /app
 
-# Copy dependency manifests
+# Copy dependency manifests and patches (required by pnpm for patched deps)
 COPY package.json pnpm-lock.yaml ./
+COPY patches ./patches
 
 # Install production dependencies only
 RUN pnpm install --no-frozen-lockfile --prod
