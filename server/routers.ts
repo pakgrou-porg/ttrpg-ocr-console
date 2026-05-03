@@ -61,11 +61,18 @@ export const appRouter = router({
 
     // P1: Full service status is behind authentication — exposes service topology.
     all: protectedProcedure.query(async () => {
-      const dbResult = await pingDatabase();
+      const [dbResult, activeJobs] = await Promise.all([
+        pingDatabase(),
+        getActiveIngestionJobs(),
+      ]);
+      const jobCount = activeJobs.length;
+      const scribesDetail = jobCount === 0
+        ? "Idle — No Active Jobs"
+        : `${jobCount} Active Job${jobCount === 1 ? "" : "s"}`;
       return {
         database: dbResult,
         agents: { ok: true, latencyMs: 0, detail: "Available & Ready" },
-        scribes: { ok: true, latencyMs: 0, detail: "Idle — No Active Jobs" },
+        scribes: { ok: jobCount === 0, latencyMs: 0, detail: scribesDetail },
         cloudConduit: { ok: true, latencyMs: 0, detail: "OpenRouter Active" },
       };
     }),

@@ -317,7 +317,7 @@
 - [ ] Test: document list scoped by ownership (listDocuments returns only docs where ownerUserId = ctx.user.id or visibility = 'global')
 
 ### Health Endpoints
-- [ ] health.all — scribes: replace hardcoded stub with real `getActiveIngestionJobs()` count (easy — helper exists)
+- [x] health.all — scribes: replace hardcoded stub with real `getActiveIngestionJobs()` count (done)
 - [ ] health.all — agents: replace hardcoded stub once LM Studio health endpoint is defined (needs real service endpoint)
 - [ ] health.all — cloudConduit: replace hardcoded stub once OpenRouter connectivity check is implemented (needs real ping)
 
@@ -366,5 +366,14 @@
 - [x] Add prompts.history tRPC procedure in routers.ts (protectedProcedure, input: name)
 - [x] Pass ctx.user.id to upsertSystemPrompt in prompts.upsert mutation (tracks who saved each version)
 - [x] Add Version History panel to IncantationsRunes.tsx (shows last 3 saves with version badge, timestamp, char count; Restore button loads old version into editor)
+- [x] 128/128 tests passing
+- [x] Save checkpoint and push to GitHub
+
+## Phase: Three Recommendations Implementation
+
+- [x] Wire Scribes health stub: replace hardcoded "Idle — No Active Jobs" in health.all with real getActiveIngestionJobs() count
+- [x] Update Scribes orb status text to reflect actual job count (e.g. "3 Active Jobs" vs "Idle — No Active Jobs")
+- [x] `tabular_extraction` and `referee` already in PIPELINE_STAGES array (varchar column, no migration needed)
+- [x] Seed all 13 default prompts into the live DB via scripts/seed-prompts.mjs
 - [x] 128/128 tests passing
 - [x] Save checkpoint and push to GitHub
