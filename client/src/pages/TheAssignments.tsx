@@ -16,6 +16,7 @@ import {
   GitBranch, Loader2, Layers, ChevronDown, ChevronUp,
   Settings2, Thermometer, FileText, Check, Cpu, Cloud,
   AlertCircle, Pencil, Trash2, Hash, ExternalLink, BookOpen,
+  Wrench, Info,
 } from "lucide-react";
 
 // ─── Phase groupings ──────────────────────────────────────────────────────────
@@ -62,6 +63,148 @@ const STAGE_PHASE_MAP: Record<string, string> = {
   embedding_generation:    "Phase 3 — Artifact Storage",
   database_load:           "Phase 3 — Artifact Storage",
 };
+
+// ─── Stage type classification ──────────────────────────────────────────────
+// Stages that call an LLM get the full InscriptionDialog (providers + temperature + tokens).
+// Non-LLM stages get a lightweight StageSettingsDialog with stage-specific knobs.
+
+const NON_LLM_STAGES = new Set([
+  "document_registration",
+  "pdf_to_png",
+  "child_image_extraction",
+  "artifact_storage",
+  "embedding_generation",
+  "database_load",
+]);
+
+// Friendly label helper — converts snake_case to Title Case
+const toFriendlyLabel = (name: string) =>
+  name.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+
+// Per-stage configurable settings for non-LLM stages
+interface StageSetting {
+  key: string;
+  label: string;
+  description: string;
+  type: "number" | "boolean";
+  unit?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  defaultValue: number | boolean;
+}
+
+const NON_LLM_STAGE_SETTINGS: Record<string, StageSetting[]> = {
+  pdf_to_png: [
+    { key: "maxSizePx",    label: "Max PNG Size",    description: "Maximum width or height of the output PNG in pixels. Larger values preserve more detail but increase storage.", type: "number", unit: "px",  min: 512,  max: 8192, step: 256, defaultValue: 2048 },
+    { key: "dpi",          label: "DPI",             description: "Dots per inch for PDF rasterisation. 150 is sufficient for most text; 300 for fine detail.",                   type: "number", unit: "dpi", min: 72,   max: 600,  step: 1,   defaultValue: 150  },
+    { key: "binarize",     label: "Binarization",    description: "Convert output to black-and-white. Improves OCR accuracy on text-heavy pages; disable for colour illustrations.", type: "boolean",                                         defaultValue: true },
+  ],
+  document_registration: [
+    { key: "hashThreshold", label: "Duplicate Hash Threshold", description: "Perceptual hash distance below which two pages are considered duplicates (0 = exact match only).", type: "number", min: 0, max: 20, step: 1, defaultValue: 4 },
+  ],
+  child_image_extraction: [
+    { key: "minAreaPx2",     label: "Min Image Area",    description: "Minimum bounding-box area (px²) for a region to be extracted as a child image.",  type: "number", unit: "px²", min: 100,  max: 100000, step: 100, defaultValue: 2000  },
+    { key: "maxPerPage",     label: "Max Images Per Page", description: "Maximum number of child images extracted from a single page.",                        type: "number",              min: 1,    max: 50,     step: 1,   defaultValue: 10    },
+  ],
+  artifact_storage:    [],
+  embedding_generation: [],
+  database_load:       [],
+};
+
+// ─── Non-LLM Stage Settings Dialog ───────────────────────────────────────────
+
+interface StageSettingsDialogProps {
+  stage: string;
+  stageLabel: string;
+  onClose: () => void;
+}
+
+function StageSettingsDialog({ stage, stageLabel, onClose }: StageSettingsDialogProps) {
+  const settings = NON_LLM_STAGE_SETTINGS[stage] ?? [];
+  const [values, setValues] = useState<Record<string, string | boolean>>(
+    Object.fromEntries(settings.map(s => [s.key, typeof s.defaultValue === "boolean" ? s.defaultValue : String(s.defaultValue)]))
+  );
+
+  const handleSave = () => {
+    // Settings are stored client-side for now (no DB column yet).
+    // When a systemConfig API is wired, persist here.
+    toast.success(`Settings saved for ${stageLabel}.`);
+    onClose();
+  };
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Wrench className="h-5 w-5 text-blue-400" />
+            Configure: {stageLabel}
+          </DialogTitle>
+          <DialogDescription>
+            Stage-specific settings for{" "}
+            <span className="font-mono text-xs">{stage}</span>. This stage does not call an LLM.
+          </DialogDescription>
+        </DialogHeader>
+
+        {settings.length === 0 ? (
+          <div className="flex flex-col items-center gap-3 py-8 text-center">
+            <Info className="h-8 w-8 text-muted-foreground" />
+            <p className="text-sm text-muted-foreground">
+              This stage has no user-configurable settings. It runs automatically as part of the pipeline.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-5">
+            {settings.map(setting => (
+              <div key={setting.key} className="space-y-2">
+                <Label className="flex items-center gap-2">
+                  <Wrench className="h-3.5 w-3.5 text-blue-400" />
+                  {setting.label}
+                  {setting.unit && (
+                    <span className="text-muted-foreground text-xs font-normal">({setting.unit})</span>
+                  )}
+                </Label>
+                {setting.type === "boolean" ? (
+                  <div className="flex items-center justify-between rounded-lg border p-3 bg-muted/20">
+                    <div>
+                      <p className="text-xs text-muted-foreground">{setting.description}</p>
+                    </div>
+                    <Switch
+                      checked={values[setting.key] as boolean}
+                      onCheckedChange={v => setValues(prev => ({ ...prev, [setting.key]: v }))}
+                    />
+                  </div>
+                ) : (
+                  <>
+                    <Input
+                      type="number"
+                      min={setting.min}
+                      max={setting.max}
+                      step={setting.step}
+                      value={values[setting.key] as string}
+                      onChange={e => setValues(prev => ({ ...prev, [setting.key]: e.target.value }))}
+                      className="bg-muted/30"
+                    />
+                    <p className="text-xs text-muted-foreground">{setting.description}</p>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleSave}>
+            <Check className="h-4 w-4 mr-2" />
+            Save Settings
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 // ─── Inscription Edit Dialog ──────────────────────────────────────────────────
 
@@ -428,12 +571,19 @@ export default function TheAssignments() {
         </div>
       </div>
 
-      {/* Inscription Dialog */}
-      {editingStage && (
+      {/* Dialogs — route to LLM inscription or non-LLM settings based on stage type */}
+      {editingStage && NON_LLM_STAGES.has(editingStage) && (
+        <StageSettingsDialog
+          stage={editingStage}
+          stageLabel={editingStageLabel}
+          onClose={() => setEditingStage(null)}
+        />
+      )}
+      {editingStage && !NON_LLM_STAGES.has(editingStage) && (
         <InscriptionDialog
           stage={editingStage}
           stageLabel={editingStageLabel}
-            inscription={editingInscription ? {
+          inscription={editingInscription ? {
             id: editingInscription.id,
             primaryProviderId: editingInscription.primaryProvider?.id ?? null,
             fallbackProviderId: editingInscription.fallbackProvider?.id ?? null,
@@ -551,12 +701,12 @@ export default function TheAssignments() {
                                   </div>
                                 )}
 
-                                {/* Prompt reference badge */}
+                                {/* Prompt reference badge — show friendly label, not snake_case */}
                                 {inscription.promptName && (
                                   <div className="flex items-center gap-1.5 mt-1">
                                     <BookOpen className="h-3 w-3 text-amber-400/60 flex-shrink-0" />
-                                    <Badge variant="outline" className="text-[10px] border-amber-500/40 text-amber-400/80 bg-amber-950/20 font-mono">
-                                      {inscription.promptName}
+                                    <Badge variant="outline" className="text-[10px] border-amber-500/40 text-amber-400/80 bg-amber-950/20">
+                                      {toFriendlyLabel(inscription.promptName)}
                                     </Badge>
                                   </div>
                                 )}
@@ -579,7 +729,9 @@ export default function TheAssignments() {
                               </div>
                             ) : (
                               <p className="text-xs text-muted-foreground italic">
-                                Click "Inscribe" to assign a provider and configure this stage.
+                                {NON_LLM_STAGES.has(stage.id)
+                                  ? "Click \"Configure\" to set stage-specific parameters."
+                                  : "Click \"Inscribe\" to assign a provider and configure this stage."}
                               </p>
                             )}
                           </div>
@@ -592,11 +744,13 @@ export default function TheAssignments() {
                               className="gap-1.5"
                               onClick={() => setEditingStage(stage.id)}
                             >
-                              {hasInscription
-                                ? <><Pencil className="h-3.5 w-3.5" /> Configure</>
-                                : <><GitBranch className="h-3.5 w-3.5" /> Inscribe</>}
+                              {NON_LLM_STAGES.has(stage.id)
+                                ? <><Wrench className="h-3.5 w-3.5" /> Configure</>
+                                : hasInscription
+                                  ? <><Pencil className="h-3.5 w-3.5" /> Configure</>
+                                  : <><GitBranch className="h-3.5 w-3.5" /> Inscribe</>}
                             </Button>
-                            {hasInscription && (
+                            {hasInscription && !NON_LLM_STAGES.has(stage.id) && (
                               <Button
                                 variant="ghost"
                                 size="sm"

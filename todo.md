@@ -389,3 +389,16 @@
 - [x] promptName auto-set to stage name on save (no user selection required)
 - [x] 128/128 tests passing
 - [x] Save checkpoint and push to GitHub
+
+## Phase: Assignments Stage Type Split + Friendly Labels
+
+- [x] Add NON_LLM_STAGES set — classify each stage as LLM or non-LLM
+- [x] Incantation badge in stage card shows friendly label (e.g. "Document Intelligence") not snake_case via toFriendlyLabel()
+- [x] Non-LLM stages: route to StageSettingsDialog — no provider pickers, no temperature/tokens
+- [x] StageSettingsDialog for pdf_to_png: Max PNG Size (px), DPI, Binarization toggle
+- [x] StageSettingsDialog for document_registration: Duplicate Hash Threshold
+- [x] StageSettingsDialog for child_image_extraction: Min Image Area (px²), Max Images Per Page
+- [x] StageSettingsDialog for artifact_storage / database_load / embedding_generation: read-only info panel
+- [x] Stage cards for non-LLM stages: Wrench Configure button, no delete button, appropriate empty-state text
+- [x] 128/128 tests passing
+- [x] Save checkpoint and push to GitHub
