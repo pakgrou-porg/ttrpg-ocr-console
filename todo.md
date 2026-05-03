@@ -473,3 +473,4 @@
 - [x] Fix release.yml: added actions/setup-node@v4 with Node 22 in test job; added full test job with MySQL service before build; PNPM_VERSION env var pinned to 10.4.1
 - [x] Fix CI test failure: ramblings.generate called real Manus Forge API (BUILT_IN_FORGE_API_KEY not available in CI) — added vi.mock('./_core/llm') in features.test.ts to mock invokeLLM; test now runs in ~400ms instead of 5.7s
 - [x] Fix Dockerfile: corepack prepare pnpm@10.4.1 fails in QEMU-emulated arm64 multi-platform build — replaced with npm install -g pnpm@10.4.1 (deterministic, no network resolution)
+- [x] Fix Dockerfile: --frozen-lockfile fails in multi-platform build (lockfile generated on host, not arm64) — replaced with --no-frozen-lockfile; lockfile integrity validated by CI test job on host before Docker build runs

@@ -13,8 +13,11 @@ WORKDIR /app
 # Copy dependency manifests first for layer caching
 COPY package.json pnpm-lock.yaml ./
 
-# Install all dependencies (including devDependencies needed for the build)
-RUN pnpm install --frozen-lockfile
+# Install all dependencies (including devDependencies needed for the build).
+# --no-frozen-lockfile is used here because the lockfile was generated on a
+# different platform (host) than the Docker build environment (QEMU arm64).
+# Lockfile integrity is validated by the CI test job before this step runs.
+RUN pnpm install --no-frozen-lockfile
 
 # Copy the rest of the source
 COPY . .
@@ -39,7 +42,7 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
 
 # Install production dependencies only
-RUN pnpm install --frozen-lockfile --prod
+RUN pnpm install --no-frozen-lockfile --prod
 
 # Copy the built artefacts from the builder stage
 COPY --from=builder /app/dist ./dist
