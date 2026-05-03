@@ -377,3 +377,15 @@
 - [x] Seed all 13 default prompts into the live DB via scripts/seed-prompts.mjs
 - [x] 128/128 tests passing
 - [x] Save checkpoint and push to GitHub
+
+## Phase: InscriptionDialog Refactor — Auto-Assign Incantation + Version Picker
+
+- [x] Auto-assign Incantation (promptName) from stage name — no manual prompt picker needed
+- [x] Show Incantation name as read-only display field with current version badge
+- [x] Add Version picker: only shown when multiple versions exist for the stage's prompt (from prompts.history)
+- [x] Keep Primary Provider, Fallback Provider, Temperature, Max Tokens, Active Inscription fields
+- [x] Fix dialog overflow for long provider names (truncate/wrap provider name in Select trigger)
+- [x] Add prompts.history tRPC call inside dialog to populate version options
+- [x] promptName auto-set to stage name on save (no user selection required)
+- [x] 128/128 tests passing
+- [x] Save checkpoint and push to GitHub

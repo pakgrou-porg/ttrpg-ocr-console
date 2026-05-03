@@ -89,11 +89,19 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
   const [fallbackProviderId, setFallbackProviderId] = useState<string>(
     inscription?.fallbackProviderId ? String(inscription.fallbackProviderId) : "none"
   );
-  const [promptName, setPromptName] = useState<string>(inscription?.promptName ?? "none");
-  // Fetch pipeline prompts for the picker
-  const { data: allPrompts } = trpc.prompts.list.useQuery();
-  const pipelinePrompts = (allPrompts ?? []).filter(p => p.category === "pipeline");
-  const selectedPrompt = pipelinePrompts.find(p => p.name === promptName) ?? null;
+
+  // Incantation is auto-assigned from the stage name — no manual picker needed.
+  // The promptName stored in the inscription is the stage name itself (e.g. "ocr_extraction").
+  const autoPromptName = stage;
+
+  // Fetch version history for this stage's prompt so we can offer a version picker.
+  const { data: versionHistory } = trpc.prompts.history.useQuery({ name: autoPromptName });
+  const versions = versionHistory ?? [];
+  // Default to the latest version (index 0 = highest version number).
+  const [selectedVersion, setSelectedVersion] = useState<string>(
+    versions.length > 0 ? String(versions[0].version) : "latest"
+  );
+
   const [temperature, setTemperature] = useState<string>(
     inscription?.temperature !== null && inscription?.temperature !== undefined
       ? String(inscription.temperature)
@@ -120,7 +128,7 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
       stage: stage as any,
       primaryProviderId: primaryProviderId && primaryProviderId !== "none" ? Number(primaryProviderId) : null,
       fallbackProviderId: fallbackProviderId && fallbackProviderId !== "none" ? Number(fallbackProviderId) : null,
-      promptName: promptName !== "none" ? promptName : null,
+      promptName: autoPromptName,
       temperature: temperature !== "" ? Number(temperature) : null,
       maxTokens: maxTokens !== "" ? Number(maxTokens) : null,
       isActive,
@@ -142,8 +150,7 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
           </DialogTitle>
           <DialogDescription>
             Configure the primary and fallback providers for{" "}
-            <span className="font-mono text-xs">{stage}</span>, along with the stage-specific
-            system prompt and generation settings.
+            <span className="font-mono text-xs">{stage}</span>, along with generation settings.
           </DialogDescription>
         </DialogHeader>
 
@@ -155,8 +162,10 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
               Primary Provider
             </Label>
             <Select value={primaryProviderId} onValueChange={setPrimaryProviderId}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select primary provider…" />
+              <SelectTrigger className="min-w-0 w-full">
+                <span className="truncate block text-left">
+                  <SelectValue placeholder="Select primary provider…" />
+                </span>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="none">— None —</SelectItem>
@@ -180,8 +189,10 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
               <span className="text-muted-foreground text-xs font-normal">(optional)</span>
             </Label>
             <Select value={fallbackProviderId} onValueChange={setFallbackProviderId}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select fallback provider…" />
+              <SelectTrigger className="min-w-0 w-full">
+                <span className="truncate block text-left">
+                  <SelectValue placeholder="Select fallback provider…" />
+                </span>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="none">— None —</SelectItem>
@@ -199,40 +210,57 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
 
           <Separator />
 
-          {/* Prompt Reference */}
+          {/* Incantation — auto-assigned from stage name */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <Label className="flex items-center gap-2">
                 <BookOpen className="h-4 w-4 text-amber-400" />
-                System Prompt
-                <span className="text-muted-foreground text-xs font-normal">(from Incantations &amp; Runes)</span>
+                Incantation
+                <span className="text-muted-foreground text-xs font-normal">(auto-assigned)</span>
               </Label>
               <Link href="/incantations-runes" className="flex items-center gap-1 text-xs text-amber-400/70 hover:text-amber-400 transition-colors">
                 <ExternalLink className="h-3 w-3" />
-                Edit Prompts
+                Edit in Incantations &amp; Runes
               </Link>
             </div>
-            <Select value={promptName} onValueChange={setPromptName}>
-              <SelectTrigger className="bg-muted/30">
-                <SelectValue placeholder="Select a prompt from Incantations &amp; Runes…" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">— None (use provider default) —</SelectItem>
-                {pipelinePrompts.map(p => (
-                  <SelectItem key={p.name} value={p.name}>
-                    {p.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {selectedPrompt ? (
+            {/* Read-only incantation name badge */}
+            <div className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2">
+              <FileText className="h-4 w-4 text-amber-400 flex-shrink-0" />
+              <span className="font-mono text-sm text-foreground">{autoPromptName}</span>
+              {versions.length > 0 && (
+                <Badge variant="outline" className="ml-auto text-xs border-amber-500/40 text-amber-400">
+                  v{versions[0].version} current
+                </Badge>
+              )}
+            </div>
+            {/* Version picker — only shown when multiple versions exist */}
+            {versions.length > 1 && (
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Prompt Version</Label>
+                <Select
+                  value={selectedVersion}
+                  onValueChange={setSelectedVersion}
+                >
+                  <SelectTrigger className="bg-muted/30 h-8 text-xs">
+                    <SelectValue placeholder="Select version…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {versions.map((v, i) => (
+                      <SelectItem key={v.id} value={String(v.version)} className="text-xs">
+                        v{v.version}{i === 0 ? " (latest)" : ""} — {new Date(v.createdAt).toLocaleDateString()}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Select an earlier version to pin this stage to a specific prompt revision.
+                </p>
+              </div>
+            )}
+            {versions.length === 0 && (
               <p className="text-xs text-muted-foreground">
-                {selectedPrompt.description ?? "No description available."}
-              </p>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                Select a prompt defined in Incantations &amp; Runes. Prompts are managed centrally and
-                referenced by name — edit the prompt text there, and all inscriptions using it update automatically.
+                No prompt found for <span className="font-mono">{autoPromptName}</span> in Incantations &amp; Runes.
+                Add it there first, then return to inscribe this stage.
               </p>
             )}
           </div>
