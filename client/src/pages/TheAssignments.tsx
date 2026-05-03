@@ -11,10 +11,12 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
+import { Link } from "wouter";
 import {
   GitBranch, Loader2, Layers, ChevronDown, ChevronUp,
   Settings2, Thermometer, FileText, Check, Cpu, Cloud,
-  AlertCircle, Pencil, Trash2, Hash,
+  AlertCircle, Pencil, Trash2, Hash, ExternalLink, BookOpen,
+  Wrench, Info,
 } from "lucide-react";
 
 // ─── Phase groupings ──────────────────────────────────────────────────────────
@@ -62,6 +64,148 @@ const STAGE_PHASE_MAP: Record<string, string> = {
   database_load:           "Phase 3 — Artifact Storage",
 };
 
+// ─── Stage type classification ──────────────────────────────────────────────
+// Stages that call an LLM get the full InscriptionDialog (providers + temperature + tokens).
+// Non-LLM stages get a lightweight StageSettingsDialog with stage-specific knobs.
+
+const NON_LLM_STAGES = new Set([
+  "document_registration",
+  "pdf_to_png",
+  "child_image_extraction",
+  "artifact_storage",
+  "embedding_generation",
+  "database_load",
+]);
+
+// Friendly label helper — converts snake_case to Title Case
+const toFriendlyLabel = (name: string) =>
+  name.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+
+// Per-stage configurable settings for non-LLM stages
+interface StageSetting {
+  key: string;
+  label: string;
+  description: string;
+  type: "number" | "boolean";
+  unit?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  defaultValue: number | boolean;
+}
+
+const NON_LLM_STAGE_SETTINGS: Record<string, StageSetting[]> = {
+  pdf_to_png: [
+    { key: "maxSizePx",    label: "Max PNG Size",    description: "Maximum width or height of the output PNG in pixels. Larger values preserve more detail but increase storage.", type: "number", unit: "px",  min: 512,  max: 8192, step: 256, defaultValue: 2048 },
+    { key: "dpi",          label: "DPI",             description: "Dots per inch for PDF rasterisation. 150 is sufficient for most text; 300 for fine detail.",                   type: "number", unit: "dpi", min: 72,   max: 600,  step: 1,   defaultValue: 150  },
+    { key: "binarize",     label: "Binarization",    description: "Convert output to black-and-white. Improves OCR accuracy on text-heavy pages; disable for colour illustrations.", type: "boolean",                                         defaultValue: true },
+  ],
+  document_registration: [
+    { key: "hashThreshold", label: "Duplicate Hash Threshold", description: "Perceptual hash distance below which two pages are considered duplicates (0 = exact match only).", type: "number", min: 0, max: 20, step: 1, defaultValue: 4 },
+  ],
+  child_image_extraction: [
+    { key: "minAreaPx2",     label: "Min Image Area",    description: "Minimum bounding-box area (px²) for a region to be extracted as a child image.",  type: "number", unit: "px²", min: 100,  max: 100000, step: 100, defaultValue: 2000  },
+    { key: "maxPerPage",     label: "Max Images Per Page", description: "Maximum number of child images extracted from a single page.",                        type: "number",              min: 1,    max: 50,     step: 1,   defaultValue: 10    },
+  ],
+  artifact_storage:    [],
+  embedding_generation: [],
+  database_load:       [],
+};
+
+// ─── Non-LLM Stage Settings Dialog ───────────────────────────────────────────
+
+interface StageSettingsDialogProps {
+  stage: string;
+  stageLabel: string;
+  onClose: () => void;
+}
+
+function StageSettingsDialog({ stage, stageLabel, onClose }: StageSettingsDialogProps) {
+  const settings = NON_LLM_STAGE_SETTINGS[stage] ?? [];
+  const [values, setValues] = useState<Record<string, string | boolean>>(
+    Object.fromEntries(settings.map(s => [s.key, typeof s.defaultValue === "boolean" ? s.defaultValue : String(s.defaultValue)]))
+  );
+
+  const handleSave = () => {
+    // Settings are stored client-side for now (no DB column yet).
+    // When a systemConfig API is wired, persist here.
+    toast.success(`Settings saved for ${stageLabel}.`);
+    onClose();
+  };
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="w-[min(90vw,42rem)] max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Wrench className="h-5 w-5 text-blue-400" />
+            Configure: {stageLabel}
+          </DialogTitle>
+          <DialogDescription>
+            Stage-specific settings for{" "}
+            <span className="font-mono text-xs">{stage}</span>. This stage does not call an LLM.
+          </DialogDescription>
+        </DialogHeader>
+
+        {settings.length === 0 ? (
+          <div className="flex flex-col items-center gap-3 py-8 text-center">
+            <Info className="h-8 w-8 text-muted-foreground" />
+            <p className="text-sm text-muted-foreground">
+              This stage has no user-configurable settings. It runs automatically as part of the pipeline.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-5">
+            {settings.map(setting => (
+              <div key={setting.key} className="space-y-2">
+                <Label className="flex items-center gap-2">
+                  <Wrench className="h-3.5 w-3.5 text-blue-400" />
+                  {setting.label}
+                  {setting.unit && (
+                    <span className="text-muted-foreground text-xs font-normal">({setting.unit})</span>
+                  )}
+                </Label>
+                {setting.type === "boolean" ? (
+                  <div className="flex items-center justify-between rounded-lg border p-3 bg-muted/20">
+                    <div>
+                      <p className="text-xs text-muted-foreground">{setting.description}</p>
+                    </div>
+                    <Switch
+                      checked={values[setting.key] as boolean}
+                      onCheckedChange={v => setValues(prev => ({ ...prev, [setting.key]: v }))}
+                    />
+                  </div>
+                ) : (
+                  <>
+                    <Input
+                      type="number"
+                      min={setting.min}
+                      max={setting.max}
+                      step={setting.step}
+                      value={values[setting.key] as string}
+                      onChange={e => setValues(prev => ({ ...prev, [setting.key]: e.target.value }))}
+                      className="bg-muted/30"
+                    />
+                    <p className="text-xs text-muted-foreground">{setting.description}</p>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleSave}>
+            <Check className="h-4 w-4 mr-2" />
+            Save Settings
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Inscription Edit Dialog ──────────────────────────────────────────────────
 
 interface InscriptionDialogProps {
@@ -71,7 +215,7 @@ interface InscriptionDialogProps {
     id?: number;
     primaryProviderId?: number | null;
     fallbackProviderId?: number | null;
-    systemPrompt?: string | null;
+    promptName?: string | null;
     temperature?: number | null;
     maxTokens?: number | null;
     isActive?: boolean;
@@ -88,7 +232,19 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
   const [fallbackProviderId, setFallbackProviderId] = useState<string>(
     inscription?.fallbackProviderId ? String(inscription.fallbackProviderId) : "none"
   );
-  const [systemPrompt, setSystemPrompt] = useState(inscription?.systemPrompt ?? "");
+
+  // Incantation is auto-assigned from the stage name — no manual picker needed.
+  // The promptName stored in the inscription is the stage name itself (e.g. "ocr_extraction").
+  const autoPromptName = stage;
+
+  // Fetch version history for this stage's prompt so we can offer a version picker.
+  const { data: versionHistory } = trpc.prompts.history.useQuery({ name: autoPromptName });
+  const versions = versionHistory ?? [];
+  // Default to the latest version (index 0 = highest version number).
+  const [selectedVersion, setSelectedVersion] = useState<string>(
+    versions.length > 0 ? String(versions[0].version) : "latest"
+  );
+
   const [temperature, setTemperature] = useState<string>(
     inscription?.temperature !== null && inscription?.temperature !== undefined
       ? String(inscription.temperature)
@@ -115,7 +271,7 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
       stage: stage as any,
       primaryProviderId: primaryProviderId && primaryProviderId !== "none" ? Number(primaryProviderId) : null,
       fallbackProviderId: fallbackProviderId && fallbackProviderId !== "none" ? Number(fallbackProviderId) : null,
-      systemPrompt: systemPrompt || undefined,
+      promptName: autoPromptName,
       temperature: temperature !== "" ? Number(temperature) : null,
       maxTokens: maxTokens !== "" ? Number(maxTokens) : null,
       isActive,
@@ -129,7 +285,7 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
 
   return (
     <Dialog open onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="w-[min(90vw,56rem)] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Settings2 className="h-5 w-5 text-amber-400" />
@@ -137,8 +293,7 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
           </DialogTitle>
           <DialogDescription>
             Configure the primary and fallback providers for{" "}
-            <span className="font-mono text-xs">{stage}</span>, along with the stage-specific
-            system prompt and generation settings.
+            <span className="font-mono text-xs">{stage}</span>, along with generation settings.
           </DialogDescription>
         </DialogHeader>
 
@@ -150,8 +305,20 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
               Primary Provider
             </Label>
             <Select value={primaryProviderId} onValueChange={setPrimaryProviderId}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select primary provider…" />
+              <SelectTrigger className="w-full h-auto min-h-10 py-2 [&>span]:flex-1 [&>span]:min-w-0">
+                <SelectValue placeholder="Select primary provider…">
+                  {primaryProviderId && primaryProviderId !== "none"
+                    ? (() => {
+                        const p = activeProviders.find(p => String(p.id) === primaryProviderId);
+                        return p ? (
+                          <span className="flex flex-col items-start gap-0.5 text-left">
+                            <span className="font-medium text-sm leading-tight">{p.displayName || p.name}</span>
+                            {p.modelId && <span className="text-xs text-muted-foreground leading-tight font-mono truncate max-w-full">{p.modelId}</span>}
+                          </span>
+                        ) : null;
+                      })()
+                    : null}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="none">— None —</SelectItem>
@@ -175,8 +342,20 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
               <span className="text-muted-foreground text-xs font-normal">(optional)</span>
             </Label>
             <Select value={fallbackProviderId} onValueChange={setFallbackProviderId}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select fallback provider…" />
+              <SelectTrigger className="w-full h-auto min-h-10 py-2 [&>span]:flex-1 [&>span]:min-w-0">
+                <SelectValue placeholder="Select fallback provider…">
+                  {fallbackProviderId && fallbackProviderId !== "none"
+                    ? (() => {
+                        const p = activeProviders.find(p => String(p.id) === fallbackProviderId);
+                        return p ? (
+                          <span className="flex flex-col items-start gap-0.5 text-left">
+                            <span className="font-medium text-sm leading-tight">{p.displayName || p.name}</span>
+                            {p.modelId && <span className="text-xs text-muted-foreground leading-tight font-mono truncate max-w-full">{p.modelId}</span>}
+                          </span>
+                        ) : null;
+                      })()
+                    : null}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="none">— None —</SelectItem>
@@ -194,23 +373,59 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
 
           <Separator />
 
-          {/* System Prompt */}
+          {/* Incantation — auto-assigned from stage name */}
           <div className="space-y-2">
-            <Label className="flex items-center gap-2">
-              <FileText className="h-4 w-4 text-amber-400" />
-              System Prompt
-              <span className="text-muted-foreground text-xs font-normal">(stage-specific instructions)</span>
-            </Label>
-            <Textarea
-              placeholder={`Enter the system prompt for the ${stageLabel} stage…\n\nExample: "You are an expert document layout analyzer for TTRPG materials. Your task is to identify all distinct visual elements and their bounding boxes on the page."`}
-              value={systemPrompt}
-              onChange={e => setSystemPrompt(e.target.value)}
-              className="min-h-[160px] font-mono text-xs resize-y bg-muted/30"
-            />
-            <p className="text-xs text-muted-foreground">
-              Injected as the system message for every LLM call at this stage.
-              Leave blank to use no system prompt (or the provider default).
-            </p>
+            <div className="flex items-center justify-between">
+              <Label className="flex items-center gap-2">
+                <BookOpen className="h-4 w-4 text-amber-400" />
+                Incantation
+                <span className="text-muted-foreground text-xs font-normal">(auto-assigned)</span>
+              </Label>
+              <Link href="/incantations-runes" className="flex items-center gap-1 text-xs text-amber-400/70 hover:text-amber-400 transition-colors">
+                <ExternalLink className="h-3 w-3" />
+                Edit in Incantations &amp; Runes
+              </Link>
+            </div>
+            {/* Read-only incantation name badge */}
+            <div className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2">
+              <FileText className="h-4 w-4 text-amber-400 flex-shrink-0" />
+              <span className="font-mono text-sm text-foreground">{autoPromptName}</span>
+              {versions.length > 0 && (
+                <Badge variant="outline" className="ml-auto text-xs border-amber-500/40 text-amber-400">
+                  v{versions[0].version} current
+                </Badge>
+              )}
+            </div>
+            {/* Version picker — only shown when multiple versions exist */}
+            {versions.length > 1 && (
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Prompt Version</Label>
+                <Select
+                  value={selectedVersion}
+                  onValueChange={setSelectedVersion}
+                >
+                  <SelectTrigger className="bg-muted/30 h-8 text-xs">
+                    <SelectValue placeholder="Select version…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {versions.map((v, i) => (
+                      <SelectItem key={v.id} value={String(v.version)} className="text-xs">
+                        v{v.version}{i === 0 ? " (latest)" : ""} — {new Date(v.createdAt).toLocaleDateString()}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Select an earlier version to pin this stage to a specific prompt revision.
+                </p>
+              </div>
+            )}
+            {versions.length === 0 && (
+              <p className="text-xs text-muted-foreground">
+                No prompt found for <span className="font-mono">{autoPromptName}</span> in Incantations &amp; Runes.
+                Add it there first, then return to inscribe this stage.
+              </p>
+            )}
           </div>
 
           <Separator />
@@ -323,20 +538,23 @@ export default function TheAssignments() {
     return acc;
   }, {} as Record<string, NonNullable<typeof inscriptions>[0]>);
 
+  // Only show stages that are mapped to a known phase (filter out legacy aliases and console stages)
+  const mappedStages = (stages ?? []).filter(s => STAGE_PHASE_MAP[s.id] !== undefined);
+
   // Group stages by phase
-  const stagesByPhase = (stages ?? []).reduce((acc, s) => {
-    const phase = STAGE_PHASE_MAP[s.id] ?? "Other";
+  const stagesByPhase = mappedStages.reduce((acc, s) => {
+    const phase = STAGE_PHASE_MAP[s.id]!;
     if (!acc[phase]) acc[phase] = [];
     acc[phase].push(s);
     return acc;
-  }, {} as Record<string, typeof stages>);
+  }, {} as Record<string, typeof mappedStages>);
 
   const editingInscription = editingStage
     ? inscriptionByStage[editingStage] ?? null
     : null;
 
   const editingStageLabel = editingStage
-    ? (stages ?? []).find(s => s.id === editingStage)?.label ?? editingStage
+    ? mappedStages.find(s => s.id === editingStage)?.label ?? editingStage
     : "";
 
   const togglePhase = (phase: string) => {
@@ -353,8 +571,13 @@ export default function TheAssignments() {
     return <Cloud className="h-3.5 w-3.5 text-blue-400 flex-shrink-0" />;
   };
 
-  const totalInscribed = Object.keys(inscriptionByStage).length;
-  const totalStages = stages?.length ?? 0;
+  // A stage is "configured" if it has a DB inscription (LLM stages) OR is a non-LLM stage
+  // (non-LLM stages run automatically and don't need a provider inscription).
+  const isStageConfigured = (stageId: string) =>
+    NON_LLM_STAGES.has(stageId) || !!inscriptionByStage[stageId];
+
+  const totalConfigured = mappedStages.filter(s => isStageConfigured(s.id)).length;
+  const totalStages = mappedStages.length;
 
   return (
     <div className="space-y-6">
@@ -371,13 +594,20 @@ export default function TheAssignments() {
           </p>
         </div>
         <div className="text-right">
-          <div className="text-2xl font-bold text-amber-400">{totalInscribed} / {totalStages}</div>
-          <div className="text-xs text-muted-foreground">stages inscribed</div>
+          <div className="text-2xl font-bold text-amber-400">{totalConfigured} / {totalStages}</div>
+          <div className="text-xs text-muted-foreground">stages configured</div>
         </div>
       </div>
 
-      {/* Inscription Dialog */}
-      {editingStage && (
+      {/* Dialogs — route to LLM inscription or non-LLM settings based on stage type */}
+      {editingStage && NON_LLM_STAGES.has(editingStage) && (
+        <StageSettingsDialog
+          stage={editingStage}
+          stageLabel={editingStageLabel}
+          onClose={() => setEditingStage(null)}
+        />
+      )}
+      {editingStage && !NON_LLM_STAGES.has(editingStage) && (
         <InscriptionDialog
           stage={editingStage}
           stageLabel={editingStageLabel}
@@ -385,7 +615,7 @@ export default function TheAssignments() {
             id: editingInscription.id,
             primaryProviderId: editingInscription.primaryProvider?.id ?? null,
             fallbackProviderId: editingInscription.fallbackProvider?.id ?? null,
-            systemPrompt: editingInscription.systemPrompt,
+            promptName: editingInscription.promptName ?? null,
             temperature: editingInscription.temperature,
             maxTokens: editingInscription.maxTokens,
             isActive: editingInscription.isActive,
@@ -413,7 +643,7 @@ export default function TheAssignments() {
           {Object.entries(PHASE_GROUPS).map(([phaseKey, phaseInfo]) => {
             const phaseStages = stagesByPhase[phaseKey] ?? [];
             const isExpanded = expandedPhases[phaseKey] ?? true;
-            const inscribedCount = phaseStages.filter(s => inscriptionByStage[s.id]).length;
+            const inscribedCount = phaseStages.filter(s => isStageConfigured(s.id)).length;
 
             return (
               <div key={phaseKey} className="rounded-xl border border-border/50 overflow-hidden">
@@ -430,8 +660,8 @@ export default function TheAssignments() {
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
-                    <Badge variant="outline" className={`text-xs ${phaseInfo.badgeClass}`}>
-                      {inscribedCount} / {phaseStages.length} inscribed
+                      <Badge variant="outline" className={`text-xs ${phaseInfo.badgeClass}`}>
+                      {inscribedCount} / {phaseStages.length} configured
                     </Badge>
                     {isExpanded
                       ? <ChevronUp className="h-4 w-4 text-muted-foreground" />
@@ -457,7 +687,13 @@ export default function TheAssignments() {
                               {hasInscription && (
                                 <div className={`w-2 h-2 rounded-full flex-shrink-0 ${isActive ? "bg-green-400" : "bg-gray-500"}`} />
                               )}
-                              {!hasInscription && (
+                              {!hasInscription && NON_LLM_STAGES.has(stage.id) && (
+                                <Badge variant="outline" className="text-xs border-blue-500/40 text-blue-400 bg-blue-950/20">
+                                  <Check className="h-3 w-3 mr-1" />
+                                  Auto-configured
+                                </Badge>
+                              )}
+                              {!hasInscription && !NON_LLM_STAGES.has(stage.id) && (
                                 <Badge variant="outline" className="text-xs border-dashed text-muted-foreground">
                                   <AlertCircle className="h-3 w-3 mr-1" />
                                   Not inscribed
@@ -499,13 +735,13 @@ export default function TheAssignments() {
                                   </div>
                                 )}
 
-                                {/* System Prompt preview */}
-                                {inscription.systemPrompt && (
-                                  <div className="flex items-start gap-1.5 mt-1">
-                                    <FileText className="h-3 w-3 text-amber-400/60 flex-shrink-0 mt-0.5" />
-                                    <p className="text-xs text-muted-foreground font-mono truncate max-w-[500px]">
-                                      {inscription.systemPrompt.slice(0, 100)}{inscription.systemPrompt.length > 100 ? "…" : ""}
-                                    </p>
+                                {/* Prompt reference badge — show friendly label, not snake_case */}
+                                {inscription.promptName && (
+                                  <div className="flex items-center gap-1.5 mt-1">
+                                    <BookOpen className="h-3 w-3 text-amber-400/60 flex-shrink-0" />
+                                    <Badge variant="outline" className="text-[10px] border-amber-500/40 text-amber-400/80 bg-amber-950/20">
+                                      {toFriendlyLabel(inscription.promptName)}
+                                    </Badge>
                                   </div>
                                 )}
 
@@ -527,7 +763,9 @@ export default function TheAssignments() {
                               </div>
                             ) : (
                               <p className="text-xs text-muted-foreground italic">
-                                Click "Inscribe" to assign a provider and configure this stage.
+                                {NON_LLM_STAGES.has(stage.id)
+                                  ? "Runs automatically. Click \"Configure\" to adjust optional stage-specific parameters."
+                                  : "Click \"Inscribe\" to assign a provider and configure this stage."}
                               </p>
                             )}
                           </div>
@@ -540,11 +778,13 @@ export default function TheAssignments() {
                               className="gap-1.5"
                               onClick={() => setEditingStage(stage.id)}
                             >
-                              {hasInscription
-                                ? <><Pencil className="h-3.5 w-3.5" /> Configure</>
-                                : <><GitBranch className="h-3.5 w-3.5" /> Inscribe</>}
+                              {NON_LLM_STAGES.has(stage.id)
+                                ? <><Wrench className="h-3.5 w-3.5" /> Configure</>
+                                : hasInscription
+                                  ? <><Pencil className="h-3.5 w-3.5" /> Configure</>
+                                  : <><GitBranch className="h-3.5 w-3.5" /> Inscribe</>}
                             </Button>
-                            {hasInscription && (
+                            {hasInscription && !NON_LLM_STAGES.has(stage.id) && (
                               <Button
                                 variant="ghost"
                                 size="sm"

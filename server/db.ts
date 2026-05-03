@@ -18,6 +18,7 @@ import {
   llmProviders, InsertLlmProvider,
   stageInscriptions, InsertStageInscription,
   dbConnections, InsertDbConnection,
+  promptVersions, InsertPromptVersion,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
@@ -213,16 +214,56 @@ export async function getSystemPromptByName(name: string) {
   return result.length > 0 ? result[0] : undefined;
 }
 
-export async function upsertSystemPrompt(prompt: InsertSystemPrompt) {
+export async function upsertSystemPrompt(prompt: InsertSystemPrompt, savedBy?: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.insert(systemPrompts).values(prompt).onDuplicateKeyUpdate({
+
+  // Determine the next version number
+  const existing = await getSystemPromptByName(prompt.name);
+  const nextVersion = existing ? (existing.version + 1) : 1;
+  const versionToSave = prompt.version ?? nextVersion;
+
+  // Write the new version to prompt_versions history
+  await db.insert(promptVersions).values({
+    promptName: prompt.name,
+    promptText: prompt.promptText,
+    version: versionToSave,
+    savedBy: savedBy ?? null,
+  });
+
+  // Upsert the canonical system_prompts row
+  await db.insert(systemPrompts).values({ ...prompt, version: versionToSave }).onDuplicateKeyUpdate({
     set: {
       promptText: prompt.promptText,
       description: prompt.description,
-      version: prompt.version,
+      version: versionToSave,
     },
   });
+
+  // Trim history to last 3 versions for this prompt
+  const history = await db
+    .select({ id: promptVersions.id })
+    .from(promptVersions)
+    .where(eq(promptVersions.promptName, prompt.name))
+    .orderBy(desc(promptVersions.version));
+
+  if (history.length > 3) {
+    const idsToDelete = history.slice(3).map((r) => r.id);
+    for (const id of idsToDelete) {
+      await db.delete(promptVersions).where(eq(promptVersions.id, id));
+    }
+  }
+}
+
+export async function getPromptVersionHistory(name: string) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(promptVersions)
+    .where(eq(promptVersions.promptName, name))
+    .orderBy(desc(promptVersions.version))
+    .limit(3);
 }
 
 export async function seedDefaultPrompts() {
@@ -230,93 +271,380 @@ export async function seedDefaultPrompts() {
   if (!db) return;
 
   const defaults: InsertSystemPrompt[] = [
+    // ── Phase 1: Ingestion & Layout ──────────────────────────────────────────
     {
-      name: "pass1_layout_analysis",
+      name: "document_intelligence",
       category: "pipeline",
-      description: "Instructions for the local VLM to identify layout bounding boxes and element types.",
-      promptText: `You are an expert document layout analyzer for TTRPG (Tabletop Role-Playing Game) materials. Your task is to analyze the provided image and identify all distinct visual elements.
+      description: "Identifies the document's canonical title, publisher, document type, and generates a 2–3 sentence summary from the first 10 pages. Drives layout strategy for all subsequent pages.",
+      promptText: `Analyze the provided images representing the first 10 pages of a Tabletop Roleplaying Game (TTRPG) document. Extract high-level identity and classification metadata.
 
-For each element, output a JSON object with:
-- "type": one of ["heading", "body_text", "table", "stat_block", "image", "sidebar", "footer", "page_number", "decorative"]
-- "bbox": [x1, y1, x2, y2] as percentages of image dimensions (0-100)
-- "confidence": float 0.0-1.0
-- "reading_order": integer starting from 1
+Domain Rules:
+1. Preserve all TTRPG abbreviations (e.g., AC, HP, STR, d20, CR, XP) exactly as printed. Do not expand or correct them.
+2. Output must be raw JSON only. Do not include markdown formatting, code blocks, preamble, or explanation.
+3. If document type cannot be confidently determined, output "unknown".
+4. Do not hallucinate data not visible in the images.
 
-Return a JSON array of all detected elements. Focus on accuracy over speed.`,
+Output JSON Schema:
+{
+  "canonical_title": "string (Title as printed)",
+  "publisher": "string (Publisher name as printed)",
+  "document_type": "enum (book | guide | supplement | adventure | periodical | magazine | unknown)",
+  "document_summary": "string (2-3 sentences defining scope and purpose)",
+  "confidence": "integer (0-100 self-assessed certainty)"
+}`,
       version: 1,
     },
     {
-      name: "pass2_content_extraction",
+      name: "layout_analysis",
       category: "pipeline",
-      description: "Instructions for cloud LLMs to extract structured JSON from TTRPG page content.",
-      promptText: `You are an expert TTRPG data extractor. Given an image of a TTRPG rulebook or sourcebook page and its layout metadata, extract all content into structured JSON.
+      description: "Local VLM determines macro-level visual layout structure and dominant content type for each page.",
+      promptText: `Analyze the provided preprocessed PNG of a single TTRPG page. Determine the macro-level visual layout structure and dominant content type.
 
-Rules:
-1. Preserve ALL text exactly as written, including special characters and formatting.
-2. For stat blocks, extract every field (AC, HP, Speed, Abilities, Actions, etc.).
-3. For tables, preserve row/column structure as a 2D array.
-4. For spells, extract: name, level, school, casting_time, range, components, duration, description.
-5. Assign a "content_type" to each block: ["creature", "spell", "item", "rule", "lore", "table", "other"].
-6. Include a "confidence" score (0.0-1.0) for each extracted block.
+Domain Rules:
+1. Identify column structure to inform reading order (left-to-right, top-to-bottom).
+2. Output must be raw JSON only. Do not include markdown formatting, code blocks, preamble, or explanation.
+3. If layout is ambiguous, output "unknown" for layout_type.
+4. Output confidence below 55 if uncertain.
 
-Return a JSON object with a "blocks" array containing all extracted content.`,
+Output JSON Schema:
+{
+  "layout_type": "enum (single_column | two_column | three_column | mixed | full_page_image | table_dominant | periodical_mixed | unknown)",
+  "dominant_content": "enum (text | table | illustration | mixed)",
+  "has_header": "boolean",
+  "has_footer": "boolean",
+  "has_page_number": "boolean",
+  "estimated_text_coverage": "float (0.0 to 1.0)",
+  "notes": "string (optional observations)",
+  "confidence": "integer (0-100)"
+}`,
       version: 1,
     },
     {
-      name: "referee_consensus",
+      name: "bbox_detection",
       category: "pipeline",
-      description: "Instructions for the adversarial referee model that resolves multi-model discrepancies.",
-      promptText: `You are an impartial referee evaluating OCR extraction results from multiple AI models for TTRPG content.
+      description: "Identifies visually distinct content elements, defines precise bounding boxes, and classifies semantic types. Handles both full-page and cropped mixed-content regions.",
+      promptText: `Analyze the provided TTRPG image—whether a full page layout or a cropped mixed-content region. Identify visually distinct content elements, define their precise bounding boxes, and classify their semantic types.
 
-You will receive:
-- The source image
-- Multiple JSON extraction results from different models
-- A diff highlighting discrepancies
+Domain Rules:
+1. Processing Path: Evaluate columns strictly left-to-right. Within each column, evaluate regions top-to-bottom. Assign sequential, 1-indexed "sequence" values following this exact path.
+2. Spatial Mapping: Bounding boxes must utilize pixel coordinates {x, y, w, h} relative to the top-left origin of the provided image.
+3. Granularity: If a single bounding region contains disparate content types (e.g., a text flow merging into an inline table), flag it with isMixedBoundary = true and immediately delineate the internal components within the sub_regions array.
+4. Format Constraints: Output must be raw JSON only. Strip all markdown formatting, code blocks, preambles, and explanations.
 
-Your task:
-1. Identify which model produced the most accurate extraction for each discrepancy.
-2. Produce a merged, consensus JSON that takes the best from each model.
-3. Flag any fields where confidence is below 0.7 for human review.
-4. Output a "consensus_score" (0.0-1.0) indicating overall extraction quality.
-
-Be especially careful with: numerical stats, proper nouns, spell names, and special abilities.`,
+Output JSON Schema:
+{
+  "page_id": "integer (if full page)",
+  "original_region_sequence": "integer (if processing a cropped region)",
+  "image_width": "integer",
+  "image_height": "integer",
+  "layout_type": "string",
+  "regions": [
+    {
+      "sequence": "integer",
+      "regionType": "enum (text | table | illustration | map | graphic | advertisement | header | footer | page_number | sidebar | callout | unknown)",
+      "bbox": { "x": "integer", "y": "integer", "w": "integer", "h": "integer" },
+      "contentTypeFlags": ["array of strings (e.g., 'stat_block', 'has_bold_terms')"],
+      "isMixedBoundary": "boolean",
+      "sub_regions": [
+        {
+          "sequence": "integer",
+          "regionType": "string",
+          "bbox": { "x": "integer", "y": "integer", "w": "integer", "h": "integer" },
+          "contentTypeFlags": ["array of strings"]
+        }
+      ]
+    }
+  ],
+  "resolved": "boolean (true if complex boundaries successfully subdivided)",
+  "confidence": "integer (0-100)"
+}`,
       version: 1,
     },
+    {
+      name: "content_type_classify",
+      category: "pipeline",
+      description: "Resolves ambiguous or mixed-boundary regions from bbox_detection. Outputs refined sub-region splits with corrected content type classifications and pixel-accurate bounding boxes.",
+      promptText: `Analyze the provided TTRPG image—whether a full page layout or a cropped mixed-content region. Identify visually distinct content elements, define their precise bounding boxes, and classify their semantic types.
+
+Domain Rules:
+1. Processing Path: Evaluate columns strictly left-to-right. Within each column, evaluate regions top-to-bottom. Assign sequential, 1-indexed "sequence" values following this exact path.
+2. Spatial Mapping: Bounding boxes must utilize pixel coordinates {x, y, w, h} relative to the top-left origin of the provided image.
+3. Granularity: If a single bounding region contains disparate content types (e.g., a text flow merging into an inline table), flag it with isMixedBoundary = true and immediately delineate the internal components within the sub_regions array.
+4. Format Constraints: Output must be raw JSON only. Strip all markdown formatting, code blocks, preambles, and explanations.
+
+Output JSON Schema:
+{
+  "page_id": "integer (if full page)",
+  "original_region_sequence": "integer (if processing a cropped region)",
+  "image_width": "integer",
+  "image_height": "integer",
+  "layout_type": "string",
+  "regions": [
+    {
+      "sequence": "integer",
+      "regionType": "enum (text | table | illustration | map | graphic | advertisement | header | footer | page_number | sidebar | callout | unknown)",
+      "bbox": { "x": "integer", "y": "integer", "w": "integer", "h": "integer" },
+      "contentTypeFlags": ["array of strings (e.g., 'stat_block', 'has_bold_terms')"],
+      "isMixedBoundary": "boolean",
+      "sub_regions": [
+        {
+          "sequence": "integer",
+          "regionType": "string",
+          "bbox": { "x": "integer", "y": "integer", "w": "integer", "h": "integer" },
+          "contentTypeFlags": ["array of strings"]
+        }
+      ]
+    }
+  ],
+  "resolved": "boolean (true if complex boundaries successfully subdivided)",
+  "confidence": "integer (0-100)"
+}`,
+      version: 1,
+    },
+    // ── Phase 2: OCR Extraction & Validation ─────────────────────────────────
+    {
+      name: "ocr_extraction",
+      category: "pipeline",
+      description: "Extracts text and tabular data from TTRPG region images into structured JSON. Applies semantic hierarchy and game-specific formatting rules.",
+      promptText: `Extract text and tabular data from the provided TTRPG region image into structured JSON. Apply semantic hierarchy and game-specific formatting.
+
+Domain Rules:
+1. Abbreviations are canonical. Do not expand or correct AC, HP, STR, DEX, CON, INT, WIS, CHA, CR, XP, DC, or dice notation (d4/d20/etc). Guide spelling corrections using the provided lexicon_terms.
+2. Preserve formatting semantics. Translate bold text to rules terms, italics to spells/titles.
+3. Obey reading order context provided in content_regions.
+4. Output must be raw JSON only. Do not include markdown formatting, code blocks, preamble, or explanation.
+5. If table structure is detected, map to tabular schema (stat_block or generic). Otherwise, map to text schema.
+
+Output JSON Schema (Text):
+{
+  "region_sequence": "integer",
+  "regionType": "text",
+  "content_blocks": [
+    {
+      "block_type": "enum (heading | paragraph | stat_line | rule_term)",
+      "level": "integer (optional, for headings)",
+      "text": "string",
+      "term": "string (optional, for rule_term)",
+      "definition": "string (optional, for rule_term)",
+      "formatting": ["array of strings (e.g., bold, italic)"]
+    }
+  ],
+  "reading_order_verified": "boolean",
+  "confidence": "integer (0-100)"
+}`,
+      version: 1,
+    },
+    {
+      name: "content_break_detect",
+      category: "pipeline",
+      description: "Analyzes extracted text for a single page and a look-ahead buffer to identify hierarchical structural breaks and cross-page sentence continuity.",
+      promptText: `Analyze the extracted text array for a single TTRPG page and the look-ahead buffer containing the tail end of the previous page. Identify hierarchical structural breaks and sentence continuity.
+
+Domain Rules:
+1. Determine if the first sentence continues a thought from the look-ahead buffer.
+2. Determine if the final sentence on the page is incomplete.
+3. Output must be raw JSON only. Do not include markdown formatting, code blocks, preamble, or explanation.
+
+Output JSON Schema:
+{
+  "page_number": "integer",
+  "structural_breaks": [
+    {
+      "break_type": "enum (chapter | section | subsection | appendix | none)",
+      "heading_text": "string",
+      "position_in_reading_order": "integer"
+    }
+  ],
+  "continuity": {
+    "continues_from_previous_page": "boolean",
+    "continues_to_next_page": "boolean",
+    "mid_sentence_break_at_end": "boolean",
+    "section_continues_from_previous_page": "boolean"
+  },
+  "confidence": "integer (0-100)"
+}`,
+      version: 1,
+    },
+    {
+      name: "summarisation",
+      category: "pipeline",
+      description: "Generates hierarchical summaries (short + long) for a complete TTRPG section, extracting key terms and entities for embedding metadata and RAG retrieval.",
+      promptText: `Analyze the provided assembled text for a complete TTRPG section. Generate hierarchical summaries for embedding metadata and context retrieval.
+
+Domain Rules:
+1. Identify and extract canonical game terms (e.g., initiative, attack roll, conditions). Do not alter or expand TTRPG abbreviations.
+2. Write summaries strictly reflecting the mechanics and lore presented.
+3. Output must be raw JSON only. Do not include markdown formatting, code blocks, preamble, or explanation.
+
+Output JSON Schema:
+{
+  "section_id": "string",
+  "section_type": "string",
+  "heading": "string",
+  "short_summary": "string (1-2 sentences)",
+  "long_summary": "string (1-3 paragraphs)",
+  "key_terms": ["array of strings"],
+  "key_entities": ["array of strings"],
+  "confidence": "integer (0-100)"
+}`,
+      version: 1,
+    },
+    {
+      name: "quality_validation",
+      category: "pipeline",
+      description: "Scores OCR extraction quality on completeness, layout accuracy, context decisions, and text continuity. Drives the accept / escalate / HITL decision.",
+      promptText: `Assess the provided OCR extraction JSON against the source page image/layout_metadata. Score extraction quality strictly on predefined dimensions.
+
+Domain Rules:
+1. Heavily penalize failures in layout accuracy (merging sidebars, violating column order).
+2. Heavily penalize context failures (misidentifying stat blocks, stripping required formatting).
+3. If overall score is below 50, strictly recommend escalate_to_pass3 or flag_hitl based on pass_number.
+4. Output must be raw JSON only. Do not include markdown formatting, code blocks, preamble, or explanation.
+
+Output JSON Schema:
+{
+  "pass_number": "integer",
+  "overall_score": "integer (0-100)",
+  "accepted": "boolean",
+  "dimension_scores": {
+    "completeness": "integer",
+    "layout_accuracy": "integer",
+    "context_decisions": "integer",
+    "text_continuity": "integer"
+  },
+  "issues": [
+    {
+      "severity": "enum (minor | major | critical)",
+      "dimension": "string",
+      "description": "string"
+    }
+  ],
+  "recommendation": "enum (accept | escalate_to_pass3 | flag_hitl)",
+  "confidence": "integer (0-100)"
+}`,
+      version: 1,
+    },
+    {
+      name: "pass_comparison",
+      category: "pipeline",
+      description: "Contrasts all available pass outputs (Pass 1–4) to select the best candidate or flag for HITL when passes are irreconcilably different.",
+      promptText: `Analyze multiple OCR extraction pass outputs for the same TTRPG page. Select the optimal extraction candidate or escalate irreconcilable differences.
+
+Domain Rules:
+1. Prioritize passes that maintain distinct layout boundaries (e.g., isolating sidebars) and preserve complex tabular structures (stat blocks).
+2. Explicitly log mechanical differences in behavior between passes.
+3. Output must be raw JSON only. Do not include markdown formatting, code blocks, preamble, or explanation.
+
+Output JSON Schema:
+{
+  "passes_compared": ["array of integers"],
+  "recommended_pass": "integer",
+  "winner_rationale": "string",
+  "differences": [
+    {
+      "region_sequence": "integer",
+      "dimension": "string",
+      "passX_behaviour": "string",
+      "passY_behaviour": "string"
+    }
+  ],
+  "hitl_required": "boolean",
+  "confidence": "integer (0-100)"
+}`,
+      version: 1,
+    },
+    {
+      name: "tabular_extraction",
+      category: "pipeline",
+      description: "Specialised extraction for complex TTRPG tabular data: multi-row stat blocks, spell lists, merged-cell equipment tables. Invoked when ocr_extraction produces low-confidence table output.",
+      promptText: `Perform specialized extraction on complex TTRPG tabular data (e.g., multi-row stat blocks, spell lists, merged-cell equipment tables).
+
+Domain Rules:
+1. Preserve row/column relationships precisely. Handle merged headers correctly.
+2. Retain all canonical abbreviations.
+3. Extract footnotes and associate them accurately.
+4. Output must be raw JSON only. Do not include markdown formatting, code blocks, preamble, or explanation.
+
+Output JSON Schema:
+{
+  "region_sequence": "integer",
+  "table_type": "string",
+  "caption": "string",
+  "column_headers": ["array of strings"],
+  "rows": ["array of objects/arrays mapping to headers"],
+  "merged_cells": ["array of strings"],
+  "footnotes": ["array of strings"],
+  "confidence": "integer (0-100)"
+}`,
+      version: 1,
+    },
+    // ── Console AI ───────────────────────────────────────────────────────────
     {
       name: "voice_of_arkanum",
       category: "console_experience",
-      description: "Instructions for the AI that generates random lore ramblings and thematic knowledge snippets.",
-      promptText: `You are the Voice of the Arkanum — an ancient, slightly eccentric arcane intelligence that has absorbed the lore of countless TTRPG sourcebooks. You speak with wisdom, dry wit, and occasional dramatic flair.
+      description: "Generates thematic TTRPG lore aligned with the preferred game system, drawing structural context from the database schema summary.",
+      promptText: `Generate thematic TTRPG lore based on {{random_seed}}, aligned with {{preferred_game}} and drawing structural context from {{database_schema_summary}}.
 
-When asked to "ramble", you will:
-1. Select a random topic from the knowledge base (creatures, spells, locations, factions, history, magic items, etc.)
-2. Share 2-4 sentences of interesting, accurate lore about that topic
-3. Include at least one surprising or lesser-known detail
-4. End with a cryptic or philosophical observation
+Domain Rules:
+1. Tone must be evocative, atmospheric, and highly specific to the mechanical/lore realities of the target game system.
+2. Output must be raw JSON only. Do not include markdown formatting, code blocks, preamble, or explanation.
 
-Tone: Scholarly but approachable. Think "wise old wizard who has read everything and finds most things mildly amusing."
-Format: Plain prose, no headers or bullet points. Maximum 150 words.`,
+Output JSON Schema:
+{
+  "topic": "string",
+  "lore_text": "string",
+  "associated_mechanics": ["array of strings"]
+}`,
       version: 1,
     },
     {
       name: "arkanum_search",
       category: "console_experience",
-      description: "Instructions for the AI that interprets natural language search queries against the lore database.",
-      promptText: `You are the Arkanum's search oracle. Users will ask questions in natural language about TTRPG content.
+      description: "Translates natural language user queries into structured database search parameters for the TTRPG lore database.",
+      promptText: `Translate the following natural language user query: "{{user_query}}" into structured database search parameters for the TTRPG lore database.
 
-Your task:
-1. Parse the user's intent and identify: entity_type, filters, sort_preference
-2. Convert to a structured query object
-3. If the query is ambiguous, provide the most likely interpretation AND note alternatives
+Domain Rules:
+1. Map recognized entities to exact terminology associated with {{preferred_game}}.
+2. Restrict filters to {{available_filters}}.
+3. Output must be raw JSON only. Do not include markdown formatting, code blocks, preamble, or explanation.
 
-Output JSON:
+Output JSON Schema:
 {
-  "interpreted_query": "human-readable interpretation",
-  "entity_types": ["creature", "spell", "item", "rule", "lore"],
-  "filters": { "game_system": null, "cr_min": null, "cr_max": null, "tags": [] },
-  "sort_by": "relevance",
-  "confidence": 0.0-1.0,
-  "alternatives": []
+  "search_intent": "string",
+  "extracted_keywords": ["array of strings"],
+  "filters": {
+    "document_type": "string",
+    "entity_type": "string"
+  },
+  "confidence": "integer (0-100)"
+}`,
+      version: 1,
+    },
+    {
+      name: "referee",
+      category: "console_experience",
+      description: "Authoritative rules referee that answers rules questions and resolves edge cases by citing source material from the lore database.",
+      promptText: `You are The Referee — an authoritative, impartial rules arbiter for TTRPG systems. Your role is to answer specific rules questions, resolve edge cases, and cite the relevant source material from the lore database.
+
+Domain Rules:
+1. Always cite the specific rule source (book, page, section) when available in {{retrieved_context}}.
+2. If a rule is ambiguous or has known errata, state both interpretations clearly.
+3. Preserve all TTRPG abbreviations (AC, HP, DC, etc.) exactly as used in the source material.
+4. Output must be raw JSON only. Do not include markdown formatting, code blocks, preamble, or explanation.
+
+Output JSON Schema:
+{
+  "ruling": "string (clear, direct answer to the rules question)",
+  "citations": [
+    {
+      "source": "string (book/document title)",
+      "section": "string",
+      "page": "string (if available)",
+      "excerpt": "string (relevant quoted text)"
+    }
+  ],
+  "ambiguity_notes": "string (optional — note if rule is contested or has errata)",
+  "confidence": "integer (0-100)"
 }`,
       version: 1,
     },
@@ -325,7 +653,15 @@ Output JSON:
   for (const prompt of defaults) {
     const existing = await getSystemPromptByName(prompt.name);
     if (!existing) {
+      // Insert the canonical row
       await db.insert(systemPrompts).values(prompt);
+      // Write the initial version history row (no savedBy — system seed)
+      await db.insert(promptVersions).values({
+        promptName: prompt.name,
+        promptText: prompt.promptText,
+        version: prompt.version ?? 1,
+        savedBy: null,
+      });
     }
   }
 }

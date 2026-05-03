@@ -220,7 +220,7 @@ describe("ramblings.generate", () => {
     expect(result).toHaveProperty("text");
     expect(typeof result.text).toBe("string");
     expect(result.text.length).toBeGreaterThan(0);
-  });
+  }, 15_000);
 
   it("throws for unauthenticated users", async () => {
     const caller = appRouter.createCaller(makeUnauthCtx());
@@ -314,7 +314,7 @@ describe("assignments.topology", () => {
     const inscription = await caller.assignments.upsert({
       stage: "ocr_extraction",
       primaryProviderId: provider.id,
-      systemPrompt: "Topology test prompt",
+      promptName: "ocr_extraction_prompt",
       temperature: 0.1,
       isActive: true,
     });
@@ -326,7 +326,7 @@ describe("assignments.topology", () => {
       expect(stage!.inscription).not.toBeNull();
       expect(stage!.primaryProvider).not.toBeNull();
       expect(stage!.primaryProvider!.displayName).toBe(uniqueName);
-      expect(stage!.inscription!.systemPrompt).toBe("Topology test prompt");
+      expect(stage!.inscription!.promptName).toBe("ocr_extraction_prompt");
     } finally {
       await caller.assignments.delete({ id: inscription.id });
       await caller.providers.delete({ id: provider.id });

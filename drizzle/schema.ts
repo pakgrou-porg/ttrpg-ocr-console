@@ -119,6 +119,23 @@ export type SystemPrompt = typeof systemPrompts.$inferSelect;
 export type InsertSystemPrompt = typeof systemPrompts.$inferInsert;
 
 /**
+ * Version history for system prompts.
+ * Stores the last N versions of each prompt to allow rollback and comparison.
+ * A new row is written every time a prompt is saved via prompts.upsert.
+ */
+export const promptVersions = mysqlTable("prompt_versions", {
+  id: int("id").autoincrement().primaryKey(),
+  promptName: varchar("promptName", { length: 128 }).notNull(),
+  promptText: text("promptText").notNull(),
+  version: int("version").notNull(),
+  savedBy: int("savedBy"),           // FK to users.id (nullable — seed rows have no user)
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type PromptVersion = typeof promptVersions.$inferSelect;
+export type InsertPromptVersion = typeof promptVersions.$inferInsert;
+
+/**
  * System configuration key-value store.
  * Used by Arcane Mechanisms to persist service connection details.
  */
@@ -439,11 +456,11 @@ export const stageInscriptions = mysqlTable("stage_inscriptions", {
    */
   fallbackProviderId: int("fallbackProviderId"),
   /**
-   * Dedicated system prompt for this stage.
-   * Hard requirement: every LLM-involved stage must have a configurable prompt.
-   * Fetched at runtime by both Python pipeline scripts and the console.
+   * Reference to system_prompts.name for this stage.
+   * The actual prompt text lives in the system_prompts table (Incantations & Runes).
+   * Null means no prompt is assigned — the provider default will be used.
    */
-  systemPrompt: text("systemPrompt"),
+  promptName: varchar("promptName", { length: 128 }),
   /**
    * Temperature override for this stage (0.0 – 2.0).
    * Null = use the primary provider's defaultTemperature.

@@ -21,15 +21,15 @@ import {
 } from "@/components/ui/sidebar";
 import { getLoginUrl } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
-import { LayoutDashboard, LogOut, PanelLeft, Users } from "lucide-react";
+import { ChevronLeft, ChevronRight, LogOut } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from './DashboardLayoutSkeleton';
 import { Button } from "./ui/button";
 
 const menuItems = [
-  { icon: LayoutDashboard, label: "Page 1", path: "/" },
-  { icon: Users, label: "Page 2", path: "/some-path" },
+  { icon: () => null, label: "Page 1", path: "/" },
+  { icon: () => null, label: "Page 2", path: "/some-path" },
 ];
 
 const SIDEBAR_WIDTH_KEY = "sidebar-width";
@@ -112,7 +112,6 @@ function DashboardLayoutContent({
   const isCollapsed = state === "collapsed";
   const [isResizing, setIsResizing] = useState(false);
   const sidebarRef = useRef<HTMLDivElement>(null);
-  const activeMenuItem = menuItems.find(item => item.path === location);
   const isMobile = useIsMobile();
 
   useEffect(() => {
@@ -124,17 +123,13 @@ function DashboardLayoutContent({
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (!isResizing) return;
-
       const sidebarLeft = sidebarRef.current?.getBoundingClientRect().left ?? 0;
       const newWidth = e.clientX - sidebarLeft;
       if (newWidth >= MIN_WIDTH && newWidth <= MAX_WIDTH) {
         setSidebarWidth(newWidth);
       }
     };
-
-    const handleMouseUp = () => {
-      setIsResizing(false);
-    };
+    const handleMouseUp = () => setIsResizing(false);
 
     if (isResizing) {
       document.addEventListener("mousemove", handleMouseMove);
@@ -142,7 +137,6 @@ function DashboardLayoutContent({
       document.body.style.cursor = "col-resize";
       document.body.style.userSelect = "none";
     }
-
     return () => {
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
@@ -154,27 +148,11 @@ function DashboardLayoutContent({
   return (
     <>
       <div className="relative" ref={sidebarRef}>
-        <Sidebar
-          collapsible="icon"
-          className="border-r-0"
-          disableTransition={isResizing}
-        >
+        {/* offcanvas: sidebar fully hides when collapsed */}
+        <Sidebar collapsible="offcanvas" className="border-r-0" disableTransition={isResizing}>
           <SidebarHeader className="h-16 justify-center">
-            <div className="flex items-center gap-3 px-2 transition-all w-full">
-              <button
-                onClick={toggleSidebar}
-                className="h-8 w-8 flex items-center justify-center hover:bg-accent rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring shrink-0"
-                aria-label="Toggle navigation"
-              >
-                <PanelLeft className="h-4 w-4 text-muted-foreground" />
-              </button>
-              {!isCollapsed ? (
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="font-semibold tracking-tight truncate">
-                    Navigation
-                  </span>
-                </div>
-              ) : null}
+            <div className="flex items-center gap-2 px-3">
+              <span className="font-semibold tracking-tight truncate">Navigation</span>
             </div>
           </SidebarHeader>
 
@@ -188,11 +166,8 @@ function DashboardLayoutContent({
                       isActive={isActive}
                       onClick={() => setLocation(item.path)}
                       tooltip={item.label}
-                      className={`h-10 transition-all font-normal`}
+                      className="h-10 transition-all font-normal"
                     >
-                      <item.icon
-                        className={`h-4 w-4 ${isActive ? "text-primary" : ""}`}
-                      />
                       <span>{item.label}</span>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
@@ -204,19 +179,15 @@ function DashboardLayoutContent({
           <SidebarFooter className="p-3">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="flex items-center gap-3 rounded-lg px-1 py-1 hover:bg-accent/50 transition-colors w-full text-left group-data-[collapsible=icon]:justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                <button className="flex items-center gap-3 rounded-lg px-1 py-1 hover:bg-accent/50 transition-colors w-full text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                   <Avatar className="h-9 w-9 border shrink-0">
                     <AvatarFallback className="text-xs font-medium">
                       {user?.name?.charAt(0).toUpperCase()}
                     </AvatarFallback>
                   </Avatar>
-                  <div className="flex-1 min-w-0 group-data-[collapsible=icon]:hidden">
-                    <p className="text-sm font-medium truncate leading-none">
-                      {user?.name || "-"}
-                    </p>
-                    <p className="text-xs text-muted-foreground truncate mt-1.5">
-                      {user?.email || "-"}
-                    </p>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate leading-none">{user?.name || "-"}</p>
+                    <p className="text-xs text-muted-foreground truncate mt-1.5">{user?.email || "-"}</p>
                   </div>
                 </button>
               </DropdownMenuTrigger>
@@ -232,28 +203,47 @@ function DashboardLayoutContent({
             </DropdownMenu>
           </SidebarFooter>
         </Sidebar>
-        <div
-          className={`absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/20 transition-colors ${isCollapsed ? "hidden" : ""}`}
-          onMouseDown={() => {
-            if (isCollapsed) return;
-            setIsResizing(true);
-          }}
-          style={{ zIndex: 50 }}
-        />
+
+        {/* Resize handle — only visible when sidebar is open */}
+        {!isCollapsed && (
+          <div
+            className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/20 transition-colors"
+            onMouseDown={() => setIsResizing(true)}
+            style={{ zIndex: 50 }}
+          />
+        )}
+
+        {/* Floating boundary arrow toggle — sits on the right edge of the sidebar panel.
+            When collapsed the sidebar has zero width so the button floats at x=0 (left edge of content).
+            Points LEFT (collapse) when open, RIGHT (expand) when hidden. */}
+        {!isMobile && (
+          <button
+            onClick={toggleSidebar}
+            aria-label={isCollapsed ? "Expand navigation" : "Collapse navigation"}
+            className={[
+              "absolute top-1/2 -translate-y-1/2 z-50",
+              "flex items-center justify-center",
+              "h-6 w-6 rounded-full",
+              "bg-background border border-border shadow-md",
+              "hover:bg-accent hover:border-primary/40 transition-all",
+              "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              // When open: pin to right edge; when collapsed: pin to right edge of zero-width container
+              isCollapsed ? "-right-3" : "-right-3",
+            ].join(" ")}
+          >
+            {isCollapsed
+              ? <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+              : <ChevronLeft className="h-3.5 w-3.5 text-muted-foreground" />}
+          </button>
+        )}
       </div>
 
       <SidebarInset>
+        {/* Mobile top bar */}
         {isMobile && (
           <div className="flex border-b h-14 items-center justify-between bg-background/95 px-2 backdrop-blur supports-[backdrop-filter]:backdrop-blur sticky top-0 z-40">
             <div className="flex items-center gap-2">
               <SidebarTrigger className="h-9 w-9 rounded-lg bg-background" />
-              <div className="flex items-center gap-3">
-                <div className="flex flex-col gap-1">
-                  <span className="tracking-tight text-foreground">
-                    {activeMenuItem?.label ?? "Menu"}
-                  </span>
-                </div>
-              </div>
             </div>
           </div>
         )}

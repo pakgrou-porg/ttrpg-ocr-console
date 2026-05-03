@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeAll } from "vitest";
+import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { nanoid } from "nanoid";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
@@ -79,12 +79,14 @@ describe("providers (LLM Provider Registry)", () => {
     });
     expect(result).toHaveProperty("id");
     expect(result.success).toBe(true);
+    // Cleanup: remove the test row so it doesn't pollute the provider registry
+    await caller.providers.delete({ id: result.id });
   });
 
   it("masks API keys when listing providers", async () => {
     const caller = appRouter.createCaller(createAdminContext());
     // First create a provider with a real key
-    await caller.providers.create({
+    const created = await caller.providers.create({
       name: `OpenRouter Masked ${suffix}`,
       displayName: `OpenRouter Masked ${suffix}`,
       providerType: "openrouter",
@@ -98,6 +100,8 @@ describe("providers (LLM Provider Registry)", () => {
     expect(found!.hasApiKey).toBe(true);
     expect(found!.maskedApiKey).toBeDefined();
     expect(found!.maskedApiKey).not.toBe("sk-or-v1-abcdefghijklmnop");
+    // Cleanup: remove the test row so it doesn't pollute the provider registry
+    await caller.providers.delete({ id: created.id });
   });
 
   it("allows admin to delete a provider", async () => {
@@ -152,7 +156,7 @@ describe("assignments (Stage Inscription Registry)", () => {
     const result = await caller.assignments.upsert({
       stage: "bbox_detection",
       primaryProviderId: provider.id,
-      systemPrompt: "Test system prompt",
+      promptName: "layout_analysis_prompt",
       temperature: 0.1,
     });
     expect(result.success).toBe(true);
@@ -254,6 +258,23 @@ describe("providers.test (Test Connection & Model Discovery)", () => {
 });
 
 describe("connections (Database Connection Config)", () => {
+  // Clean up any rows this describe block creates, regardless of test outcome.
+  // Without this, every test run leaves orphaned rows in the live DB.
+  afterAll(async () => {
+    const caller = appRouter.createCaller(createAdminContext());
+    const all = await caller.connections.list();
+    const testPrefixes = [
+      `Test Supabase ${suffix}`,
+      `Test Connection Ping ${suffix}`,
+      `To Delete Connection ${suffix}`,
+    ];
+    for (const conn of all) {
+      if (testPrefixes.includes(conn.name)) {
+        try { await caller.connections.delete({ id: conn.id }); } catch {}
+      }
+    }
+  });
+
   it("lists available connection types", async () => {
     const caller = appRouter.createCaller(createAdminContext());
     const types = await caller.connections.types();

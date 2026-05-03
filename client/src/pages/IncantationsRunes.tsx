@@ -5,7 +5,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import { Terminal, Save, RefreshCw, Wand2, Database, Zap, Search } from "lucide-react";
+import { Terminal, Save, RefreshCw, Wand2, Database, Zap, Search, FileSearch, ScanLine, Table2, Gavel, History, RotateCcw } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { getLoginUrl } from "@/const";
 
@@ -21,6 +21,14 @@ interface PromptTab {
 const PROMPT_TABS: PromptTab[] = [
   // ── Phase 1: Ingestion & Layout ──────────────────────────────────────────
   {
+    name: "document_intelligence",
+    label: "P1: Document Intelligence",
+    category: "pipeline",
+    icon: FileSearch,
+    description: "Instructions for identifying the document's canonical title, publisher, document type (book/guide/supplement/adventure/periodical/magazine), and generating a 2–3 sentence summary from the first 10 pages. The document type output drives the layout parsing strategy for all subsequent pages.",
+    variables: ["{{page_images}}", "{{filename}}", "{{game_system}}", "{{edition}}"],
+  },
+  {
     name: "layout_analysis",
     label: "P1: Layout Analysis",
     category: "pipeline",
@@ -35,6 +43,14 @@ const PROMPT_TABS: PromptTab[] = [
     icon: Zap,
     description: "Instructions for classifying detected bounding boxes into content types: text, table, illustration, map, graphic, advertisement.",
     variables: ["{{image_url}}", "{{layout_metadata}}", "{{page_number}}"],
+  },
+  {
+    name: "content_type_classify",
+    label: "P1: Mixed-Boundary Resolver",
+    category: "pipeline",
+    icon: ScanLine,
+    description: "Instructions for resolving ambiguous or mixed-boundary regions identified during bounding-box detection. Receives a cropped region image and must output refined sub-region splits with corrected content type classifications and pixel-accurate bounding boxes.",
+    variables: ["{{region_image_url}}", "{{original_region_sequence}}", "{{layout_type}}", "{{page_number}}"],
   },
   // ── Phase 2: OCR Extraction ──────────────────────────────────────────────
   {
@@ -78,6 +94,14 @@ const PROMPT_TABS: PromptTab[] = [
     variables: ["{{pass1_result}}", "{{pass2_result}}", "{{pass3_result}}", "{{pass4_result}}", "{{source_image_url}}"],
   },
   {
+    name: "tabular_extraction",
+    label: "P2: Tabular Extraction",
+    category: "pipeline",
+    icon: Table2,
+    description: "Specialised extraction prompt for table-dominant pages and complex table regions (stat blocks, spell lists, equipment tables, multi-row nested structures). Invoked when ocr_extraction produces a low-confidence table output or when layout_type is table_dominant.",
+    variables: ["{{region_image_url}}", "{{table_type_hint}}", "{{game_system}}", "{{entity_name_hint}}"],
+  },
+  {
     name: "voice_of_arkanum",
     label: "Voice of the Arkanum",
     category: "console_experience",
@@ -93,6 +117,14 @@ const PROMPT_TABS: PromptTab[] = [
     description: "Instructions for the AI that interprets natural language search queries against the lore database.",
     variables: ["{{user_query}}", "{{available_filters}}", "{{preferred_game}}"],
   },
+  {
+    name: "referee",
+    label: "The Referee",
+    category: "console_experience",
+    icon: Gavel,
+    description: "Instructions for the AI that acts as an authoritative rules referee — answering specific rules questions, resolving edge cases, and citing the relevant source material from the lore database.",
+    variables: ["{{rules_question}}", "{{game_system}}", "{{edition}}", "{{retrieved_context}}"],
+  },
 ];
 
 export default function IncantationsRunes() {
@@ -105,6 +137,11 @@ export default function IncantationsRunes() {
     enabled: isAuthenticated,
   });
 
+  const { data: versionHistory, refetch: refetchHistory } = trpc.prompts.history.useQuery(
+    { name: activeTab },
+    { enabled: isAuthenticated },
+  );
+
   const seedDefaults = trpc.prompts.seedDefaults.useMutation({
     onSuccess: () => { toast.success("Default incantations inscribed into the Arkanum."); refetch(); },
     onError: (e) => toast.error("Failed to seed: " + e.message),
@@ -115,6 +152,7 @@ export default function IncantationsRunes() {
       toast.success("Incantation saved to the Arkanum.");
       setIsDirty((d) => ({ ...d, [activeTab]: false }));
       refetch();
+      refetchHistory();
     },
     onError: (e) => toast.error("Failed to save: " + e.message),
   });
@@ -306,6 +344,51 @@ export default function IncantationsRunes() {
               ))}
             </div>
           </div>
+
+          {/* Version History */}
+          {versionHistory && versionHistory.length > 0 && (
+            <div className="p-4 rounded-lg border border-border/40 bg-card/30">
+              <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
+                <History className="w-4 h-4 text-primary" />
+                Version History
+                <span className="text-xs text-muted-foreground font-normal">(last {versionHistory.length} saves)</span>
+              </h3>
+              <div className="space-y-2">
+                {versionHistory.map((v, idx) => (
+                  <div key={v.id} className="flex items-center justify-between p-2.5 rounded-md border border-border/30 bg-background/40 gap-3">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <Badge variant="outline" className="text-xs font-mono flex-shrink-0">
+                        v{v.version}
+                      </Badge>
+                      {idx === 0 && (
+                        <Badge variant="default" className="text-xs flex-shrink-0">Current</Badge>
+                      )}
+                      <span className="text-xs text-muted-foreground truncate">
+                        {new Date(v.createdAt).toLocaleString()}
+                      </span>
+                      <span className="text-xs text-muted-foreground/60 truncate hidden sm:block">
+                        {v.promptText.length} chars
+                      </span>
+                    </div>
+                    {idx > 0 && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-1.5 text-xs flex-shrink-0"
+                        onClick={() => {
+                          handleTextChange(v.promptText);
+                          toast.info(`v${v.version} loaded into editor — click Save to apply.`);
+                        }}
+                      >
+                        <RotateCcw className="w-3 h-3" />
+                        Restore
+                      </Button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

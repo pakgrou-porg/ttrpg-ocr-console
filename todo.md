@@ -216,34 +216,34 @@
 - [x] Add tests for page attempt tracking procedures
 - [x] All 127 tests passing after schema and router changes
 
-## Phase: Provider Registry + Stage Inscriptions Redesign
+## Phase: Provider Registry + Stage Inscriptions Redesign (Stale — superseded by later phase below)
 
 ### Schema Changes
-- [ ] Enhance llmProviders table: add displayName, modelId, port, contextLength, maxTokens, defaultTemperature, capabilities, isDefault fields
-- [ ] Create stageInscriptions table: stage (unique), primaryProviderId, fallbackProviderId, systemPrompt, temperature, maxTokens, llmSettings, isActive
-- [ ] Remove modelAssignments table (replaced by stageInscriptions)
-- [ ] Run pnpm db:push after schema changes
+- [x] Enhance llmProviders table: add displayName, modelId, port, contextLength, maxTokens, defaultTemperature, capabilities, isDefault fields
+- [x] Create stageInscriptions table: stage (unique), primaryProviderId, fallbackProviderId, systemPrompt, temperature, maxTokens, llmSettings, isActive
+- [x] Remove modelAssignments table (replaced by stageInscriptions)
+- [x] Run pnpm db:push after schema changes
 
 ### Server Changes
-- [ ] Update db.ts: add stageInscriptions helpers (upsert, list, getByStage), update llmProviders helpers for new fields
-- [ ] Update routers.ts: replace assignments.* procedures with inscriptions.* procedures (list, upsert, getByStage, delete)
-- [ ] Update providers.* procedures to handle new fields (displayName, modelId, port, capabilities, isDefault, defaultTemperature)
-- [ ] Remove all modelAssignments references from routers.ts and db.ts
+- [x] Update db.ts: add stageInscriptions helpers (upsert, list, getByStage), update llmProviders helpers for new fields
+- [x] Update routers.ts: replace assignments.* procedures with inscriptions.* procedures (list, upsert, getByStage, delete)
+- [x] Update providers.* procedures to handle new fields (displayName, modelId, port, capabilities, isDefault, defaultTemperature)
+- [x] Remove all modelAssignments references from routers.ts and db.ts
 
 ### UI Changes (The Artificers)
-- [ ] Replace "Model Assignments" tab with "Stage Inscriptions" tab
-- [ ] Build Stage Inscriptions UI: one row per pipeline stage, primary + fallback provider pickers, system prompt, temperature, maxTokens
-- [ ] Enhance Provider Registry UI: add displayName, modelId, port, contextLength, maxTokens, defaultTemperature, capabilities, isDefault fields
-- [ ] Add "Test Connection" button per provider (sends a real ping to verify connectivity)
-- [ ] Show provider type icon and model ID in inscription provider pickers
+- [x] Replace "Model Assignments" tab with "Stage Inscriptions" tab
+- [x] Build Stage Inscriptions UI: one row per pipeline stage, primary + fallback provider pickers, system prompt, temperature, maxTokens
+- [x] Enhance Provider Registry UI: add displayName, modelId, port, contextLength, maxTokens, defaultTemperature, capabilities, isDefault fields
+- [x] Add "Test Connection" button per provider (sends a real ping to verify connectivity)
+- [x] Show provider type icon and model ID in inscription provider pickers
 
 ### Tests
-- [ ] Update providers.test.ts for new llmProviders fields
-- [ ] Add inscriptions.test.ts for stageInscriptions CRUD procedures
-- [ ] Remove/replace modelAssignments tests
+- [x] Update providers.test.ts for new llmProviders fields
+- [x] Add inscriptions.test.ts for stageInscriptions CRUD procedures
+- [x] Remove/replace modelAssignments tests
 
 ### GitHub
-- [ ] Push all changes to GitHub after checkpoint
+- [x] Push all changes to GitHub after checkpoint
 
 ## Phase: Provider Registry + Stage Inscriptions Redesign
 
@@ -283,18 +283,18 @@
 
 ## Phase: Provider URL Decomposition + Capability Flags
 
-- [ ] Add apiPrefix column to llmProviders table (e.g. "/v1")
-- [ ] Replace capabilities JSON column with boolean flags: supportsChat, supportsVision, supportsEmbedding
-- [ ] Apply DB migration for new columns
-- [ ] Update db.ts helpers for new fields
-- [ ] Update providers.create/update input schemas in routers.ts
-- [ ] Fix URL assembly in discoverModels and testConnection to avoid duplicate port/prefix
-- [ ] Rewrite TheArtificers provider form: separate baseUrl, port, apiPrefix fields
-- [ ] Smart URL decomposition on paste: parse "http://10.x.x.x:1234/v1" into host/port/prefix
-- [ ] Replace capabilities text input with Chat / Vision / Embedding checkboxes
-- [ ] Update provider card display to show flag badges instead of capability string
-- [ ] Update providers.test.ts for new schema fields
-- [ ] Push to GitHub
+- [x] Add apiPrefix column to llmProviders table (e.g. "/v1")
+- [x] Replace capabilities JSON column with boolean flags: supportsChat, supportsVision, supportsEmbedding
+- [x] Apply DB migration for new columns
+- [x] Update db.ts helpers for new fields
+- [x] Update providers.create/update input schemas in routers.ts
+- [x] Fix URL assembly in discoverModels and testConnection to avoid duplicate port/prefix
+- [x] Rewrite TheArtificers provider form: separate baseUrl, port, apiPrefix fields
+- [x] Smart URL decomposition on paste: parse "http://10.x.x.x:1234/v1" into host/port/prefix
+- [x] Replace capabilities text input with Chat / Vision / Embedding checkboxes
+- [x] Update provider card display to show flag badges instead of capability string
+- [x] Update providers.test.ts for new schema fields
+- [x] Push to GitHub
 
 ## Phase: Capability Flags Reorder + Reasoning Toggle
 
@@ -307,3 +307,156 @@
 - [x] Apply DB migration for supportsReasoning column
 - [x] Run all tests and fix any failures
 - [x] Save checkpoint and push to GitHub
+
+## Phase: Remaining Work (Confirmed Outstanding)
+
+### CI / DevOps
+- [ ] Add GitHub Actions CI workflow (.github/workflows/ci.yml) — runs `pnpm test` on push/PR to main
+
+### Tests
+- [ ] Test: document list scoped by ownership (listDocuments returns only docs where ownerUserId = ctx.user.id or visibility = 'global')
+
+### Health Endpoints
+- [x] health.all — scribes: replace hardcoded stub with real `getActiveIngestionJobs()` count (done)
+- [ ] health.all — agents: replace hardcoded stub once LM Studio health endpoint is defined (needs real service endpoint)
+- [ ] health.all — cloudConduit: replace hardcoded stub once OpenRouter connectivity check is implemented (needs real ping)
+
+### Document Ownership
+- [ ] listDocuments: add ownership filter at DB level (WHERE ownerUserId = ? OR visibility = 'global') instead of JS post-filter
+- [ ] searchDocuments: same — push ownership filter into the SQL WHERE clause for correctness and performance
+
+### Invitations
+- [ ] Email dispatch for invitation scrolls — invitations are created in DB but never sent (needs email service integration, e.g. Resend or SMTP)
+
+## Phase: Assignments → Prompt Reference (not inline text)
+
+- [x] Schema: rename `systemPrompt` column to `promptName` (varchar 128, nullable FK reference to system_prompts.name) in stage_inscriptions
+- [x] Apply DB migration for column rename
+- [x] db.ts: update upsertStageInscription / updateStageInscription helpers to use promptName
+- [x] routers.ts: update assignments.upsert and assignments.update input schemas (promptName: z.string().optional() instead of systemPrompt)
+- [x] routers.ts: update assignments.topology to return promptName (and optionally resolve the full promptText by joining system_prompts)
+- [x] TheAssignments.tsx: replace systemPrompt textarea with a Select dropdown populated from prompts.list (filtered to category="pipeline")
+- [x] TheAssignments.tsx: show the selected prompt's description as helper text below the picker
+- [x] TheAssignments.tsx: add a "Edit Prompts" link that navigates to Incantations & Runes
+- [x] Update providers.test.ts and features.test.ts: replace systemPrompt field with promptName in all test fixtures
+- [x] All 128 tests passing after changes
+- [x] Save checkpoint and push to GitHub
+
+## Phase: Add Missing Pipeline Stages to Incantations & Runes + Pipeline Visualization
+
+- [x] Add `document_intelligence` tab to PROMPT_TABS in IncantationsRunes.tsx (Phase 1, pipeline category)
+- [x] Add `content_type_classify` tab to PROMPT_TABS in IncantationsRunes.tsx (Phase 1, pipeline category)
+- [x] Add `tabular_extraction` tab to PROMPT_TABS in IncantationsRunes.tsx (Phase 2, pipeline category)
+- [x] Add `referee` tab to PROMPT_TABS in IncantationsRunes.tsx (console_experience category)
+- [x] Verify `summarisation` tab is present and correctly named
+- [x] Verify `quality_validation` and `pass_comparison` tabs are present
+- [x] Add document_intelligence, tabular_extraction, pass_comparison, and referee to PipelineVisualization.tsx STAGE_META, PIPELINE_FLOW, and FLOW_EDGES
+- [x] Extend ramblings.generate test timeout to 15s (LLM call)
+- [x] 128/128 tests passing
+- [x] Save checkpoint and push to GitHub
+
+## Phase: Default Prompts Seeding + Version History
+
+- [x] Replace seedDefaultPrompts defaults array with all 13 canonical prompts from ttrpg_default_prompts.md
+- [x] Add `prompt_versions` table to schema (promptName, promptText, version, savedBy, createdAt)
+- [x] Apply DB migration for prompt_versions table (CREATE TABLE IF NOT EXISTS via Node.js)
+- [x] Update upsertSystemPrompt in db.ts to auto-increment version, write version history row, and trim to last 3 versions
+- [x] Add getPromptVersionHistory helper in db.ts (returns last 3 versions ordered by version DESC)
+- [x] Update seedDefaultPrompts loop to also write initial version history rows for new prompts
+- [x] Add prompts.history tRPC procedure in routers.ts (protectedProcedure, input: name)
+- [x] Pass ctx.user.id to upsertSystemPrompt in prompts.upsert mutation (tracks who saved each version)
+- [x] Add Version History panel to IncantationsRunes.tsx (shows last 3 saves with version badge, timestamp, char count; Restore button loads old version into editor)
+- [x] 128/128 tests passing
+- [x] Save checkpoint and push to GitHub
+
+## Phase: Three Recommendations Implementation
+
+- [x] Wire Scribes health stub: replace hardcoded "Idle — No Active Jobs" in health.all with real getActiveIngestionJobs() count
+- [x] Update Scribes orb status text to reflect actual job count (e.g. "3 Active Jobs" vs "Idle — No Active Jobs")
+- [x] `tabular_extraction` and `referee` already in PIPELINE_STAGES array (varchar column, no migration needed)
+- [x] Seed all 13 default prompts into the live DB via scripts/seed-prompts.mjs
+- [x] 128/128 tests passing
+- [x] Save checkpoint and push to GitHub
+
+## Phase: InscriptionDialog Refactor — Auto-Assign Incantation + Version Picker
+
+- [x] Auto-assign Incantation (promptName) from stage name — no manual prompt picker needed
+- [x] Show Incantation name as read-only display field with current version badge
+- [x] Add Version picker: only shown when multiple versions exist for the stage's prompt (from prompts.history)
+- [x] Keep Primary Provider, Fallback Provider, Temperature, Max Tokens, Active Inscription fields
+- [x] Fix dialog overflow for long provider names (truncate/wrap provider name in Select trigger)
+- [x] Add prompts.history tRPC call inside dialog to populate version options
+- [x] promptName auto-set to stage name on save (no user selection required)
+- [x] 128/128 tests passing
+- [x] Save checkpoint and push to GitHub
+
+## Phase: Assignments Stage Type Split + Friendly Labels
+
+- [x] Add NON_LLM_STAGES set — classify each stage as LLM or non-LLM
+- [x] Incantation badge in stage card shows friendly label (e.g. "Document Intelligence") not snake_case via toFriendlyLabel()
+- [x] Non-LLM stages: route to StageSettingsDialog — no provider pickers, no temperature/tokens
+- [x] StageSettingsDialog for pdf_to_png: Max PNG Size (px), DPI, Binarization toggle
+- [x] StageSettingsDialog for document_registration: Duplicate Hash Threshold
+- [x] StageSettingsDialog for child_image_extraction: Min Image Area (px²), Max Images Per Page
+- [x] StageSettingsDialog for artifact_storage / database_load / embedding_generation: read-only info panel
+- [x] Stage cards for non-LLM stages: Wrench Configure button, no delete button, appropriate empty-state text
+- [x] 128/128 tests passing
+- [x] Save checkpoint and push to GitHub
+
+## Phase: Provider Registry Cleanup — Real Providers Only
+
+- [x] Delete all dummy/seed provider rows from the DB (13 dummy rows removed)
+- [x] Updated Asus - Nano Omni provider (OpenAI Compatible, 10.116.2.56:8100/v1, all caps on, default temp 0.3, context 65536, maxTokens 36864, model nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4, isDefault true)
+- [x] Updated Framework — Local provider (LM Studio, 10.116.2.145:1234/v1, all caps on, default temp 0.2, context 8192, model nvidia/nemotron-3-nano-omni, isDefault false)
+- [x] Fixed providers.test.ts: added cleanup (delete) after "create" and "masks API keys" tests to prevent orphan rows on future test runs
+- [x] No seedDefaultProviders for providers — providers are user-managed only
+- [x] 128/128 tests passing, DB confirmed at exactly 2 providers after test run
+- [x] Save checkpoint and push to GitHub
+
+## Phase: UI Fixes — Dialog Resize + Sidebar Collapse
+
+- [x] InscriptionDialog: dynamic width up to 50% wider based on content (long provider names / model IDs clip)
+- [x] InscriptionDialog: Incantation badge shows snake_case — show friendly label instead (toFriendlyLabel() already applied)
+- [x] InscriptionDialog: "v1 cu" version badge is clipped — ensure it fits within the badge area (wider dialog resolves clipping)
+- [x] DashboardLayout: sidebar collapse/hide toggle — changed collapsible="icon" to collapsible="offcanvas" (full hide); added persistent toggle button in desktop top bar
+- [x] 128/128 tests passing
+- [x] Save checkpoint and push to GitHub
+
+## Phase: Stage Count Fix + Sidebar Boundary Arrow
+
+- [x] Stage Inscriptions: filter PIPELINE_STAGES to only mapped stages (remove legacy aliases + console stages from count)
+- [x] Stage Inscriptions: non-LLM stages (artifact_storage, embedding_generation, database_load, document_registration, pdf_to_png, child_image_extraction) count as auto-configured — no DB inscription required
+- [x] Stage Inscriptions: per-phase badge and global counter now show "configured" not "inscribed"
+- [x] Stage Inscriptions: non-LLM stage rows show "Auto-configured" badge (blue) instead of "Not inscribed"
+- [x] Stage Inscriptions: non-LLM stage description text updated to "Runs automatically. Click Configure to adjust optional parameters."
+- [x] DashboardLayout: replaced top-bar PanelLeft toggle with floating boundary arrow button on the sidebar right edge
+- [x] Floating arrow points LEFT (collapse) when sidebar is open, RIGHT (expand) when sidebar is hidden
+- [x] 128/128 tests passing
+- [x] Save checkpoint and push to GitHub
+
+## Phase: InscriptionDialog Overflow + Vault Nexus Cleanup + Docker Guide
+
+- [x] InscriptionDialog: SelectTrigger now shows provider name on line 1, model ID (mono, truncated) on line 2 — no more single-line overflow clipping
+- [x] TheVaultNexus: redesigned card to show only primary config (name, type, host:port/db, active status) by default; secondary details (SSL, test status, credentials, notes) hidden behind a chevron expand
+- [x] TheVaultNexus: removed always-visible Security Notice card (now implicit in description)
+- [x] Dockerfile: multi-stage build (builder + runner) using Node 22 Alpine
+- [x] .dockerignore: added to keep image lean
+- [x] docker-compose.yml: Portainer-ready stack with bundled MySQL 8 service, all env vars documented
+- [x] DOCKER_DEPLOY.md: full deployment guide covering CLI, Portainer stack, env vars, migration, update, rollback, backup, and troubleshooting
+- [x] 128/128 tests passing
+- [x] Save checkpoint and push to GitHub
+
+## Phase: Vault Nexus Cleanup + Sidebar Arrow + Title Fix
+
+- [x] Vault Nexus: delete dummy "Test Connection Ping" rows seeded by unit tests from the live DB (121 orphaned rows deleted)
+- [x] Vault Nexus: added afterAll cleanup to connections describe block in providers.test.ts
+- [x] DashboardLayout: floating boundary arrow chevron — moved to Layout.tsx (the actual layout used by the app); ChevronLeft/Right button sits at -right-3 on the sidebar boundary
+- [x] DashboardLayout: "Evos' Infinite Kodex" title — changed truncate to whitespace-nowrap; widened sidebar from w-64 to w-72 to give the title room
+
+## Phase: Deploy Script + env.example
+
+- [x] Clarify MySQL vs Postgres: console uses MySQL 8 (Drizzle mysql2 driver); Supabase/Postgres is the separate pipeline DB
+- [x] Write env.example with full annotations for all variables
+- [x] Write deploy.sh: validates .env, pulls latest code, waits for MySQL health, runs pnpm db:push migrations, rebuilds console container
+- [x] deploy.sh supports --skip-pull, --skip-migrate, --down, --reset-db flags
+- [x] deploy.sh falls back to running migrations inside a temp container if pnpm is not on the host

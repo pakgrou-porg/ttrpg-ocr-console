@@ -8,7 +8,7 @@ import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { invokeLLM } from "./_core/llm";
 import {
   getUserProfile, upsertUserProfile,
-  getAllSystemPrompts, getSystemPromptByName, upsertSystemPrompt, seedDefaultPrompts,
+  getAllSystemPrompts, getSystemPromptByName, upsertSystemPrompt, seedDefaultPrompts, getPromptVersionHistory,
   getAllUsers, getUserById, updateUserRole,
   getUserPermissions, setUserPermission, deleteUserPermission, getAllPermissionsForAllUsers,
   createInvitation, getAllInvitations, revokeInvitation,
@@ -61,17 +61,18 @@ export const appRouter = router({
 
     // P1: Full service status is behind authentication — exposes service topology.
     all: protectedProcedure.query(async () => {
-      const dbResult = await pingDatabase();
-      const activeJobs = await getActiveIngestionJobs();
+      const [dbResult, activeJobs] = await Promise.all([
+        pingDatabase(),
+        getActiveIngestionJobs(),
+      ]);
       const jobCount = activeJobs.length;
+      const scribesDetail = jobCount === 0
+        ? "Idle — No Active Jobs"
+        : `${jobCount} Active Job${jobCount === 1 ? "" : "s"}`;
       return {
         database: dbResult,
         agents: { ok: true, latencyMs: 0, detail: "Available & Ready" },
-        scribes: {
-          ok: true,
-          latencyMs: 0,
-          detail: jobCount > 0 ? `Processing ${jobCount} active job${jobCount > 1 ? "s" : ""}` : "Idle — No Active Jobs",
-        },
+        scribes: { ok: jobCount === 0, latencyMs: 0, detail: scribesDetail },
         cloudConduit: { ok: true, latencyMs: 0, detail: "OpenRouter Active" },
       };
     }),
@@ -132,9 +133,16 @@ export const appRouter = router({
         promptText: z.string(),
         version: z.number().int().optional(),
       }))
-      .mutation(async ({ input }) => {
-        await upsertSystemPrompt(input);
+      .mutation(async ({ input, ctx }) => {
+        await upsertSystemPrompt(input, ctx.user.id);
         return { success: true };
+      }),
+
+    /** Returns the last 3 saved versions of a prompt for history/rollback */
+    history: protectedProcedure
+      .input(z.object({ name: z.string() }))
+      .query(async ({ input }) => {
+        return getPromptVersionHistory(input.name);
       }),
 
     // P0: Seeding defaults is destructive — admin-only
@@ -920,7 +928,8 @@ export const appRouter = router({
         stage: z.enum(PIPELINE_STAGES),
         primaryProviderId: z.number().int().nullable().optional(),
         fallbackProviderId: z.number().int().nullable().optional(),
-        systemPrompt: z.string().optional(),
+        /** Name of the system_prompts record to use for this stage (from Incantations & Runes) */
+        promptName: z.string().max(128).nullable().optional(),
         temperature: z.number().min(0).max(2).nullable().optional(),
         maxTokens: z.number().int().nullable().optional(),
         llmSettings: z.record(z.string(), z.unknown()).nullable().optional(),
@@ -931,7 +940,7 @@ export const appRouter = router({
           stage: input.stage,
           primaryProviderId: input.primaryProviderId ?? null,
           fallbackProviderId: input.fallbackProviderId ?? null,
-          systemPrompt: input.systemPrompt,
+          promptName: input.promptName ?? null,
           temperature: input.temperature ?? null,
           maxTokens: input.maxTokens ?? null,
           llmSettings: input.llmSettings as Record<string, unknown> | null | undefined,
@@ -946,7 +955,8 @@ export const appRouter = router({
         id: z.number().int(),
         primaryProviderId: z.number().int().nullable().optional(),
         fallbackProviderId: z.number().int().nullable().optional(),
-        systemPrompt: z.string().optional(),
+        /** Name of the system_prompts record to use for this stage (from Incantations & Runes) */
+        promptName: z.string().max(128).nullable().optional(),
         temperature: z.number().min(0).max(2).nullable().optional(),
         maxTokens: z.number().int().nullable().optional(),
         llmSettings: z.record(z.string(), z.unknown()).nullable().optional(),
@@ -995,7 +1005,7 @@ export const appRouter = router({
           inscription: inscription ? {
             id: inscription.id,
             isActive: inscription.isActive,
-            systemPrompt: inscription.systemPrompt,
+            promptName: inscription.promptName ?? null,
             temperature: inscription.temperature,
             maxTokens: inscription.maxTokens,
             llmSettings: inscription.llmSettings ?? null,
