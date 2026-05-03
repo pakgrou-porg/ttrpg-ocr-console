@@ -460,3 +460,9 @@
 - [x] Write deploy.sh: validates .env, pulls latest code, waits for MySQL health, runs pnpm db:push migrations, rebuilds console container
 - [x] deploy.sh supports --skip-pull, --skip-migrate, --down, --reset-db flags
 - [x] deploy.sh falls back to running migrations inside a temp container if pnpm is not on the host
+
+## Phase: GitHub Actions Release Workflow + Portainer Stack
+
+- [x] Add .github/workflows/release.yml — build and push Docker image to GHCR on push to main
+- [x] Add portainer-stack.yml — Portainer-ready stack file using ghcr.io pre-built image
+- [x] Update DOCKER_DEPLOY.md to document the new workflow and Portainer stack usage
