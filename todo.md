@@ -412,3 +412,12 @@
 - [x] No seedDefaultProviders for providers — providers are user-managed only
 - [x] 128/128 tests passing, DB confirmed at exactly 2 providers after test run
 - [x] Save checkpoint and push to GitHub
+
+## Phase: UI Fixes — Dialog Resize + Sidebar Collapse
+
+- [x] InscriptionDialog: dynamic width up to 50% wider based on content (long provider names / model IDs clip)
+- [x] InscriptionDialog: Incantation badge shows snake_case — show friendly label instead (toFriendlyLabel() already applied)
+- [x] InscriptionDialog: "v1 cu" version badge is clipped — ensure it fits within the badge area (wider dialog resolves clipping)
+- [x] DashboardLayout: sidebar collapse/hide toggle — changed collapsible="icon" to collapsible="offcanvas" (full hide); added persistent toggle button in desktop top bar
+- [x] 128/128 tests passing
+- [x] Save checkpoint and push to GitHub
