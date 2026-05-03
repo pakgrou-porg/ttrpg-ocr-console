@@ -421,3 +421,15 @@
 - [x] DashboardLayout: sidebar collapse/hide toggle — changed collapsible="icon" to collapsible="offcanvas" (full hide); added persistent toggle button in desktop top bar
 - [x] 128/128 tests passing
 - [x] Save checkpoint and push to GitHub
+
+## Phase: Stage Count Fix + Sidebar Boundary Arrow
+
+- [x] Stage Inscriptions: filter PIPELINE_STAGES to only mapped stages (remove legacy aliases + console stages from count)
+- [x] Stage Inscriptions: non-LLM stages (artifact_storage, embedding_generation, database_load, document_registration, pdf_to_png, child_image_extraction) count as auto-configured — no DB inscription required
+- [x] Stage Inscriptions: per-phase badge and global counter now show "configured" not "inscribed"
+- [x] Stage Inscriptions: non-LLM stage rows show "Auto-configured" badge (blue) instead of "Not inscribed"
+- [x] Stage Inscriptions: non-LLM stage description text updated to "Runs automatically. Click Configure to adjust optional parameters."
+- [x] DashboardLayout: replaced top-bar PanelLeft toggle with floating boundary arrow button on the sidebar right edge
+- [x] Floating arrow points LEFT (collapse) when sidebar is open, RIGHT (expand) when sidebar is hidden
+- [x] 128/128 tests passing
+- [x] Save checkpoint and push to GitHub

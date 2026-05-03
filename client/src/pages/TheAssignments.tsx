@@ -518,20 +518,23 @@ export default function TheAssignments() {
     return acc;
   }, {} as Record<string, NonNullable<typeof inscriptions>[0]>);
 
+  // Only show stages that are mapped to a known phase (filter out legacy aliases and console stages)
+  const mappedStages = (stages ?? []).filter(s => STAGE_PHASE_MAP[s.id] !== undefined);
+
   // Group stages by phase
-  const stagesByPhase = (stages ?? []).reduce((acc, s) => {
-    const phase = STAGE_PHASE_MAP[s.id] ?? "Other";
+  const stagesByPhase = mappedStages.reduce((acc, s) => {
+    const phase = STAGE_PHASE_MAP[s.id]!;
     if (!acc[phase]) acc[phase] = [];
     acc[phase].push(s);
     return acc;
-  }, {} as Record<string, typeof stages>);
+  }, {} as Record<string, typeof mappedStages>);
 
   const editingInscription = editingStage
     ? inscriptionByStage[editingStage] ?? null
     : null;
 
   const editingStageLabel = editingStage
-    ? (stages ?? []).find(s => s.id === editingStage)?.label ?? editingStage
+    ? mappedStages.find(s => s.id === editingStage)?.label ?? editingStage
     : "";
 
   const togglePhase = (phase: string) => {
@@ -548,8 +551,13 @@ export default function TheAssignments() {
     return <Cloud className="h-3.5 w-3.5 text-blue-400 flex-shrink-0" />;
   };
 
-  const totalInscribed = Object.keys(inscriptionByStage).length;
-  const totalStages = stages?.length ?? 0;
+  // A stage is "configured" if it has a DB inscription (LLM stages) OR is a non-LLM stage
+  // (non-LLM stages run automatically and don't need a provider inscription).
+  const isStageConfigured = (stageId: string) =>
+    NON_LLM_STAGES.has(stageId) || !!inscriptionByStage[stageId];
+
+  const totalConfigured = mappedStages.filter(s => isStageConfigured(s.id)).length;
+  const totalStages = mappedStages.length;
 
   return (
     <div className="space-y-6">
@@ -566,8 +574,8 @@ export default function TheAssignments() {
           </p>
         </div>
         <div className="text-right">
-          <div className="text-2xl font-bold text-amber-400">{totalInscribed} / {totalStages}</div>
-          <div className="text-xs text-muted-foreground">stages inscribed</div>
+          <div className="text-2xl font-bold text-amber-400">{totalConfigured} / {totalStages}</div>
+          <div className="text-xs text-muted-foreground">stages configured</div>
         </div>
       </div>
 
@@ -615,7 +623,7 @@ export default function TheAssignments() {
           {Object.entries(PHASE_GROUPS).map(([phaseKey, phaseInfo]) => {
             const phaseStages = stagesByPhase[phaseKey] ?? [];
             const isExpanded = expandedPhases[phaseKey] ?? true;
-            const inscribedCount = phaseStages.filter(s => inscriptionByStage[s.id]).length;
+            const inscribedCount = phaseStages.filter(s => isStageConfigured(s.id)).length;
 
             return (
               <div key={phaseKey} className="rounded-xl border border-border/50 overflow-hidden">
@@ -632,8 +640,8 @@ export default function TheAssignments() {
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
-                    <Badge variant="outline" className={`text-xs ${phaseInfo.badgeClass}`}>
-                      {inscribedCount} / {phaseStages.length} inscribed
+                      <Badge variant="outline" className={`text-xs ${phaseInfo.badgeClass}`}>
+                      {inscribedCount} / {phaseStages.length} configured
                     </Badge>
                     {isExpanded
                       ? <ChevronUp className="h-4 w-4 text-muted-foreground" />
@@ -659,7 +667,13 @@ export default function TheAssignments() {
                               {hasInscription && (
                                 <div className={`w-2 h-2 rounded-full flex-shrink-0 ${isActive ? "bg-green-400" : "bg-gray-500"}`} />
                               )}
-                              {!hasInscription && (
+                              {!hasInscription && NON_LLM_STAGES.has(stage.id) && (
+                                <Badge variant="outline" className="text-xs border-blue-500/40 text-blue-400 bg-blue-950/20">
+                                  <Check className="h-3 w-3 mr-1" />
+                                  Auto-configured
+                                </Badge>
+                              )}
+                              {!hasInscription && !NON_LLM_STAGES.has(stage.id) && (
                                 <Badge variant="outline" className="text-xs border-dashed text-muted-foreground">
                                   <AlertCircle className="h-3 w-3 mr-1" />
                                   Not inscribed
@@ -730,7 +744,7 @@ export default function TheAssignments() {
                             ) : (
                               <p className="text-xs text-muted-foreground italic">
                                 {NON_LLM_STAGES.has(stage.id)
-                                  ? "Click \"Configure\" to set stage-specific parameters."
+                                  ? "Runs automatically. Click \"Configure\" to adjust optional stage-specific parameters."
                                   : "Click \"Inscribe\" to assign a provider and configure this stage."}
                               </p>
                             )}
