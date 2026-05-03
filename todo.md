@@ -216,34 +216,34 @@
 - [x] Add tests for page attempt tracking procedures
 - [x] All 127 tests passing after schema and router changes
 
-## Phase: Provider Registry + Stage Inscriptions Redesign
+## Phase: Provider Registry + Stage Inscriptions Redesign (Stale — superseded by later phase below)
 
 ### Schema Changes
-- [ ] Enhance llmProviders table: add displayName, modelId, port, contextLength, maxTokens, defaultTemperature, capabilities, isDefault fields
-- [ ] Create stageInscriptions table: stage (unique), primaryProviderId, fallbackProviderId, systemPrompt, temperature, maxTokens, llmSettings, isActive
-- [ ] Remove modelAssignments table (replaced by stageInscriptions)
-- [ ] Run pnpm db:push after schema changes
+- [x] Enhance llmProviders table: add displayName, modelId, port, contextLength, maxTokens, defaultTemperature, capabilities, isDefault fields
+- [x] Create stageInscriptions table: stage (unique), primaryProviderId, fallbackProviderId, systemPrompt, temperature, maxTokens, llmSettings, isActive
+- [x] Remove modelAssignments table (replaced by stageInscriptions)
+- [x] Run pnpm db:push after schema changes
 
 ### Server Changes
-- [ ] Update db.ts: add stageInscriptions helpers (upsert, list, getByStage), update llmProviders helpers for new fields
-- [ ] Update routers.ts: replace assignments.* procedures with inscriptions.* procedures (list, upsert, getByStage, delete)
-- [ ] Update providers.* procedures to handle new fields (displayName, modelId, port, capabilities, isDefault, defaultTemperature)
-- [ ] Remove all modelAssignments references from routers.ts and db.ts
+- [x] Update db.ts: add stageInscriptions helpers (upsert, list, getByStage), update llmProviders helpers for new fields
+- [x] Update routers.ts: replace assignments.* procedures with inscriptions.* procedures (list, upsert, getByStage, delete)
+- [x] Update providers.* procedures to handle new fields (displayName, modelId, port, capabilities, isDefault, defaultTemperature)
+- [x] Remove all modelAssignments references from routers.ts and db.ts
 
 ### UI Changes (The Artificers)
-- [ ] Replace "Model Assignments" tab with "Stage Inscriptions" tab
-- [ ] Build Stage Inscriptions UI: one row per pipeline stage, primary + fallback provider pickers, system prompt, temperature, maxTokens
-- [ ] Enhance Provider Registry UI: add displayName, modelId, port, contextLength, maxTokens, defaultTemperature, capabilities, isDefault fields
-- [ ] Add "Test Connection" button per provider (sends a real ping to verify connectivity)
-- [ ] Show provider type icon and model ID in inscription provider pickers
+- [x] Replace "Model Assignments" tab with "Stage Inscriptions" tab
+- [x] Build Stage Inscriptions UI: one row per pipeline stage, primary + fallback provider pickers, system prompt, temperature, maxTokens
+- [x] Enhance Provider Registry UI: add displayName, modelId, port, contextLength, maxTokens, defaultTemperature, capabilities, isDefault fields
+- [x] Add "Test Connection" button per provider (sends a real ping to verify connectivity)
+- [x] Show provider type icon and model ID in inscription provider pickers
 
 ### Tests
-- [ ] Update providers.test.ts for new llmProviders fields
-- [ ] Add inscriptions.test.ts for stageInscriptions CRUD procedures
-- [ ] Remove/replace modelAssignments tests
+- [x] Update providers.test.ts for new llmProviders fields
+- [x] Add inscriptions.test.ts for stageInscriptions CRUD procedures
+- [x] Remove/replace modelAssignments tests
 
 ### GitHub
-- [ ] Push all changes to GitHub after checkpoint
+- [x] Push all changes to GitHub after checkpoint
 
 ## Phase: Provider Registry + Stage Inscriptions Redesign
 
@@ -283,18 +283,18 @@
 
 ## Phase: Provider URL Decomposition + Capability Flags
 
-- [ ] Add apiPrefix column to llmProviders table (e.g. "/v1")
-- [ ] Replace capabilities JSON column with boolean flags: supportsChat, supportsVision, supportsEmbedding
-- [ ] Apply DB migration for new columns
-- [ ] Update db.ts helpers for new fields
-- [ ] Update providers.create/update input schemas in routers.ts
-- [ ] Fix URL assembly in discoverModels and testConnection to avoid duplicate port/prefix
-- [ ] Rewrite TheArtificers provider form: separate baseUrl, port, apiPrefix fields
-- [ ] Smart URL decomposition on paste: parse "http://10.x.x.x:1234/v1" into host/port/prefix
-- [ ] Replace capabilities text input with Chat / Vision / Embedding checkboxes
-- [ ] Update provider card display to show flag badges instead of capability string
-- [ ] Update providers.test.ts for new schema fields
-- [ ] Push to GitHub
+- [x] Add apiPrefix column to llmProviders table (e.g. "/v1")
+- [x] Replace capabilities JSON column with boolean flags: supportsChat, supportsVision, supportsEmbedding
+- [x] Apply DB migration for new columns
+- [x] Update db.ts helpers for new fields
+- [x] Update providers.create/update input schemas in routers.ts
+- [x] Fix URL assembly in discoverModels and testConnection to avoid duplicate port/prefix
+- [x] Rewrite TheArtificers provider form: separate baseUrl, port, apiPrefix fields
+- [x] Smart URL decomposition on paste: parse "http://10.x.x.x:1234/v1" into host/port/prefix
+- [x] Replace capabilities text input with Chat / Vision / Embedding checkboxes
+- [x] Update provider card display to show flag badges instead of capability string
+- [x] Update providers.test.ts for new schema fields
+- [x] Push to GitHub
 
 ## Phase: Capability Flags Reorder + Reasoning Toggle
 
@@ -307,3 +307,23 @@
 - [x] Apply DB migration for supportsReasoning column
 - [x] Run all tests and fix any failures
 - [x] Save checkpoint and push to GitHub
+
+## Phase: Remaining Work (Confirmed Outstanding)
+
+### CI / DevOps
+- [ ] Add GitHub Actions CI workflow (.github/workflows/ci.yml) — runs `pnpm test` on push/PR to main
+
+### Tests
+- [ ] Test: document list scoped by ownership (listDocuments returns only docs where ownerUserId = ctx.user.id or visibility = 'global')
+
+### Health Endpoints
+- [ ] health.all — scribes: replace hardcoded stub with real `getActiveIngestionJobs()` count (easy — helper exists)
+- [ ] health.all — agents: replace hardcoded stub once LM Studio health endpoint is defined (needs real service endpoint)
+- [ ] health.all — cloudConduit: replace hardcoded stub once OpenRouter connectivity check is implemented (needs real ping)
+
+### Document Ownership
+- [ ] listDocuments: add ownership filter at DB level (WHERE ownerUserId = ? OR visibility = 'global') instead of JS post-filter
+- [ ] searchDocuments: same — push ownership filter into the SQL WHERE clause for correctness and performance
+
+### Invitations
+- [ ] Email dispatch for invitation scrolls — invitations are created in DB but never sent (needs email service integration, e.g. Resend or SMTP)
