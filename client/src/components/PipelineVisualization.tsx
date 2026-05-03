@@ -22,19 +22,24 @@ import {
   Cloud,
   Cpu,
   Database,
+  FileSearch,
   FileText,
   GitBranch,
+  Gavel,
   Layers,
   MessageSquare,
+  ScanLine,
   Search,
   Sparkles,
   Table,
+  Table2,
   Users,
   Zap,
   Shield,
   AlertTriangle,
   CheckCircle2,
   Thermometer,
+  GitCompare,
 } from "lucide-react";
 
 // ─── Stage metadata ─────────────────────────────────────────────────────────
@@ -49,7 +54,17 @@ export const STAGE_META: Record<string, {
   group: "phase1" | "phase2" | "phase3" | "output";
   phase: 1 | 2 | 3;
 }> = {
-  // ── Phase 1: Ingestion & Layout ─────────────────────────────────────────
+  // ── Phase 1: Ingestion & Layout ───────────────────────────────────────────
+  document_intelligence: {
+    label: "Document Intelligence",
+    description: "Phase 1 — identifies document type, canonical title, publisher, and generates a summary from the first 10 pages; drives layout strategy for all subsequent pages",
+    icon: FileSearch,
+    color: "text-violet-300",
+    bgColor: "bg-violet-950/60",
+    borderColor: "border-violet-500/60",
+    group: "phase1",
+    phase: 1,
+  },
   layout_analysis: {
     label: "Layout Analysis",
     description: "Phase 1 — local VLM detects page structure, columns, headers, and content regions",
@@ -71,9 +86,9 @@ export const STAGE_META: Record<string, {
     phase: 1,
   },
   content_type_classify: {
-    label: "Mixed-Content Boundary",
-    description: "Phase 1 — identifies mixed-content regions (e.g. editorial vs advertising) and marks boundaries for downstream OCR handling",
-    icon: Brain,
+    label: "Mixed-Boundary Resolver",
+    description: "Phase 1 — resolves ambiguous or mixed-boundary regions; outputs refined sub-region splits with corrected content type classifications and pixel-accurate bounding boxes",
+    icon: ScanLine,
     color: "text-violet-300",
     bgColor: "bg-violet-950/60",
     borderColor: "border-violet-500/60",
@@ -115,6 +130,26 @@ export const STAGE_META: Record<string, {
     label: "Quality Validation",
     description: "Phase 2 — LLM assesses extraction quality: completeness, layout accuracy, context decisions, text continuity",
     icon: Shield,
+    color: "text-amber-300",
+    bgColor: "bg-amber-950/60",
+    borderColor: "border-amber-500/60",
+    group: "phase2",
+    phase: 2,
+  },
+  tabular_extraction: {
+    label: "Tabular Extraction",
+    description: "Phase 2 — specialised extraction for table-dominant pages and complex table regions (stat blocks, spell lists, equipment tables, multi-row nested structures)",
+    icon: Table2,
+    color: "text-blue-300",
+    bgColor: "bg-blue-950/60",
+    borderColor: "border-blue-500/60",
+    group: "phase2",
+    phase: 2,
+  },
+  pass_comparison: {
+    label: "Multi-Pass Comparison",
+    description: "Phase 2 — contrasts all available pass outputs (Pass 1–4) to select the best candidate or flag for HITL when passes are irreconcilably different",
+    icon: GitCompare,
     color: "text-amber-300",
     bgColor: "bg-amber-950/60",
     borderColor: "border-amber-500/60",
@@ -172,11 +207,21 @@ export const STAGE_META: Record<string, {
     group: "phase3",
     phase: 3,
   },
-  // ── Output ──────────────────────────────────────────────────────────────
+  // ── Output ──────────────────────────────────────────────────────────────────────────────────────────
   voice_of_arkanum: {
     label: "Voice of Arkanum",
-    description: "Narrative synthesis — the model that speaks the lore in-game via RAG",
+    description: "Console AI — generates atmospheric lore ramblings and thematic knowledge snippets from the database",
     icon: MessageSquare,
+    color: "text-rose-300",
+    bgColor: "bg-rose-950/60",
+    borderColor: "border-rose-500/60",
+    group: "output",
+    phase: 3,
+  },
+  referee: {
+    label: "The Referee",
+    description: "Console AI — authoritative rules referee that answers rules questions and resolves edge cases by citing source material from the lore database",
+    icon: Gavel,
     color: "text-rose-300",
     bgColor: "bg-rose-950/60",
     borderColor: "border-rose-500/60",
@@ -185,49 +230,60 @@ export const STAGE_META: Record<string, {
   },
 };
 
-// ─── Pipeline flow order (left-to-right columns) ─────────────────────────────
+// ─── Pipeline flow order (left-to-right columns) ──────────────────────────────────────────────────────────────────────────────────────────
 
 const PIPELINE_FLOW: string[][] = [
   // Col 0 — ingestion (virtual)
   ["__ingestion__"],
-  // Col 1 — Phase 1: layout
+  // Col 1 — Phase 1: document intelligence
+  ["document_intelligence"],
+  // Col 2 — Phase 1: layout
   ["layout_analysis", "bbox_detection", "content_type_classify"],
-  // Col 2 — Phase 2: extraction
-  ["ocr_extraction", "content_break_detect", "summarisation"],
-  // Col 3 — Phase 2: validation
-  ["quality_validation"],
-  // Col 4 — Phase 2: retry escalation
+  // Col 3 — Phase 2: extraction
+  ["ocr_extraction", "content_break_detect", "summarisation", "tabular_extraction"],
+  // Col 4 — Phase 2: validation & comparison
+  ["quality_validation", "pass_comparison"],
+  // Col 5 — Phase 2: retry escalation
   ["pass3_cloud_extraction", "pass4_cloud_extraction"],
-  // Col 5 — Phase 3: storage
+  // Col 6 — Phase 3: storage
   ["artifact_storage", "embedding_generation", "database_load"],
-  // Col 6 — output
-  ["voice_of_arkanum"],
+  // Col 7 — output
+  ["voice_of_arkanum", "referee"],
 ];
 
 const FLOW_EDGES: Array<{ from: string; to: string; style?: "normal" | "fallback" | "conditional" }> = [
-  // Ingestion → Phase 1
-  { from: "__ingestion__", to: "layout_analysis" },
-  { from: "__ingestion__", to: "bbox_detection" },
-  { from: "__ingestion__", to: "content_type_classify" },
+  // Ingestion → Document Intelligence
+  { from: "__ingestion__", to: "document_intelligence" },
+  // Document Intelligence → Phase 1 layout
+  { from: "document_intelligence", to: "layout_analysis" },
+  { from: "document_intelligence", to: "bbox_detection" },
+  { from: "document_intelligence", to: "content_type_classify" },
   // Phase 1 → Phase 2
   { from: "layout_analysis", to: "ocr_extraction" },
   { from: "bbox_detection", to: "ocr_extraction" },
   { from: "content_type_classify", to: "ocr_extraction" },
   { from: "ocr_extraction", to: "content_break_detect" },
   { from: "ocr_extraction", to: "summarisation" },
+  // Table-dominant pages branch to tabular_extraction
+  { from: "ocr_extraction", to: "tabular_extraction", style: "conditional" },
   // Phase 2 → Quality Validation
   { from: "content_break_detect", to: "quality_validation" },
   { from: "summarisation", to: "quality_validation" },
-  // Quality Validation → Retry escalation (conditional)
-  { from: "quality_validation", to: "pass3_cloud_extraction", style: "fallback" },
+  { from: "tabular_extraction", to: "quality_validation" },
+  // Quality Validation → Multi-Pass Comparison
+  { from: "quality_validation", to: "pass_comparison", style: "conditional" },
+  // Quality Validation / Pass Comparison → Retry escalation (conditional)
+  { from: "pass_comparison", to: "pass3_cloud_extraction", style: "fallback" },
   { from: "pass3_cloud_extraction", to: "pass4_cloud_extraction", style: "fallback" },
   // All paths → Phase 3
   { from: "quality_validation", to: "artifact_storage" },
+  { from: "pass_comparison", to: "artifact_storage" },
   { from: "pass4_cloud_extraction", to: "artifact_storage" },
   { from: "artifact_storage", to: "embedding_generation" },
   { from: "embedding_generation", to: "database_load" },
   // Phase 3 → Output
   { from: "database_load", to: "voice_of_arkanum" },
+  { from: "database_load", to: "referee" },
 ];
 
 // ─── Phase group headers ──────────────────────────────────────────────────────

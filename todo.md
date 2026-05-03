@@ -341,3 +341,16 @@
 - [x] Update providers.test.ts and features.test.ts: replace systemPrompt field with promptName in all test fixtures
 - [x] All 128 tests passing after changes
 - [x] Save checkpoint and push to GitHub
+
+## Phase: Add Missing Pipeline Stages to Incantations & Runes + Pipeline Visualization
+
+- [x] Add `document_intelligence` tab to PROMPT_TABS in IncantationsRunes.tsx (Phase 1, pipeline category)
+- [x] Add `content_type_classify` tab to PROMPT_TABS in IncantationsRunes.tsx (Phase 1, pipeline category)
+- [x] Add `tabular_extraction` tab to PROMPT_TABS in IncantationsRunes.tsx (Phase 2, pipeline category)
+- [x] Add `referee` tab to PROMPT_TABS in IncantationsRunes.tsx (console_experience category)
+- [x] Verify `summarisation` tab is present and correctly named
+- [x] Verify `quality_validation` and `pass_comparison` tabs are present
+- [x] Add document_intelligence, tabular_extraction, pass_comparison, and referee to PipelineVisualization.tsx STAGE_META, PIPELINE_FLOW, and FLOW_EDGES
+- [x] Extend ramblings.generate test timeout to 15s (LLM call)
+- [x] 128/128 tests passing
+- [x] Save checkpoint and push to GitHub

@@ -220,7 +220,7 @@ describe("ramblings.generate", () => {
     expect(result).toHaveProperty("text");
     expect(typeof result.text).toBe("string");
     expect(result.text.length).toBeGreaterThan(0);
-  });
+  }, 15_000);
 
   it("throws for unauthenticated users", async () => {
     const caller = appRouter.createCaller(makeUnauthCtx());
