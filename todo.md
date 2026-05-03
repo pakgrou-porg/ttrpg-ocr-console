@@ -452,3 +452,11 @@
 - [x] Vault Nexus: added afterAll cleanup to connections describe block in providers.test.ts
 - [x] DashboardLayout: floating boundary arrow chevron — moved to Layout.tsx (the actual layout used by the app); ChevronLeft/Right button sits at -right-3 on the sidebar boundary
 - [x] DashboardLayout: "Evos' Infinite Kodex" title — changed truncate to whitespace-nowrap; widened sidebar from w-64 to w-72 to give the title room
+
+## Phase: Deploy Script + env.example
+
+- [x] Clarify MySQL vs Postgres: console uses MySQL 8 (Drizzle mysql2 driver); Supabase/Postgres is the separate pipeline DB
+- [x] Write env.example with full annotations for all variables
+- [x] Write deploy.sh: validates .env, pulls latest code, waits for MySQL health, runs pnpm db:push migrations, rebuilds console container
+- [x] deploy.sh supports --skip-pull, --skip-migrate, --down, --reset-db flags
+- [x] deploy.sh falls back to running migrations inside a temp container if pnpm is not on the host
