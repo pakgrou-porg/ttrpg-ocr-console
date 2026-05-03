@@ -433,3 +433,15 @@
 - [x] Floating arrow points LEFT (collapse) when sidebar is open, RIGHT (expand) when sidebar is hidden
 - [x] 128/128 tests passing
 - [x] Save checkpoint and push to GitHub
+
+## Phase: InscriptionDialog Overflow + Vault Nexus Cleanup + Docker Guide
+
+- [x] InscriptionDialog: SelectTrigger now shows provider name on line 1, model ID (mono, truncated) on line 2 — no more single-line overflow clipping
+- [x] TheVaultNexus: redesigned card to show only primary config (name, type, host:port/db, active status) by default; secondary details (SSL, test status, credentials, notes) hidden behind a chevron expand
+- [x] TheVaultNexus: removed always-visible Security Notice card (now implicit in description)
+- [x] Dockerfile: multi-stage build (builder + runner) using Node 22 Alpine
+- [x] .dockerignore: added to keep image lean
+- [x] docker-compose.yml: Portainer-ready stack with bundled MySQL 8 service, all env vars documented
+- [x] DOCKER_DEPLOY.md: full deployment guide covering CLI, Portainer stack, env vars, migration, update, rollback, backup, and troubleshooting
+- [x] 128/128 tests passing
+- [x] Save checkpoint and push to GitHub

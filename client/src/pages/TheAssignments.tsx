@@ -305,10 +305,20 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
               Primary Provider
             </Label>
             <Select value={primaryProviderId} onValueChange={setPrimaryProviderId}>
-              <SelectTrigger className="min-w-0 w-full">
-                <span className="truncate block text-left">
-                  <SelectValue placeholder="Select primary provider…" />
-                </span>
+              <SelectTrigger className="w-full h-auto min-h-10 py-2 [&>span]:flex-1 [&>span]:min-w-0">
+                <SelectValue placeholder="Select primary provider…">
+                  {primaryProviderId && primaryProviderId !== "none"
+                    ? (() => {
+                        const p = activeProviders.find(p => String(p.id) === primaryProviderId);
+                        return p ? (
+                          <span className="flex flex-col items-start gap-0.5 text-left">
+                            <span className="font-medium text-sm leading-tight">{p.displayName || p.name}</span>
+                            {p.modelId && <span className="text-xs text-muted-foreground leading-tight font-mono truncate max-w-full">{p.modelId}</span>}
+                          </span>
+                        ) : null;
+                      })()
+                    : null}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="none">— None —</SelectItem>
@@ -332,10 +342,20 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
               <span className="text-muted-foreground text-xs font-normal">(optional)</span>
             </Label>
             <Select value={fallbackProviderId} onValueChange={setFallbackProviderId}>
-              <SelectTrigger className="min-w-0 w-full">
-                <span className="truncate block text-left">
-                  <SelectValue placeholder="Select fallback provider…" />
-                </span>
+              <SelectTrigger className="w-full h-auto min-h-10 py-2 [&>span]:flex-1 [&>span]:min-w-0">
+                <SelectValue placeholder="Select fallback provider…">
+                  {fallbackProviderId && fallbackProviderId !== "none"
+                    ? (() => {
+                        const p = activeProviders.find(p => String(p.id) === fallbackProviderId);
+                        return p ? (
+                          <span className="flex flex-col items-start gap-0.5 text-left">
+                            <span className="font-medium text-sm leading-tight">{p.displayName || p.name}</span>
+                            {p.modelId && <span className="text-xs text-muted-foreground leading-tight font-mono truncate max-w-full">{p.modelId}</span>}
+                          </span>
+                        ) : null;
+                      })()
+                    : null}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="none">— None —</SelectItem>

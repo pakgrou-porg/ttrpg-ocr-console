@@ -1,0 +1,12 @@
+node_modules
+.pnpm-store
+dist
+client/dist
+.git
+.github
+*.log
+.env
+.env.*
+coverage
+*.test.ts
+*.spec.ts
