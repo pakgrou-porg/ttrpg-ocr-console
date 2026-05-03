@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeAll } from "vitest";
+import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { nanoid } from "nanoid";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
@@ -258,6 +258,23 @@ describe("providers.test (Test Connection & Model Discovery)", () => {
 });
 
 describe("connections (Database Connection Config)", () => {
+  // Clean up any rows this describe block creates, regardless of test outcome.
+  // Without this, every test run leaves orphaned rows in the live DB.
+  afterAll(async () => {
+    const caller = appRouter.createCaller(createAdminContext());
+    const all = await caller.connections.list();
+    const testPrefixes = [
+      `Test Supabase ${suffix}`,
+      `Test Connection Ping ${suffix}`,
+      `To Delete Connection ${suffix}`,
+    ];
+    for (const conn of all) {
+      if (testPrefixes.includes(conn.name)) {
+        try { await caller.connections.delete({ id: conn.id }); } catch {}
+      }
+    }
+  });
+
   it("lists available connection types", async () => {
     const caller = appRouter.createCaller(createAdminContext());
     const types = await caller.connections.types();

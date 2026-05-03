@@ -4,7 +4,7 @@ import {
   BookOpen, Settings, Activity, Edit3, Moon, Sun, Search,
   HelpCircle, BarChart2, Database, Terminal, ChevronDown,
   ChevronRight, User, Scroll, Shield, LogOut, UserCircle,
-  Cpu, GitBranch, ClipboardCheck, PanelLeftClose, PanelLeftOpen,
+  Cpu, GitBranch, ClipboardCheck, ChevronLeft,
 } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { Button } from "@/components/ui/button";
@@ -175,8 +175,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
     <div className="flex h-screen w-full overflow-hidden bg-background text-foreground">
       {/* ── Sidebar ──────────────────────────────────────────────────────── */}
       <aside
-        className={`flex-shrink-0 border-r border-border bg-sidebar flex flex-col transition-all duration-300 ease-in-out ${
-          collapsed ? "w-14" : "w-64"
+        className={`relative flex-shrink-0 border-r border-border bg-sidebar flex flex-col transition-all duration-300 ease-in-out ${
+          collapsed ? "w-14" : "w-72"
         }`}
       >
         {/* Logo / Collapse toggle */}
@@ -190,7 +190,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
               <a className="block min-w-0">
                 <h1 className="text-lg font-bold text-sidebar-foreground tracking-wider flex items-center gap-2">
                   <BookOpen className="w-5 h-5 text-primary flex-shrink-0" />
-                  <span className="truncate">Evos' Infinite Kodex</span>
+                  <span className="whitespace-nowrap">Evos' Infinite Kodex</span>
                 </h1>
                 <p className="text-xs text-sidebar-foreground/50 mt-0.5 font-mono tracking-widest">
                   ✦ Vault of Lore ✦
@@ -212,27 +212,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
             </Tooltip>
           )}
 
-          {/* Toggle button — always visible */}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={() => setCollapsed((c) => !c)}
-                className={`rounded-md p-1.5 text-sidebar-foreground/50 hover:text-sidebar-foreground hover:bg-sidebar-accent/40 transition-colors flex-shrink-0 ${
-                  collapsed ? "mt-0" : "ml-2"
-                }`}
-                aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-              >
-                {collapsed ? (
-                  <PanelLeftOpen className="w-4 h-4" />
-                ) : (
-                  <PanelLeftClose className="w-4 h-4" />
-                )}
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="right">
-              {collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            </TooltipContent>
-          </Tooltip>
+
         </div>
 
         {/* Navigation */}
@@ -339,6 +319,30 @@ export function Layout({ children }: { children: React.ReactNode }) {
             </div>
           )}
         </nav>
+
+        {/* Floating boundary arrow — sits on the right edge of the sidebar, always visible */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              onClick={() => setCollapsed((c) => !c)}
+              aria-label={collapsed ? "Expand navigation" : "Collapse navigation"}
+              className="absolute top-1/2 -translate-y-1/2 -right-3 z-50
+                flex items-center justify-center
+                h-6 w-6 rounded-full
+                bg-sidebar border border-border shadow-md
+                hover:bg-sidebar-accent hover:border-primary/40
+                transition-all duration-200
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {collapsed
+                ? <ChevronRight className="h-3.5 w-3.5 text-sidebar-foreground/70" />
+                : <ChevronLeft className="h-3.5 w-3.5 text-sidebar-foreground/70" />}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="right">
+            {collapsed ? "Expand navigation" : "Collapse navigation"}
+          </TooltipContent>
+        </Tooltip>
 
         {/* Footer — theme toggle */}
         <div className={`border-t border-border ${collapsed ? "p-2" : "p-3"}`}>

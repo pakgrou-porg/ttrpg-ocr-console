@@ -445,3 +445,10 @@
 - [x] DOCKER_DEPLOY.md: full deployment guide covering CLI, Portainer stack, env vars, migration, update, rollback, backup, and troubleshooting
 - [x] 128/128 tests passing
 - [x] Save checkpoint and push to GitHub
+
+## Phase: Vault Nexus Cleanup + Sidebar Arrow + Title Fix
+
+- [x] Vault Nexus: delete dummy "Test Connection Ping" rows seeded by unit tests from the live DB (121 orphaned rows deleted)
+- [x] Vault Nexus: added afterAll cleanup to connections describe block in providers.test.ts
+- [x] DashboardLayout: floating boundary arrow chevron — moved to Layout.tsx (the actual layout used by the app); ChevronLeft/Right button sits at -right-3 on the sidebar boundary
+- [x] DashboardLayout: "Evos' Infinite Kodex" title — changed truncate to whitespace-nowrap; widened sidebar from w-64 to w-72 to give the title room
