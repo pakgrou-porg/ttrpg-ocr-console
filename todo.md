@@ -354,3 +354,17 @@
 - [x] Extend ramblings.generate test timeout to 15s (LLM call)
 - [x] 128/128 tests passing
 - [x] Save checkpoint and push to GitHub
+
+## Phase: Default Prompts Seeding + Version History
+
+- [x] Replace seedDefaultPrompts defaults array with all 13 canonical prompts from ttrpg_default_prompts.md
+- [x] Add `prompt_versions` table to schema (promptName, promptText, version, savedBy, createdAt)
+- [x] Apply DB migration for prompt_versions table (CREATE TABLE IF NOT EXISTS via Node.js)
+- [x] Update upsertSystemPrompt in db.ts to auto-increment version, write version history row, and trim to last 3 versions
+- [x] Add getPromptVersionHistory helper in db.ts (returns last 3 versions ordered by version DESC)
+- [x] Update seedDefaultPrompts loop to also write initial version history rows for new prompts
+- [x] Add prompts.history tRPC procedure in routers.ts (protectedProcedure, input: name)
+- [x] Pass ctx.user.id to upsertSystemPrompt in prompts.upsert mutation (tracks who saved each version)
+- [x] Add Version History panel to IncantationsRunes.tsx (shows last 3 saves with version badge, timestamp, char count; Restore button loads old version into editor)
+- [x] 128/128 tests passing
+- [x] Save checkpoint and push to GitHub

@@ -8,7 +8,7 @@ import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { invokeLLM } from "./_core/llm";
 import {
   getUserProfile, upsertUserProfile,
-  getAllSystemPrompts, getSystemPromptByName, upsertSystemPrompt, seedDefaultPrompts,
+  getAllSystemPrompts, getSystemPromptByName, upsertSystemPrompt, seedDefaultPrompts, getPromptVersionHistory,
   getAllUsers, getUserById, updateUserRole,
   getUserPermissions, setUserPermission, deleteUserPermission, getAllPermissionsForAllUsers,
   createInvitation, getAllInvitations, revokeInvitation,
@@ -126,9 +126,16 @@ export const appRouter = router({
         promptText: z.string(),
         version: z.number().int().optional(),
       }))
-      .mutation(async ({ input }) => {
-        await upsertSystemPrompt(input);
+      .mutation(async ({ input, ctx }) => {
+        await upsertSystemPrompt(input, ctx.user.id);
         return { success: true };
+      }),
+
+    /** Returns the last 3 saved versions of a prompt for history/rollback */
+    history: protectedProcedure
+      .input(z.object({ name: z.string() }))
+      .query(async ({ input }) => {
+        return getPromptVersionHistory(input.name);
       }),
 
     // P0: Seeding defaults is destructive — admin-only

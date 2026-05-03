@@ -5,7 +5,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import { Terminal, Save, RefreshCw, Wand2, Database, Zap, Search, FileSearch, ScanLine, Table2, Gavel } from "lucide-react";
+import { Terminal, Save, RefreshCw, Wand2, Database, Zap, Search, FileSearch, ScanLine, Table2, Gavel, History, RotateCcw } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { getLoginUrl } from "@/const";
 
@@ -137,6 +137,11 @@ export default function IncantationsRunes() {
     enabled: isAuthenticated,
   });
 
+  const { data: versionHistory, refetch: refetchHistory } = trpc.prompts.history.useQuery(
+    { name: activeTab },
+    { enabled: isAuthenticated },
+  );
+
   const seedDefaults = trpc.prompts.seedDefaults.useMutation({
     onSuccess: () => { toast.success("Default incantations inscribed into the Arkanum."); refetch(); },
     onError: (e) => toast.error("Failed to seed: " + e.message),
@@ -147,6 +152,7 @@ export default function IncantationsRunes() {
       toast.success("Incantation saved to the Arkanum.");
       setIsDirty((d) => ({ ...d, [activeTab]: false }));
       refetch();
+      refetchHistory();
     },
     onError: (e) => toast.error("Failed to save: " + e.message),
   });
@@ -338,6 +344,51 @@ export default function IncantationsRunes() {
               ))}
             </div>
           </div>
+
+          {/* Version History */}
+          {versionHistory && versionHistory.length > 0 && (
+            <div className="p-4 rounded-lg border border-border/40 bg-card/30">
+              <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
+                <History className="w-4 h-4 text-primary" />
+                Version History
+                <span className="text-xs text-muted-foreground font-normal">(last {versionHistory.length} saves)</span>
+              </h3>
+              <div className="space-y-2">
+                {versionHistory.map((v, idx) => (
+                  <div key={v.id} className="flex items-center justify-between p-2.5 rounded-md border border-border/30 bg-background/40 gap-3">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <Badge variant="outline" className="text-xs font-mono flex-shrink-0">
+                        v{v.version}
+                      </Badge>
+                      {idx === 0 && (
+                        <Badge variant="default" className="text-xs flex-shrink-0">Current</Badge>
+                      )}
+                      <span className="text-xs text-muted-foreground truncate">
+                        {new Date(v.createdAt).toLocaleString()}
+                      </span>
+                      <span className="text-xs text-muted-foreground/60 truncate hidden sm:block">
+                        {v.promptText.length} chars
+                      </span>
+                    </div>
+                    {idx > 0 && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-1.5 text-xs flex-shrink-0"
+                        onClick={() => {
+                          handleTextChange(v.promptText);
+                          toast.info(`v${v.version} loaded into editor — click Save to apply.`);
+                        }}
+                      >
+                        <RotateCcw className="w-3 h-3" />
+                        Restore
+                      </Button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
