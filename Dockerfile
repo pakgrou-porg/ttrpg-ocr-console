@@ -3,9 +3,10 @@
 # Alpine keeps the final image small (~200 MB vs ~900 MB for Debian).
 FROM node:22-alpine AS builder
 
-# Enable corepack and activate the exact pnpm version declared in package.json
-# (packageManager: pnpm@10.4.1). This ensures the lockfile format matches.
-RUN corepack enable && corepack prepare pnpm@10.4.1 --activate
+# Install the exact pnpm version declared in package.json (packageManager:
+# pnpm@10.4.1) via npm. This is more reliable than corepack in multi-platform
+# CI builds (QEMU emulation can cause corepack to resolve a different version).
+RUN npm install -g pnpm@10.4.1
 
 WORKDIR /app
 
@@ -29,8 +30,8 @@ RUN pnpm build
 # ─── Stage 2: Production image ───────────────────────────────────────────────
 FROM node:22-alpine AS runner
 
-# Enable corepack with the same pinned pnpm version
-RUN corepack enable && corepack prepare pnpm@10.4.1 --activate
+# Install the same pinned pnpm version for production dependency installation
+RUN npm install -g pnpm@10.4.1
 
 WORKDIR /app
 
