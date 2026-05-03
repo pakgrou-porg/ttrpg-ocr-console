@@ -466,3 +466,8 @@
 - [x] Add .github/workflows/release.yml — build and push Docker image to GHCR on push to main
 - [x] Add portainer-stack.yml — Portainer-ready stack file using ghcr.io pre-built image
 - [x] Update DOCKER_DEPLOY.md to document the new workflow and Portainer stack usage
+
+## Phase: Fix GitHub Actions Build Failure
+
+- [x] Fix Dockerfile: pnpm install --frozen-lockfile fails in multi-platform CI build — pinned pnpm@10.4.1 via corepack (was pnpm@10 which resolved to a newer incompatible version)
+- [x] Fix release.yml: added actions/setup-node@v4 with Node 22 in test job; added full test job with MySQL service before build; PNPM_VERSION env var pinned to 10.4.1

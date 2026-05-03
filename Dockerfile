@@ -3,8 +3,9 @@
 # Alpine keeps the final image small (~200 MB vs ~900 MB for Debian).
 FROM node:22-alpine AS builder
 
-# Install pnpm globally
-RUN npm install -g pnpm@10
+# Enable corepack and activate the exact pnpm version declared in package.json
+# (packageManager: pnpm@10.4.1). This ensures the lockfile format matches.
+RUN corepack enable && corepack prepare pnpm@10.4.1 --activate
 
 WORKDIR /app
 
@@ -17,17 +18,19 @@ RUN pnpm install --frozen-lockfile
 # Copy the rest of the source
 COPY . .
 
-# Build the Vite frontend + bundle the Express server
-# DATABASE_URL is required by drizzle.config.ts at build time only for
-# schema generation (pnpm db:push). The actual runtime value is injected
-# via environment variables at container start.
+# Build the Vite frontend + bundle the Express server.
+# DATABASE_URL is required by drizzle.config.ts at build time for schema
+# introspection. We pass a dummy value here; the real value is injected
+# at container runtime via environment variables.
+ARG DATABASE_URL=mysql://build:build@localhost:3306/build
+ENV DATABASE_URL=${DATABASE_URL}
 RUN pnpm build
 
 # ─── Stage 2: Production image ───────────────────────────────────────────────
 FROM node:22-alpine AS runner
 
-# Install pnpm (needed to install production-only deps)
-RUN npm install -g pnpm@10
+# Enable corepack with the same pinned pnpm version
+RUN corepack enable && corepack prepare pnpm@10.4.1 --activate
 
 WORKDIR /app
 

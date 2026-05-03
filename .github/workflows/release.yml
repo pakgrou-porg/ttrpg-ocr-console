@@ -30,11 +30,64 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: pakgrou-porg/ttrpg-ocr-console
+  # Must match the packageManager field in package.json
+  PNPM_VERSION: "10.4.1"
 
 jobs:
+  # ── Job 1: Run tests before building the image ─────────────────────────────
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: testroot
+          MYSQL_DATABASE: ttrpg_test
+          MYSQL_USER: test_user
+          MYSQL_PASSWORD: testpass
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -u root -ptestroot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Enable corepack and install pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@${{ env.PNPM_VERSION }} --activate
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Push database schema
+        env:
+          DATABASE_URL: mysql://test_user:testpass@127.0.0.1:3306/ttrpg_test
+        run: pnpm db:push
+
+      - name: Run tests
+        env:
+          DATABASE_URL: mysql://test_user:testpass@127.0.0.1:3306/ttrpg_test
+          JWT_SECRET: test-jwt-secret-for-ci-only-not-production
+          NODE_ENV: test
+        run: pnpm test
+
+  # ── Job 2: Build and push the Docker image ─────────────────────────────────
   build-and-push:
     name: Build & Push
     runs-on: ubuntu-latest
+    needs: test   # Only build if tests pass
     permissions:
       contents: read
       packages: write   # Required to push to GHCR
