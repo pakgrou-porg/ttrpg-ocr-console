@@ -79,12 +79,14 @@ describe("providers (LLM Provider Registry)", () => {
     });
     expect(result).toHaveProperty("id");
     expect(result.success).toBe(true);
+    // Cleanup: remove the test row so it doesn't pollute the provider registry
+    await caller.providers.delete({ id: result.id });
   });
 
   it("masks API keys when listing providers", async () => {
     const caller = appRouter.createCaller(createAdminContext());
     // First create a provider with a real key
-    await caller.providers.create({
+    const created = await caller.providers.create({
       name: `OpenRouter Masked ${suffix}`,
       displayName: `OpenRouter Masked ${suffix}`,
       providerType: "openrouter",
@@ -98,6 +100,8 @@ describe("providers (LLM Provider Registry)", () => {
     expect(found!.hasApiKey).toBe(true);
     expect(found!.maskedApiKey).toBeDefined();
     expect(found!.maskedApiKey).not.toBe("sk-or-v1-abcdefghijklmnop");
+    // Cleanup: remove the test row so it doesn't pollute the provider registry
+    await caller.providers.delete({ id: created.id });
   });
 
   it("allows admin to delete a provider", async () => {

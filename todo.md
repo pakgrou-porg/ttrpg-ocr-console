@@ -402,3 +402,13 @@
 - [x] Stage cards for non-LLM stages: Wrench Configure button, no delete button, appropriate empty-state text
 - [x] 128/128 tests passing
 - [x] Save checkpoint and push to GitHub
+
+## Phase: Provider Registry Cleanup — Real Providers Only
+
+- [x] Delete all dummy/seed provider rows from the DB (13 dummy rows removed)
+- [x] Updated Asus - Nano Omni provider (OpenAI Compatible, 10.116.2.56:8100/v1, all caps on, default temp 0.3, context 65536, maxTokens 36864, model nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4, isDefault true)
+- [x] Updated Framework — Local provider (LM Studio, 10.116.2.145:1234/v1, all caps on, default temp 0.2, context 8192, model nvidia/nemotron-3-nano-omni, isDefault false)
+- [x] Fixed providers.test.ts: added cleanup (delete) after "create" and "masks API keys" tests to prevent orphan rows on future test runs
+- [x] No seedDefaultProviders for providers — providers are user-managed only
+- [x] 128/128 tests passing, DB confirmed at exactly 2 providers after test run
+- [x] Save checkpoint and push to GitHub
