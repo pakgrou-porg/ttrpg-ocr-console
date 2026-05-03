@@ -474,3 +474,4 @@
 - [x] Fix CI test failure: ramblings.generate called real Manus Forge API (BUILT_IN_FORGE_API_KEY not available in CI) — added vi.mock('./_core/llm') in features.test.ts to mock invokeLLM; test now runs in ~400ms instead of 5.7s
 - [x] Fix Dockerfile: corepack prepare pnpm@10.4.1 fails in QEMU-emulated arm64 multi-platform build — replaced with npm install -g pnpm@10.4.1 (deterministic, no network resolution)
 - [x] Fix Dockerfile: --frozen-lockfile fails in multi-platform build (lockfile generated on host, not arm64) — replaced with --no-frozen-lockfile; lockfile integrity validated by CI test job on host before Docker build runs
+- [x] Fix release.yml: drop arm64 from build matrix (both target machines are amd64: MSI Intel Core Ultra 9 + Framework Strix Halo) — eliminates QEMU emulation entirely; removed QEMU setup step; platforms: linux/amd64 only
