@@ -11,10 +11,11 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
+import { Link } from "wouter";
 import {
   GitBranch, Loader2, Layers, ChevronDown, ChevronUp,
   Settings2, Thermometer, FileText, Check, Cpu, Cloud,
-  AlertCircle, Pencil, Trash2, Hash,
+  AlertCircle, Pencil, Trash2, Hash, ExternalLink, BookOpen,
 } from "lucide-react";
 
 // ─── Phase groupings ──────────────────────────────────────────────────────────
@@ -71,7 +72,7 @@ interface InscriptionDialogProps {
     id?: number;
     primaryProviderId?: number | null;
     fallbackProviderId?: number | null;
-    systemPrompt?: string | null;
+    promptName?: string | null;
     temperature?: number | null;
     maxTokens?: number | null;
     isActive?: boolean;
@@ -88,7 +89,11 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
   const [fallbackProviderId, setFallbackProviderId] = useState<string>(
     inscription?.fallbackProviderId ? String(inscription.fallbackProviderId) : "none"
   );
-  const [systemPrompt, setSystemPrompt] = useState(inscription?.systemPrompt ?? "");
+  const [promptName, setPromptName] = useState<string>(inscription?.promptName ?? "none");
+  // Fetch pipeline prompts for the picker
+  const { data: allPrompts } = trpc.prompts.list.useQuery();
+  const pipelinePrompts = (allPrompts ?? []).filter(p => p.category === "pipeline");
+  const selectedPrompt = pipelinePrompts.find(p => p.name === promptName) ?? null;
   const [temperature, setTemperature] = useState<string>(
     inscription?.temperature !== null && inscription?.temperature !== undefined
       ? String(inscription.temperature)
@@ -115,7 +120,7 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
       stage: stage as any,
       primaryProviderId: primaryProviderId && primaryProviderId !== "none" ? Number(primaryProviderId) : null,
       fallbackProviderId: fallbackProviderId && fallbackProviderId !== "none" ? Number(fallbackProviderId) : null,
-      systemPrompt: systemPrompt || undefined,
+      promptName: promptName !== "none" ? promptName : null,
       temperature: temperature !== "" ? Number(temperature) : null,
       maxTokens: maxTokens !== "" ? Number(maxTokens) : null,
       isActive,
@@ -194,23 +199,42 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
 
           <Separator />
 
-          {/* System Prompt */}
+          {/* Prompt Reference */}
           <div className="space-y-2">
-            <Label className="flex items-center gap-2">
-              <FileText className="h-4 w-4 text-amber-400" />
-              System Prompt
-              <span className="text-muted-foreground text-xs font-normal">(stage-specific instructions)</span>
-            </Label>
-            <Textarea
-              placeholder={`Enter the system prompt for the ${stageLabel} stage…\n\nExample: "You are an expert document layout analyzer for TTRPG materials. Your task is to identify all distinct visual elements and their bounding boxes on the page."`}
-              value={systemPrompt}
-              onChange={e => setSystemPrompt(e.target.value)}
-              className="min-h-[160px] font-mono text-xs resize-y bg-muted/30"
-            />
-            <p className="text-xs text-muted-foreground">
-              Injected as the system message for every LLM call at this stage.
-              Leave blank to use no system prompt (or the provider default).
-            </p>
+            <div className="flex items-center justify-between">
+              <Label className="flex items-center gap-2">
+                <BookOpen className="h-4 w-4 text-amber-400" />
+                System Prompt
+                <span className="text-muted-foreground text-xs font-normal">(from Incantations &amp; Runes)</span>
+              </Label>
+              <Link href="/incantations-runes" className="flex items-center gap-1 text-xs text-amber-400/70 hover:text-amber-400 transition-colors">
+                <ExternalLink className="h-3 w-3" />
+                Edit Prompts
+              </Link>
+            </div>
+            <Select value={promptName} onValueChange={setPromptName}>
+              <SelectTrigger className="bg-muted/30">
+                <SelectValue placeholder="Select a prompt from Incantations &amp; Runes…" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">— None (use provider default) —</SelectItem>
+                {pipelinePrompts.map(p => (
+                  <SelectItem key={p.name} value={p.name}>
+                    {p.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {selectedPrompt ? (
+              <p className="text-xs text-muted-foreground">
+                {selectedPrompt.description ?? "No description available."}
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Select a prompt defined in Incantations &amp; Runes. Prompts are managed centrally and
+                referenced by name — edit the prompt text there, and all inscriptions using it update automatically.
+              </p>
+            )}
           </div>
 
           <Separator />
@@ -381,11 +405,11 @@ export default function TheAssignments() {
         <InscriptionDialog
           stage={editingStage}
           stageLabel={editingStageLabel}
-          inscription={editingInscription ? {
+            inscription={editingInscription ? {
             id: editingInscription.id,
             primaryProviderId: editingInscription.primaryProvider?.id ?? null,
             fallbackProviderId: editingInscription.fallbackProvider?.id ?? null,
-            systemPrompt: editingInscription.systemPrompt,
+            promptName: editingInscription.promptName ?? null,
             temperature: editingInscription.temperature,
             maxTokens: editingInscription.maxTokens,
             isActive: editingInscription.isActive,
@@ -499,13 +523,13 @@ export default function TheAssignments() {
                                   </div>
                                 )}
 
-                                {/* System Prompt preview */}
-                                {inscription.systemPrompt && (
-                                  <div className="flex items-start gap-1.5 mt-1">
-                                    <FileText className="h-3 w-3 text-amber-400/60 flex-shrink-0 mt-0.5" />
-                                    <p className="text-xs text-muted-foreground font-mono truncate max-w-[500px]">
-                                      {inscription.systemPrompt.slice(0, 100)}{inscription.systemPrompt.length > 100 ? "…" : ""}
-                                    </p>
+                                {/* Prompt reference badge */}
+                                {inscription.promptName && (
+                                  <div className="flex items-center gap-1.5 mt-1">
+                                    <BookOpen className="h-3 w-3 text-amber-400/60 flex-shrink-0" />
+                                    <Badge variant="outline" className="text-[10px] border-amber-500/40 text-amber-400/80 bg-amber-950/20 font-mono">
+                                      {inscription.promptName}
+                                    </Badge>
                                   </div>
                                 )}
 

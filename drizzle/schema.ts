@@ -439,11 +439,11 @@ export const stageInscriptions = mysqlTable("stage_inscriptions", {
    */
   fallbackProviderId: int("fallbackProviderId"),
   /**
-   * Dedicated system prompt for this stage.
-   * Hard requirement: every LLM-involved stage must have a configurable prompt.
-   * Fetched at runtime by both Python pipeline scripts and the console.
+   * Reference to system_prompts.name for this stage.
+   * The actual prompt text lives in the system_prompts table (Incantations & Runes).
+   * Null means no prompt is assigned — the provider default will be used.
    */
-  systemPrompt: text("systemPrompt"),
+  promptName: varchar("promptName", { length: 128 }),
   /**
    * Temperature override for this stage (0.0 – 2.0).
    * Null = use the primary provider's defaultTemperature.

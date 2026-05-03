@@ -914,7 +914,8 @@ export const appRouter = router({
         stage: z.enum(PIPELINE_STAGES),
         primaryProviderId: z.number().int().nullable().optional(),
         fallbackProviderId: z.number().int().nullable().optional(),
-        systemPrompt: z.string().optional(),
+        /** Name of the system_prompts record to use for this stage (from Incantations & Runes) */
+        promptName: z.string().max(128).nullable().optional(),
         temperature: z.number().min(0).max(2).nullable().optional(),
         maxTokens: z.number().int().nullable().optional(),
         llmSettings: z.record(z.string(), z.unknown()).nullable().optional(),
@@ -925,7 +926,7 @@ export const appRouter = router({
           stage: input.stage,
           primaryProviderId: input.primaryProviderId ?? null,
           fallbackProviderId: input.fallbackProviderId ?? null,
-          systemPrompt: input.systemPrompt,
+          promptName: input.promptName ?? null,
           temperature: input.temperature ?? null,
           maxTokens: input.maxTokens ?? null,
           llmSettings: input.llmSettings as Record<string, unknown> | null | undefined,
@@ -940,7 +941,8 @@ export const appRouter = router({
         id: z.number().int(),
         primaryProviderId: z.number().int().nullable().optional(),
         fallbackProviderId: z.number().int().nullable().optional(),
-        systemPrompt: z.string().optional(),
+        /** Name of the system_prompts record to use for this stage (from Incantations & Runes) */
+        promptName: z.string().max(128).nullable().optional(),
         temperature: z.number().min(0).max(2).nullable().optional(),
         maxTokens: z.number().int().nullable().optional(),
         llmSettings: z.record(z.string(), z.unknown()).nullable().optional(),
@@ -989,7 +991,7 @@ export const appRouter = router({
           inscription: inscription ? {
             id: inscription.id,
             isActive: inscription.isActive,
-            systemPrompt: inscription.systemPrompt,
+            promptName: inscription.promptName ?? null,
             temperature: inscription.temperature,
             maxTokens: inscription.maxTokens,
             llmSettings: inscription.llmSettings ?? null,

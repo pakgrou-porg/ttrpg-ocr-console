@@ -327,3 +327,17 @@
 
 ### Invitations
 - [ ] Email dispatch for invitation scrolls — invitations are created in DB but never sent (needs email service integration, e.g. Resend or SMTP)
+
+## Phase: Assignments → Prompt Reference (not inline text)
+
+- [x] Schema: rename `systemPrompt` column to `promptName` (varchar 128, nullable FK reference to system_prompts.name) in stage_inscriptions
+- [x] Apply DB migration for column rename
+- [x] db.ts: update upsertStageInscription / updateStageInscription helpers to use promptName
+- [x] routers.ts: update assignments.upsert and assignments.update input schemas (promptName: z.string().optional() instead of systemPrompt)
+- [x] routers.ts: update assignments.topology to return promptName (and optionally resolve the full promptText by joining system_prompts)
+- [x] TheAssignments.tsx: replace systemPrompt textarea with a Select dropdown populated from prompts.list (filtered to category="pipeline")
+- [x] TheAssignments.tsx: show the selected prompt's description as helper text below the picker
+- [x] TheAssignments.tsx: add a "Edit Prompts" link that navigates to Incantations & Runes
+- [x] Update providers.test.ts and features.test.ts: replace systemPrompt field with promptName in all test fixtures
+- [x] All 128 tests passing after changes
+- [x] Save checkpoint and push to GitHub

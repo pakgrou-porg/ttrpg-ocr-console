@@ -152,7 +152,7 @@ describe("assignments (Stage Inscription Registry)", () => {
     const result = await caller.assignments.upsert({
       stage: "bbox_detection",
       primaryProviderId: provider.id,
-      systemPrompt: "Test system prompt",
+      promptName: "layout_analysis_prompt",
       temperature: 0.1,
     });
     expect(result.success).toBe(true);
