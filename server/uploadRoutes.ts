@@ -123,19 +123,25 @@ router.post(
       const { url: pdfUrl } = await storagePut(s3Key, file.buffer, "application/pdf");
 
       // Create the document record with ownership fields
-      const doc = await createDocument({
-        filename: file.originalname, // stored as metadata, not in the S3 key
-        title,
-        gameSystem,
-        edition,
-        publisher,
-        pdfUrl,
-        totalPages: 0, // Updated by the pipeline after PDF conversion
-        status: "pending",
-        ownerUserId: user.id,
-        createdByUserId: user.id,
-        visibility: "private",
-      });
+      let doc;
+      try {
+        doc = await createDocument({
+          filename: file.originalname,
+          title,
+          gameSystem,
+          edition,
+          publisher,
+          pdfUrl,
+          totalPages: 0,
+          status: "pending",
+          ownerUserId: user.id,
+          createdByUserId: user.id,
+          visibility: "private",
+        });
+      } catch (dbErr) {
+        console.error("[upload/document] DB insert failed after S3 upload. Orphaned key:", s3Key, dbErr);
+        return res.status(500).json({ error: "Upload failed. Please try again." });
+      }
 
       return res.status(201).json({
         success: true,

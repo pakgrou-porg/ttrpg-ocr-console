@@ -671,8 +671,12 @@ export const appRouter = router({
           const headers: Record<string, string> = { "Content-Type": "application/json" };
 
           if (provider.encryptedApiKey) {
-            const apiKey = decryptSecret({ ciphertext: provider.encryptedApiKey, iv: provider.keyIv ?? "", authTag: provider.keyAuthTag ?? "" });
-            headers["Authorization"] = `Bearer ${apiKey}`;
+            try {
+              const apiKey = decryptSecret({ ciphertext: provider.encryptedApiKey, iv: provider.keyIv ?? "", authTag: provider.keyAuthTag ?? "" });
+              headers["Authorization"] = `Bearer ${apiKey}`;
+            } catch {
+              return { ok: false, latencyMs: Date.now() - start, error: "Failed to decrypt stored API key. The key may be corrupted or the encryption key may have changed." };
+            }
           }
 
           const response = await fetch(url, { method: "GET", headers, signal: AbortSignal.timeout(10000) });
@@ -718,7 +722,11 @@ export const appRouter = router({
         if (!apiKey && input.providerId) {
           const stored = await getLlmProviderById(input.providerId);
           if (stored?.encryptedApiKey) {
-            apiKey = decryptSecret({ ciphertext: stored.encryptedApiKey, iv: stored.keyIv ?? "", authTag: stored.keyAuthTag ?? "" });
+            try {
+              apiKey = decryptSecret({ ciphertext: stored.encryptedApiKey, iv: stored.keyIv ?? "", authTag: stored.keyAuthTag ?? "" });
+            } catch {
+              return { ok: false, error: "Failed to decrypt stored API key.", models: [] };
+            }
           }
         }
 
@@ -928,8 +936,8 @@ export const appRouter = router({
         stage: z.enum(PIPELINE_STAGES),
         primaryProviderId: z.number().int().nullable().optional(),
         fallbackProviderId: z.number().int().nullable().optional(),
-        /** Name of the system_prompts record to use for this stage (from Incantations & Runes) */
         promptName: z.string().max(128).nullable().optional(),
+        promptVersion: z.number().int().nullable().optional(),
         temperature: z.number().min(0).max(2).nullable().optional(),
         maxTokens: z.number().int().nullable().optional(),
         llmSettings: z.record(z.string(), z.unknown()).nullable().optional(),
@@ -941,6 +949,7 @@ export const appRouter = router({
           primaryProviderId: input.primaryProviderId ?? null,
           fallbackProviderId: input.fallbackProviderId ?? null,
           promptName: input.promptName ?? null,
+          promptVersion: input.promptVersion ?? null,
           temperature: input.temperature ?? null,
           maxTokens: input.maxTokens ?? null,
           llmSettings: input.llmSettings as Record<string, unknown> | null | undefined,
@@ -1197,35 +1206,35 @@ export const appRouter = router({
           // Decrypt credentials
           let username = "";
           let password = "";
-          if (conn.encryptedUsername && conn.usernameIv && conn.usernameAuthTag) {
-            username = decryptSecret({ ciphertext: conn.encryptedUsername, iv: conn.usernameIv, authTag: conn.usernameAuthTag });
-          }
-          if (conn.encryptedPassword && conn.passwordIv && conn.passwordAuthTag) {
-            password = decryptSecret({ ciphertext: conn.encryptedPassword, iv: conn.passwordIv, authTag: conn.passwordAuthTag });
+          try {
+            if (conn.encryptedUsername && conn.usernameIv && conn.usernameAuthTag) {
+              username = decryptSecret({ ciphertext: conn.encryptedUsername, iv: conn.usernameIv, authTag: conn.usernameAuthTag });
+            }
+            if (conn.encryptedPassword && conn.passwordIv && conn.passwordAuthTag) {
+              password = decryptSecret({ ciphertext: conn.encryptedPassword, iv: conn.passwordIv, authTag: conn.passwordAuthTag });
+            }
+          } catch {
+            await updateDbConnection(input.id, { lastTestStatus: "failed", lastTestedAt: new Date() });
+            return { ok: false, latencyMs: Date.now() - start, error: "Failed to decrypt stored credentials." };
           }
 
-          // Build connection string and test
-          const protocol = conn.connectionType.includes("mysql") ? "mysql" : "postgres";
-          const sslParam = conn.useSsl ? "?sslmode=require" : "";
-          const connStr = `${protocol}://${username}:${password}@${conn.host}:${conn.port}/${conn.databaseName}${sslParam}`;
+          // TCP connectivity check — verify the host:port is reachable
+          const { createConnection } = await import("net");
+          await new Promise<void>((resolve, reject) => {
+            const socket = createConnection({ host: conn.host, port: conn.port, timeout: 5000 }, () => {
+              socket.destroy();
+              resolve();
+            });
+            socket.on("error", (err) => { socket.destroy(); reject(err); });
+            socket.on("timeout", () => { socket.destroy(); reject(new Error("Connection timed out")); });
+          });
 
-          // Simple TCP connectivity check via fetch to the host:port
-          // For a real implementation, we'd use the appropriate DB driver
           const latencyMs = Date.now() - start;
-
-          // Update the last test status
-          await updateDbConnection(input.id, {
-            lastTestStatus: "success",
-            lastTestedAt: new Date(),
-          } as any);
-
-          return { ok: true, latencyMs, message: "Connection parameters validated" };
+          await updateDbConnection(input.id, { lastTestStatus: "success", lastTestedAt: new Date() });
+          return { ok: true, latencyMs, message: `TCP connection to ${conn.host}:${conn.port} successful (${username ? "credentials stored" : "no credentials"})` };
         } catch (error: any) {
-          await updateDbConnection(input.id, {
-            lastTestStatus: "failed",
-            lastTestedAt: new Date(),
-          } as any);
-          return { ok: false, latencyMs: Date.now() - start, error: error.message };
+          await updateDbConnection(input.id, { lastTestStatus: "failed", lastTestedAt: new Date() });
+          return { ok: false, latencyMs: Date.now() - start, error: "Connection failed. Verify host, port, and network access." };
         }
       }),
 
@@ -1479,7 +1488,7 @@ export const appRouter = router({
         assignedTo: z.number().int(),
       }))
       .mutation(async ({ input }) => {
-        await updateHitlItem(input.id, { assignedTo: input.assignedTo, status: "in_progress" as any });
+        await updateHitlItem(input.id, { assignedTo: input.assignedTo, status: "in_progress" });
         return { success: true };
       }),
 
@@ -1497,7 +1506,7 @@ export const appRouter = router({
 
         // Update the HITL item
         await updateHitlItem(input.id, {
-          status: "resolved" as any,
+          status: "resolved",
           resolutionNotes: input.resolutionNotes,
           resolvedBy: ctx.user.id,
           resolvedAt: new Date(),
@@ -1514,7 +1523,7 @@ export const appRouter = router({
             correctedStructuredData: input.correctedStructuredData,
             correctedBy: ctx.user.id,
             correctedAt: new Date(),
-            status: "corrected" as any,
+            status: "corrected",
           });
         }
 
@@ -1529,7 +1538,7 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         await updateHitlItem(input.id, {
-          status: "skipped" as any,
+          status: "skipped",
           resolutionNotes: input.resolutionNotes,
           resolvedBy: ctx.user.id,
           resolvedAt: new Date(),
@@ -1545,7 +1554,7 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         await updateHitlItem(input.id, {
-          status: "escalated" as any,
+          status: "escalated",
           resolutionNotes: input.resolutionNotes,
           resolvedBy: ctx.user.id,
           resolvedAt: new Date(),
@@ -1561,14 +1570,14 @@ export const appRouter = router({
       .query(async () => {
         // Priority order: critical > high > medium > low, then oldest first
         const items = await getAllHitlItems({
-          status: "queued" as any,
+          status: "queued",
           limit: 1,
           orderByPriority: true,
         });
         if (items.length > 0) return items[0];
         // Fall back to in_progress
         const inProgress = await getAllHitlItems({
-          status: "in_progress" as any,
+          status: "in_progress",
           limit: 1,
           orderByPriority: true,
         });
@@ -1692,7 +1701,7 @@ export const appRouter = router({
             rawText: ocrData.rawText,
             structuredData: ocrData.structuredData,
             confidence: ocrData.confidence,
-            status: (ocrData.status ?? "pass2_complete") as any,
+            status: ocrData.status ?? "pass2_complete",
             pass1Model: ocrData.pass1Model,
             pass2Model: ocrData.pass2Model,
             layoutMetadata: ocrData.layoutMetadata,
@@ -1705,7 +1714,7 @@ export const appRouter = router({
             rawText: ocrData.rawText,
             structuredData: ocrData.structuredData,
             confidence: ocrData.confidence,
-            status: (ocrData.status ?? "pass2_complete") as any,
+            status: ocrData.status ?? "pass2_complete",
             pass1Model: ocrData.pass1Model,
             pass2Model: ocrData.pass2Model,
             layoutMetadata: ocrData.layoutMetadata,
@@ -1729,7 +1738,7 @@ export const appRouter = router({
               ocrResultId,
               reason,
               flagCategory: "low_confidence",
-              priority: priority as any,
+              priority,
             });
             hitlId = hitlItem.id;
           }
@@ -1773,7 +1782,7 @@ export const appRouter = router({
           ocrResultId: ocrResult?.id ?? null,
           reason: input.reason,
           flagCategory: input.flagCategory,
-          priority: input.priority as any,
+          priority: input.priority,
         });
         return { success: true, id: hitlItem.id, action: "created" as const };
       }),

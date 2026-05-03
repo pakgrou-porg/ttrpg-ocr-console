@@ -267,11 +267,13 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
   });
 
   const handleSave = () => {
+    const isLatest = selectedVersion === "latest" || (versions.length > 0 && selectedVersion === String(versions[0].version));
     upsertMutation.mutate({
       stage: stage as any,
       primaryProviderId: primaryProviderId && primaryProviderId !== "none" ? Number(primaryProviderId) : null,
       fallbackProviderId: fallbackProviderId && fallbackProviderId !== "none" ? Number(fallbackProviderId) : null,
       promptName: autoPromptName,
+      promptVersion: isLatest ? null : Number(selectedVersion),
       temperature: temperature !== "" ? Number(temperature) : null,
       maxTokens: maxTokens !== "" ? Number(maxTokens) : null,
       isActive,

@@ -1,4 +1,4 @@
-import { boolean, float, index, int, mysqlEnum, mysqlTable, text, timestamp, varchar, json } from "drizzle-orm/mysql-core";
+import { boolean, float, index, int, mysqlEnum, mysqlTable, text, timestamp, unique, varchar, json } from "drizzle-orm/mysql-core";
 
 export const users = mysqlTable("users", {
   id: int("id").autoincrement().primaryKey(),
@@ -128,9 +128,11 @@ export const promptVersions = mysqlTable("prompt_versions", {
   promptName: varchar("promptName", { length: 128 }).notNull(),
   promptText: text("promptText").notNull(),
   version: int("version").notNull(),
-  savedBy: int("savedBy"),           // FK to users.id (nullable — seed rows have no user)
+  savedBy: int("savedBy"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+}, (t) => ({
+  nameVersionIdx: unique("prompt_versions_name_version_idx").on(t.promptName, t.version),
+}));
 
 export type PromptVersion = typeof promptVersions.$inferSelect;
 export type InsertPromptVersion = typeof promptVersions.$inferInsert;
@@ -461,6 +463,8 @@ export const stageInscriptions = mysqlTable("stage_inscriptions", {
    * Null means no prompt is assigned — the provider default will be used.
    */
   promptName: varchar("promptName", { length: 128 }),
+  /** Pinned prompt version (null = always use latest) */
+  promptVersion: int("promptVersion"),
   /**
    * Temperature override for this stage (0.0 – 2.0).
    * Null = use the primary provider's defaultTemperature.

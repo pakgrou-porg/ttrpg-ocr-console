@@ -218,20 +218,11 @@ export async function upsertSystemPrompt(prompt: InsertSystemPrompt, savedBy?: n
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  // Determine the next version number
+  // Always auto-increment — ignore caller-supplied version to prevent conflicts
   const existing = await getSystemPromptByName(prompt.name);
-  const nextVersion = existing ? (existing.version + 1) : 1;
-  const versionToSave = prompt.version ?? nextVersion;
+  const versionToSave = existing ? (existing.version + 1) : 1;
 
-  // Write the new version to prompt_versions history
-  await db.insert(promptVersions).values({
-    promptName: prompt.name,
-    promptText: prompt.promptText,
-    version: versionToSave,
-    savedBy: savedBy ?? null,
-  });
-
-  // Upsert the canonical system_prompts row
+  // Upsert the canonical system_prompts row first (holds the authoritative version)
   await db.insert(systemPrompts).values({ ...prompt, version: versionToSave }).onDuplicateKeyUpdate({
     set: {
       promptText: prompt.promptText,
@@ -239,6 +230,14 @@ export async function upsertSystemPrompt(prompt: InsertSystemPrompt, savedBy?: n
       version: versionToSave,
     },
   });
+
+  // Write the new version to prompt_versions history (unique index prevents duplicates on race)
+  await db.insert(promptVersions).values({
+    promptName: prompt.name,
+    promptText: prompt.promptText,
+    version: versionToSave,
+    savedBy: savedBy ?? null,
+  }).onDuplicateKeyUpdate({ set: { promptText: prompt.promptText } });
 
   // Trim history to last 3 versions for this prompt
   const history = await db
@@ -941,10 +940,10 @@ export async function createDbConnection(connection: InsertDbConnection) {
   return result[0].insertId;
 }
 
-export async function updateDbConnection(id: number, updates: Partial<InsertDbConnection>) {
+export async function updateDbConnection(id: number, updates: Partial<InsertDbConnection> & Record<string, unknown>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(dbConnections).set(updates).where(eq(dbConnections.id, id));
+  await db.update(dbConnections).set(updates as Partial<InsertDbConnection>).where(eq(dbConnections.id, id));
 }
 
 export async function deleteDbConnection(id: number) {
@@ -1076,19 +1075,19 @@ export async function getOcrResultById(id: number) {
   return result.length > 0 ? result[0] : undefined;
 }
 
-export async function createOcrResult(ocrResult: InsertOcrResult) {
+export async function createOcrResult(ocrResult: InsertOcrResult & Record<string, unknown>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(ocrResults).values(ocrResult);
+  const result = await db.insert(ocrResults).values(ocrResult as InsertOcrResult);
   const newId = result[0].insertId;
   const created = await db.select().from(ocrResults).where(eq(ocrResults.id, newId)).limit(1);
   return created[0]!;
 }
 
-export async function updateOcrResult(id: number, updates: Partial<InsertOcrResult>) {
+export async function updateOcrResult(id: number, updates: Partial<InsertOcrResult> & Record<string, unknown>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(ocrResults).set(updates).where(eq(ocrResults.id, id));
+  await db.update(ocrResults).set(updates as Partial<InsertOcrResult>).where(eq(ocrResults.id, id));
 }
 
 // ─── HITL Queue ─────────────────────────────────────────────────────────────
@@ -1134,19 +1133,19 @@ export async function getHitlItemsByPageId(pageId: number) {
   return db.select().from(hitlQueue).where(eq(hitlQueue.pageId, pageId)).orderBy(desc(hitlQueue.createdAt));
 }
 
-export async function createHitlItem(item: InsertHitlQueueItem) {
+export async function createHitlItem(item: InsertHitlQueueItem & Record<string, unknown>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(hitlQueue).values(item);
+  const result = await db.insert(hitlQueue).values(item as InsertHitlQueueItem);
   const newId = result[0].insertId;
   const created = await db.select().from(hitlQueue).where(eq(hitlQueue.id, newId)).limit(1);
   return created[0]!;
 }
 
-export async function updateHitlItem(id: number, updates: Partial<InsertHitlQueueItem>) {
+export async function updateHitlItem(id: number, updates: Partial<InsertHitlQueueItem> & Record<string, unknown>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(hitlQueue).set(updates).where(eq(hitlQueue.id, id));
+  await db.update(hitlQueue).set(updates as Partial<InsertHitlQueueItem>).where(eq(hitlQueue.id, id));
 }
 
 // ─── Page Processing Attempts ───────────────────────────────────────────────
