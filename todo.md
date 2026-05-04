@@ -502,4 +502,4 @@
 - [x] Write migrate.mjs using drizzle-orm/mysql2 migrator (prod dep, no drizzle-kit needed)
 - [x] Verify migrate.mjs runs cleanly on dev DB (backfilled 5 missing hashes from pnpm db:push history)
 - [x] Rewrite Dockerfile: remove all .pnpm virtual store COPY lines, replace CMD with node migrate.mjs
-- [ ] Push to GitHub, tag v0.1.4, update portainer-stack.yml IMAGE_TAG to 0.1.4
+- [x] Push to GitHub, tag v0.1.4, update portainer-stack.yml IMAGE_TAG to 0.1.4
