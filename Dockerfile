@@ -46,18 +46,38 @@ COPY patches ./patches
 # Install production dependencies only
 RUN pnpm install --no-frozen-lockfile --prod
 
-# Copy drizzle-kit and its dependencies from the builder stage.
-# drizzle-kit is a devDependency so --prod does not install it, but it is
-# needed to run pnpm db:push at container startup.
-# Dependencies: @drizzle-team/brocli, @esbuild-kit/esm-loader, esbuild, tsx
-COPY --from=builder /app/node_modules/drizzle-kit ./node_modules/drizzle-kit
+# ── drizzle-kit migration support ────────────────────────────────────────────
+# drizzle-kit is a devDependency so pnpm --prod does not install it, but it is
+# needed to run `pnpm db:push` at container startup.
+#
+# pnpm uses a VIRTUAL STORE (.pnpm/) — packages are NOT hoisted to top-level
+# node_modules/. @esbuild-kit and @drizzle-team only exist inside the .pnpm
+# virtual store, not at node_modules/@esbuild-kit. We must copy the .pnpm
+# virtual store entries directly.
+#
+# Required .pnpm entries (drizzle-kit + its 4 deps):
+#   drizzle-kit@0.31.10
+#   @drizzle-team+brocli@0.10.2
+#   @esbuild-kit+esm-loader@2.6.5
+#   @esbuild-kit+core-utils@3.3.2   (dep of esm-loader)
+#   esbuild@0.25.10                  (the version drizzle-kit resolves)
+#   tsx@4.21.0                       (the version drizzle-kit resolves)
+#
+# We also copy the top-level symlinks (node_modules/drizzle-kit, .bin/drizzle-kit)
+# that pnpm creates when hoisting.
+COPY --from=builder /app/node_modules/.pnpm/drizzle-kit@0.31.10 ./node_modules/.pnpm/drizzle-kit@0.31.10
+COPY --from=builder /app/node_modules/.pnpm/@drizzle-team+brocli@0.10.2 ./node_modules/.pnpm/@drizzle-team+brocli@0.10.2
+COPY --from=builder /app/node_modules/.pnpm/@esbuild-kit+esm-loader@2.6.5 ./node_modules/.pnpm/@esbuild-kit+esm-loader@2.6.5
+COPY --from=builder /app/node_modules/.pnpm/@esbuild-kit+core-utils@3.3.2 ./node_modules/.pnpm/@esbuild-kit+core-utils@3.3.2
+COPY --from=builder /app/node_modules/.pnpm/esbuild@0.25.10 ./node_modules/.pnpm/esbuild@0.25.10
+COPY --from=builder /app/node_modules/.pnpm/tsx@4.21.0 ./node_modules/.pnpm/tsx@4.21.0
+
+# Copy the top-level hoisted symlink for drizzle-kit (pnpm hoists it because
+# it is listed in devDependencies; the symlink points into .pnpm/).
+# We recreate it as a real directory copy since COPY does not follow symlinks
+# across stages — we copy the resolved target instead.
+COPY --from=builder /app/node_modules/.pnpm/drizzle-kit@0.31.10/node_modules/drizzle-kit ./node_modules/drizzle-kit
 COPY --from=builder /app/node_modules/.bin/drizzle-kit ./node_modules/.bin/drizzle-kit
-COPY --from=builder /app/node_modules/@drizzle-team ./node_modules/@drizzle-team
-COPY --from=builder /app/node_modules/@esbuild-kit ./node_modules/@esbuild-kit
-COPY --from=builder /app/node_modules/esbuild ./node_modules/esbuild
-COPY --from=builder /app/node_modules/.bin/esbuild ./node_modules/.bin/esbuild
-COPY --from=builder /app/node_modules/tsx ./node_modules/tsx
-COPY --from=builder /app/node_modules/.bin/tsx ./node_modules/.bin/tsx
 
 # Copy the built artefacts from the builder stage.
 # Vite outputs to dist/public/ (see vite.config.ts outDir).
