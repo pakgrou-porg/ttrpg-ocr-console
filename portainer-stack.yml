@@ -57,7 +57,7 @@ services:
 
   # ── TTRPG OCR Console ─────────────────────────────────────────────────────
   # Pre-built image from GHCR. No build step required on the host.
-  # Migrations are run automatically at container startup via the CMD entrypoint.
+  # Migrations run automatically at startup: CMD runs pnpm db:push before node dist/index.js.
   console:
     image: ghcr.io/pakgrou-porg/ttrpg-ocr-console:${IMAGE_TAG:-0.1.0}
     restart: unless-stopped

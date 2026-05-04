@@ -65,5 +65,7 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD wget -qO- http://localhost:${PORT:-3000}/api/trpc/health || exit 1
 
-# Start the production server
-CMD ["node", "dist/index.js"]
+# Run database migrations then start the production server.
+# pnpm db:push (drizzle-kit generate + migrate) is idempotent — safe to run on
+# every restart. It connects to the DATABASE_URL env var set at runtime.
+CMD ["sh", "-c", "pnpm db:push && node dist/index.js"]
