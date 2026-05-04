@@ -1,9 +1,16 @@
 export { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 
+type RuntimeConfig = { VITE_APP_ID?: string; VITE_OAUTH_PORTAL_URL?: string };
+const rc = (window as any).__RUNTIME_CONFIG__ as RuntimeConfig | undefined;
+
+function getEnv(key: keyof RuntimeConfig): string {
+  return rc?.[key] || import.meta.env[key] || "";
+}
+
 // Generate login URL at runtime so redirect URI reflects the current origin.
 export const getLoginUrl = () => {
-  const oauthPortalUrl = import.meta.env.VITE_OAUTH_PORTAL_URL;
-  const appId = import.meta.env.VITE_APP_ID;
+  const oauthPortalUrl = getEnv("VITE_OAUTH_PORTAL_URL");
+  const appId = getEnv("VITE_APP_ID");
 
   if (!oauthPortalUrl || !appId) {
     return "/";

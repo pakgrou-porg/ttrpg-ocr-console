@@ -63,6 +63,7 @@ export const ENV = {
   credentialEncryptionKey,
   databaseUrl: optionalEnv("DATABASE_URL"),
   oAuthServerUrl: optionalEnv("OAUTH_SERVER_URL"),
+  oAuthPortalUrl: optionalEnv("VITE_OAUTH_PORTAL_URL", "https://manus.im"),
   ownerOpenId: optionalEnv("OWNER_OPEN_ID"),
   isProduction: process.env.NODE_ENV === "production",
   forgeApiUrl: optionalEnv("BUILT_IN_FORGE_API_URL"),
