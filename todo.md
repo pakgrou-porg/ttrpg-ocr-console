@@ -494,3 +494,5 @@
 
 - [x] Fix Dockerfile: drizzle-kit is a devDependency, not available after --prod install; copy drizzle-kit + its 4 deps (@drizzle-team/brocli, @esbuild-kit/esm-loader, esbuild, tsx) from builder stage into runner stage
 - [x] Tag v0.1.2 and push to GitHub; portainer-stack.yml IMAGE_TAG default updated to 0.1.2
+- [x] Fix Dockerfile v2: pnpm virtual store — @esbuild-kit and @drizzle-team are NOT at top-level node_modules/; copy .pnpm/ virtual store entries directly instead
+- [x] Tag v0.1.3 and push to GitHub; portainer-stack.yml IMAGE_TAG default updated to 0.1.3
