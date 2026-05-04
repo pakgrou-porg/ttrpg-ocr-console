@@ -69,16 +69,22 @@ describe("library", () => {
       testDocId = result.id;
     });
 
-    it("lists documents", async () => {
-      const docs = await userCaller.library.listDocuments();
+    it("lists documents (admin sees all)", async () => {
+      const docs = await adminCaller.library.listDocuments();
       expect(Array.isArray(docs)).toBe(true);
       const found = docs.find(d => d.id === testDocId);
       expect(found).toBeDefined();
       expect(found!.title).toBe("Player's Handbook Test");
     });
 
+    it("non-owner cannot see private documents", async () => {
+      const docs = await userCaller.library.listDocuments();
+      const found = docs.find(d => d.id === testDocId);
+      expect(found).toBeUndefined();
+    });
+
     it("gets a document by ID", async () => {
-      const doc = await userCaller.library.getDocument({ id: testDocId });
+      const doc = await adminCaller.library.getDocument({ id: testDocId });
       expect(doc.filename).toBe("test_phb.pdf");
       expect(doc.gameSystem).toBe("D&D");
       expect(doc.status).toBe("pending");
@@ -92,13 +98,13 @@ describe("library", () => {
       });
       expect(result.success).toBe(true);
 
-      const doc = await userCaller.library.getDocument({ id: testDocId });
+      const doc = await adminCaller.library.getDocument({ id: testDocId });
       expect(doc.status).toBe("phase1_non_ocr");
       expect(doc.processedPages).toBe(10);
     });
 
     it("returns NOT_FOUND for nonexistent document", async () => {
-      await expect(userCaller.library.getDocument({ id: 999999 }))
+      await expect(adminCaller.library.getDocument({ id: 999999 }))
         .rejects.toThrow("Document not found in the Library.");
     });
 
@@ -135,20 +141,20 @@ describe("library", () => {
     });
 
     it("gets pages for a document", async () => {
-      const pages = await userCaller.library.getPages({ documentId: testDocId });
+      const pages = await adminCaller.library.getPages({ documentId: testDocId });
       expect(pages.length).toBe(2);
       expect(pages[0].pageNumber).toBe(1);
       expect(pages[1].pageNumber).toBe(2);
     });
 
     it("gets a page with OCR (no OCR yet)", async () => {
-      const result = await userCaller.library.getPageWithOcr({ pageId: testPageId });
+      const result = await adminCaller.library.getPageWithOcr({ pageId: testPageId });
       expect(result.page.pageNumber).toBe(1);
       expect(result.ocrResult).toBeNull();
     });
 
     it("returns NOT_FOUND for nonexistent page", async () => {
-      await expect(userCaller.library.getPageWithOcr({ pageId: 999999 }))
+      await expect(adminCaller.library.getPageWithOcr({ pageId: 999999 }))
         .rejects.toThrow("Page not found.");
     });
   });
@@ -169,7 +175,7 @@ describe("library", () => {
     });
 
     it("gets page with OCR result", async () => {
-      const result = await userCaller.library.getPageWithOcr({ pageId: testPageId });
+      const result = await adminCaller.library.getPageWithOcr({ pageId: testPageId });
       expect(result.ocrResult).not.toBeNull();
       expect(result.ocrResult!.rawText).toBe("The ancient dragon breathes fire...");
       expect(result.ocrResult!.confidence).toBe(85);
@@ -185,33 +191,38 @@ describe("library", () => {
       expect(result.success).toBe(true);
       expect(result.action).toBe("updated");
 
-      const pageData = await userCaller.library.getPageWithOcr({ pageId: testPageId });
+      const pageData = await adminCaller.library.getPageWithOcr({ pageId: testPageId });
       expect(pageData.ocrResult!.confidence).toBe(92);
       expect(pageData.ocrResult!.status).toBe("validated");
     });
   });
 
   describe("search", () => {
-    it("searches documents by title", async () => {
-      const results = await userCaller.library.searchDocuments({ query: "Handbook" });
+    it("admin searches documents by title", async () => {
+      const results = await adminCaller.library.searchDocuments({ query: "Handbook" });
       expect(results.length).toBeGreaterThan(0);
       expect(results.some(d => d.id === testDocId)).toBe(true);
     });
 
-    it("searches documents by game system", async () => {
-      const results = await userCaller.library.searchDocuments({ query: "D&D" });
+    it("admin searches documents by game system", async () => {
+      const results = await adminCaller.library.searchDocuments({ query: "D&D" });
       expect(results.length).toBeGreaterThan(0);
     });
 
+    it("non-owner search excludes private documents", async () => {
+      const results = await userCaller.library.searchDocuments({ query: "Handbook" });
+      expect(results.some(d => d.id === testDocId)).toBe(false);
+    });
+
     it("returns empty for no match", async () => {
-      const results = await userCaller.library.searchDocuments({ query: "zzz_nonexistent_zzz" });
+      const results = await adminCaller.library.searchDocuments({ query: "zzz_nonexistent_zzz" });
       expect(results.length).toBe(0);
     });
   });
 
   describe("document statuses", () => {
     it("returns available document statuses", async () => {
-      const statuses = await userCaller.library.documentStatuses();
+      const statuses = await adminCaller.library.documentStatuses();
       expect(statuses.length).toBeGreaterThan(0);
       expect(statuses.some(s => s.id === "pending")).toBe(true);
       expect(statuses.some(s => s.id === "completed")).toBe(true);
