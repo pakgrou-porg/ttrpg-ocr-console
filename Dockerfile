@@ -28,6 +28,18 @@ COPY . .
 # at container runtime via environment variables.
 ARG DATABASE_URL=mysql://build:build@localhost:3306/build
 ENV DATABASE_URL=${DATABASE_URL}
+
+# Vite statically replaces import.meta.env.VITE_* at build time.
+# Pass these as build args so they are baked into the frontend bundle.
+ARG VITE_APP_ID=""
+ARG VITE_OAUTH_PORTAL_URL="https://manus.im"
+ARG VITE_ANALYTICS_ENDPOINT=""
+ARG VITE_ANALYTICS_WEBSITE_ID=""
+ENV VITE_APP_ID=${VITE_APP_ID}
+ENV VITE_OAUTH_PORTAL_URL=${VITE_OAUTH_PORTAL_URL}
+ENV VITE_ANALYTICS_ENDPOINT=${VITE_ANALYTICS_ENDPOINT}
+ENV VITE_ANALYTICS_WEBSITE_ID=${VITE_ANALYTICS_WEBSITE_ID}
+
 RUN pnpm build
 
 # ─── Stage 2: Production image ───────────────────────────────────────────────
