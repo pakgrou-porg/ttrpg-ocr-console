@@ -496,3 +496,10 @@
 - [x] Tag v0.1.2 and push to GitHub; portainer-stack.yml IMAGE_TAG default updated to 0.1.2
 - [x] Fix Dockerfile v2: pnpm virtual store — @esbuild-kit and @drizzle-team are NOT at top-level node_modules/; copy .pnpm/ virtual store entries directly instead
 - [x] Tag v0.1.3 and push to GitHub; portainer-stack.yml IMAGE_TAG default updated to 0.1.3
+
+## Phase: Replace drizzle-kit with standalone migration runner
+
+- [x] Write migrate.mjs using drizzle-orm/mysql2 migrator (prod dep, no drizzle-kit needed)
+- [x] Verify migrate.mjs runs cleanly on dev DB (backfilled 5 missing hashes from pnpm db:push history)
+- [x] Rewrite Dockerfile: remove all .pnpm virtual store COPY lines, replace CMD with node migrate.mjs
+- [ ] Push to GitHub, tag v0.1.4, update portainer-stack.yml IMAGE_TAG to 0.1.4

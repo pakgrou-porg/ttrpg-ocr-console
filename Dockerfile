@@ -16,8 +16,7 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
 COPY patches ./patches
 
-# Install all dependencies (including devDependencies needed for the build
-# and for drizzle-kit which is used at container startup for migrations).
+# Install all dependencies (including devDependencies needed for the build).
 RUN pnpm install --no-frozen-lockfile
 
 # Copy the rest of the source
@@ -34,7 +33,7 @@ RUN pnpm build
 # ─── Stage 2: Production image ───────────────────────────────────────────────
 FROM node:22-alpine AS runner
 
-# Install the same pinned pnpm version for running db:push at startup
+# Install the same pinned pnpm version
 RUN npm install -g pnpm@10.4.1
 
 WORKDIR /app
@@ -43,41 +42,10 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
 COPY patches ./patches
 
-# Install production dependencies only
+# Install production dependencies only.
+# drizzle-kit is intentionally excluded — migrations are handled by migrate.mjs
+# which uses drizzle-orm (a production dependency) directly.
 RUN pnpm install --no-frozen-lockfile --prod
-
-# ── drizzle-kit migration support ────────────────────────────────────────────
-# drizzle-kit is a devDependency so pnpm --prod does not install it, but it is
-# needed to run `pnpm db:push` at container startup.
-#
-# pnpm uses a VIRTUAL STORE (.pnpm/) — packages are NOT hoisted to top-level
-# node_modules/. @esbuild-kit and @drizzle-team only exist inside the .pnpm
-# virtual store, not at node_modules/@esbuild-kit. We must copy the .pnpm
-# virtual store entries directly.
-#
-# Required .pnpm entries (drizzle-kit + its 4 deps):
-#   drizzle-kit@0.31.10
-#   @drizzle-team+brocli@0.10.2
-#   @esbuild-kit+esm-loader@2.6.5
-#   @esbuild-kit+core-utils@3.3.2   (dep of esm-loader)
-#   esbuild@0.25.10                  (the version drizzle-kit resolves)
-#   tsx@4.21.0                       (the version drizzle-kit resolves)
-#
-# We also copy the top-level symlinks (node_modules/drizzle-kit, .bin/drizzle-kit)
-# that pnpm creates when hoisting.
-COPY --from=builder /app/node_modules/.pnpm/drizzle-kit@0.31.10 ./node_modules/.pnpm/drizzle-kit@0.31.10
-COPY --from=builder /app/node_modules/.pnpm/@drizzle-team+brocli@0.10.2 ./node_modules/.pnpm/@drizzle-team+brocli@0.10.2
-COPY --from=builder /app/node_modules/.pnpm/@esbuild-kit+esm-loader@2.6.5 ./node_modules/.pnpm/@esbuild-kit+esm-loader@2.6.5
-COPY --from=builder /app/node_modules/.pnpm/@esbuild-kit+core-utils@3.3.2 ./node_modules/.pnpm/@esbuild-kit+core-utils@3.3.2
-COPY --from=builder /app/node_modules/.pnpm/esbuild@0.25.10 ./node_modules/.pnpm/esbuild@0.25.10
-COPY --from=builder /app/node_modules/.pnpm/tsx@4.21.0 ./node_modules/.pnpm/tsx@4.21.0
-
-# Copy the top-level hoisted symlink for drizzle-kit (pnpm hoists it because
-# it is listed in devDependencies; the symlink points into .pnpm/).
-# We recreate it as a real directory copy since COPY does not follow symlinks
-# across stages — we copy the resolved target instead.
-COPY --from=builder /app/node_modules/.pnpm/drizzle-kit@0.31.10/node_modules/drizzle-kit ./node_modules/drizzle-kit
-COPY --from=builder /app/node_modules/.bin/drizzle-kit ./node_modules/.bin/drizzle-kit
 
 # Copy the built artefacts from the builder stage.
 # Vite outputs to dist/public/ (see vite.config.ts outDir).
@@ -85,12 +53,15 @@ COPY --from=builder /app/node_modules/.bin/drizzle-kit ./node_modules/.bin/drizz
 # Both live under dist/ — a single COPY covers everything.
 COPY --from=builder /app/dist ./dist
 
-# Copy the drizzle schema and migrations for use by drizzle-kit at startup
+# Copy the drizzle migration SQL files.
+# migrate.mjs reads these at startup to apply any pending migrations.
 COPY --from=builder /app/drizzle ./drizzle
-COPY --from=builder /app/drizzle.config.ts ./drizzle.config.ts
 
-# Copy TypeScript config (drizzle.config.ts needs it to resolve paths)
-COPY --from=builder /app/tsconfig.json ./tsconfig.json
+# Copy the standalone migration runner.
+# This script uses drizzle-orm/mysql2 migrator (a prod dependency) to apply
+# SQL migration files from the drizzle/ directory. It replaces `pnpm db:push`
+# (which requires drizzle-kit, a devDependency) entirely.
+COPY migrate.mjs ./migrate.mjs
 
 # Expose the application port (default 3000; overridable via PORT env var)
 EXPOSE 3000
@@ -100,6 +71,6 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD wget -qO- http://localhost:${PORT:-3000}/api/trpc/health || exit 1
 
 # Run database migrations then start the production server.
-# pnpm db:push (drizzle-kit generate + migrate) is idempotent — safe to run on
-# every restart. It connects to the DATABASE_URL env var set at runtime.
-CMD ["sh", "-c", "pnpm db:push && node dist/index.js"]
+# migrate.mjs is idempotent — it only applies migrations whose hashes are not
+# yet recorded in the __drizzle_migrations table. Safe to run on every restart.
+CMD ["sh", "-c", "node migrate.mjs && node dist/index.js"]
