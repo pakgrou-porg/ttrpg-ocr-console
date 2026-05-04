@@ -16,10 +16,8 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
 COPY patches ./patches
 
-# Install all dependencies (including devDependencies needed for the build).
-# --no-frozen-lockfile is used because the lockfile was generated on the host
-# and may differ slightly in the Docker build environment.
-# Lockfile integrity is validated by the CI test job before this step runs.
+# Install all dependencies (including devDependencies needed for the build
+# and for drizzle-kit which is used at container startup for migrations).
 RUN pnpm install --no-frozen-lockfile
 
 # Copy the rest of the source
@@ -36,7 +34,7 @@ RUN pnpm build
 # ─── Stage 2: Production image ───────────────────────────────────────────────
 FROM node:22-alpine AS runner
 
-# Install the same pinned pnpm version for production dependency installation
+# Install the same pinned pnpm version for running db:push at startup
 RUN npm install -g pnpm@10.4.1
 
 WORKDIR /app
@@ -48,15 +46,31 @@ COPY patches ./patches
 # Install production dependencies only
 RUN pnpm install --no-frozen-lockfile --prod
 
+# Copy drizzle-kit and its dependencies from the builder stage.
+# drizzle-kit is a devDependency so --prod does not install it, but it is
+# needed to run pnpm db:push at container startup.
+# Dependencies: @drizzle-team/brocli, @esbuild-kit/esm-loader, esbuild, tsx
+COPY --from=builder /app/node_modules/drizzle-kit ./node_modules/drizzle-kit
+COPY --from=builder /app/node_modules/.bin/drizzle-kit ./node_modules/.bin/drizzle-kit
+COPY --from=builder /app/node_modules/@drizzle-team ./node_modules/@drizzle-team
+COPY --from=builder /app/node_modules/@esbuild-kit ./node_modules/@esbuild-kit
+COPY --from=builder /app/node_modules/esbuild ./node_modules/esbuild
+COPY --from=builder /app/node_modules/.bin/esbuild ./node_modules/.bin/esbuild
+COPY --from=builder /app/node_modules/tsx ./node_modules/tsx
+COPY --from=builder /app/node_modules/.bin/tsx ./node_modules/.bin/tsx
+
 # Copy the built artefacts from the builder stage.
-# Vite outputs to dist/public/ (see vite.config.ts outDir: path.resolve(__dirname, 'dist/public')).
+# Vite outputs to dist/public/ (see vite.config.ts outDir).
 # The Express server outputs to dist/index.js.
 # Both live under dist/ — a single COPY covers everything.
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/drizzle ./drizzle
 
-# dist/index.js  — bundled Express server
-# dist/public/    — compiled Vite/React frontend (served as static files)
+# Copy the drizzle schema and migrations for use by drizzle-kit at startup
+COPY --from=builder /app/drizzle ./drizzle
+COPY --from=builder /app/drizzle.config.ts ./drizzle.config.ts
+
+# Copy TypeScript config (drizzle.config.ts needs it to resolve paths)
+COPY --from=builder /app/tsconfig.json ./tsconfig.json
 
 # Expose the application port (default 3000; overridable via PORT env var)
 EXPOSE 3000

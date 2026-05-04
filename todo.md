@@ -489,3 +489,8 @@
 - [x] Pin portainer-stack.yml IMAGE_TAG default to v0.1.0 (was :latest)
 - [x] Fix Dockerfile: COPY --from=builder /app/client/dist was wrong path — Vite outDir is dist/public/ (not client/dist/); removed the incorrect COPY line; dist/ COPY now covers both index.js and dist/public/
 - [x] Fix Dockerfile: add pnpm db:push to CMD entrypoint so migrations run automatically on first boot (was node dist/index.js only) — Vite outDir is dist/public/ (not client/dist/); removed the incorrect COPY line; dist/ COPY now covers both index.js and dist/public/
+
+## Phase: Fix Production Migration (drizzle-kit not found)
+
+- [x] Fix Dockerfile: drizzle-kit is a devDependency, not available after --prod install; copy drizzle-kit + its 4 deps (@drizzle-team/brocli, @esbuild-kit/esm-loader, esbuild, tsx) from builder stage into runner stage
+- [ ] Tag v0.1.2 and push
