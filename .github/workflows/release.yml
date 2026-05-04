@@ -1,0 +1,162 @@
+# =============================================================================
+# release.yml — Build and push Docker image to GitHub Container Registry (GHCR)
+# =============================================================================
+# Triggers:
+#   • Every push to main       → builds and tags as :latest + :<sha>
+#   • Version tags (v*)        → additionally tags as the semver version
+#   • Manual workflow_dispatch → same as push to main
+#
+# The image is published to:
+#   ghcr.io/pakgrou-porg/ttrpg-ocr-console:latest
+#   ghcr.io/pakgrou-porg/ttrpg-ocr-console:<git-sha>
+#   ghcr.io/pakgrou-porg/ttrpg-ocr-console:v1.2.3  (on version tags only)
+#
+# Required repository settings:
+#   • Settings → Actions → General → "Read and write permissions" for GITHUB_TOKEN
+#     (or add a repo secret GHCR_TOKEN with a PAT that has packages:write scope)
+#   • Settings → Packages → ensure the package is linked to this repository
+# =============================================================================
+
+name: Release — Build & Push Docker Image
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: pakgrou-porg/ttrpg-ocr-console
+  # Must match the packageManager field in package.json
+  PNPM_VERSION: "10.4.1"
+
+jobs:
+  # ── Job 1: Run tests before building the image ─────────────────────────────
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: testroot
+          MYSQL_DATABASE: ttrpg_test
+          MYSQL_USER: test_user
+          MYSQL_PASSWORD: testpass
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -u root -ptestroot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Enable corepack and install pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@${{ env.PNPM_VERSION }} --activate
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Push database schema
+        env:
+          DATABASE_URL: mysql://test_user:testpass@127.0.0.1:3306/ttrpg_test
+        run: pnpm db:push
+
+      - name: Run tests
+        env:
+          DATABASE_URL: mysql://test_user:testpass@127.0.0.1:3306/ttrpg_test
+          JWT_SECRET: test-jwt-secret-for-ci-only-not-production
+          NODE_ENV: test
+        run: pnpm test
+
+  # ── Job 2: Build and push the Docker image ─────────────────────────────────
+  build-and-push:
+    name: Build & Push
+    runs-on: ubuntu-latest
+    needs: test   # Only build if tests pass
+    permissions:
+      contents: read
+      packages: write   # Required to push to GHCR
+
+    steps:
+      # ── 1. Checkout source ────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Set up Docker Buildx ───────────────────────────────────────────
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ── 3. Log in to GHCR ────────────────────────────────────────────────
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 5. Extract metadata (tags + labels) ──────────────────────────────
+      # docker/metadata-action automatically generates:
+      #   :latest          on push to main
+      #   :<sha>           always (short 7-char SHA)
+      #   :v1.2.3          on version tags
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=,format=short
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+          labels: |
+            org.opencontainers.image.title=TTRPG OCR Console
+            org.opencontainers.image.description=Pipeline management console for TTRPG OCR processing
+            org.opencontainers.image.source=https://github.com/pakgrou-porg/ttrpg-ocr-console
+
+      # ── 6. Build and push ─────────────────────────────────────────────────
+      # DATABASE_URL is required by drizzle.config.ts at build time only for
+      # schema introspection. We pass a dummy value so the build succeeds;
+      # the real value is injected at container runtime via environment vars.
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # Both target machines (MSI Intel Core Ultra 9 / Framework Strix Halo)
+          # are amd64 (x86_64). No arm64 needed — this also eliminates QEMU
+          # emulation which was the root cause of the --frozen-lockfile failures.
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            DATABASE_URL=mysql://build:build@localhost:3306/build
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ── 7. Summary ────────────────────────────────────────────────────────
+      - name: Write job summary
+        run: |
+          echo "## Docker Image Published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Registry:** \`ghcr.io/pakgrou-porg/ttrpg-ocr-console\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Tags:**" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY

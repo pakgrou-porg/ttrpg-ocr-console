@@ -460,3 +460,46 @@
 - [x] Write deploy.sh: validates .env, pulls latest code, waits for MySQL health, runs pnpm db:push migrations, rebuilds console container
 - [x] deploy.sh supports --skip-pull, --skip-migrate, --down, --reset-db flags
 - [x] deploy.sh falls back to running migrations inside a temp container if pnpm is not on the host
+
+## Phase: GitHub Actions Release Workflow + Portainer Stack
+
+- [x] Add .github/workflows/release.yml — build and push Docker image to GHCR on push to main
+- [x] Add portainer-stack.yml — Portainer-ready stack file using ghcr.io pre-built image
+- [x] Update DOCKER_DEPLOY.md to document the new workflow and Portainer stack usage
+
+## Phase: Fix GitHub Actions Build Failure
+
+- [x] Fix Dockerfile: pnpm install --frozen-lockfile fails in multi-platform CI build — pinned pnpm@10.4.1 via corepack (was pnpm@10 which resolved to a newer incompatible version)
+- [x] Fix release.yml: added actions/setup-node@v4 with Node 22 in test job; added full test job with MySQL service before build; PNPM_VERSION env var pinned to 10.4.1
+- [x] Fix CI test failure: ramblings.generate called real Manus Forge API (BUILT_IN_FORGE_API_KEY not available in CI) — added vi.mock('./_core/llm') in features.test.ts to mock invokeLLM; test now runs in ~400ms instead of 5.7s
+- [x] Fix Dockerfile: corepack prepare pnpm@10.4.1 fails in QEMU-emulated arm64 multi-platform build — replaced with npm install -g pnpm@10.4.1 (deterministic, no network resolution)
+- [x] Fix Dockerfile: --frozen-lockfile fails in multi-platform build (lockfile generated on host, not arm64) — replaced with --no-frozen-lockfile; lockfile integrity validated by CI test job on host before Docker build runs
+- [x] Fix release.yml: drop arm64 from build matrix (both target machines are amd64: MSI Intel Core Ultra 9 + Framework Strix Halo) — eliminates QEMU emulation entirely; removed QEMU setup step; platforms: linux/amd64 only
+
+## Phase: CI Skip LLM Tests + v0.1.0 Tag
+
+- [x] Fix Dockerfile: ENOENT /app/patches/wouter@3.7.1.patch — pnpm-lock.yaml references patches/ directory but Dockerfile only copied package.json + pnpm-lock.yaml; added COPY patches ./patches in both builder and runner stages
+- [x] LLM-dependent tests already CI-safe: ramblings.generate uses vi.mock('./_core/llm') — no real API call; profile.prompts.test.ts uses 'voice_of_arkanum' as a string only
+- [x] Tag v0.1.0 and push to GitHub to trigger the release workflow (8c90120 → v0.1.0 tag pushed; both main push and tag push triggered release.yml)
+
+## Phase: GHCR PAT Docs + CI Workflow + Stack Pin
+
+- [x] Document GHCR PAT creation and Portainer registry setup in DOCKER_DEPLOY.md (new section: "Authenticating Portainer with GHCR")
+- [x] Add .github/workflows/ci.yml — lightweight pnpm test job for PRs (no Docker build); triggers on push to main and PRs targeting main
+- [x] Pin portainer-stack.yml IMAGE_TAG default to v0.1.0 (was :latest)
+- [x] Fix Dockerfile: COPY --from=builder /app/client/dist was wrong path — Vite outDir is dist/public/ (not client/dist/); removed the incorrect COPY line; dist/ COPY now covers both index.js and dist/public/
+- [x] Fix Dockerfile: add pnpm db:push to CMD entrypoint so migrations run automatically on first boot (was node dist/index.js only) — Vite outDir is dist/public/ (not client/dist/); removed the incorrect COPY line; dist/ COPY now covers both index.js and dist/public/
+
+## Phase: Fix Production Migration (drizzle-kit not found)
+
+- [x] Fix Dockerfile: drizzle-kit is a devDependency, not available after --prod install; copy drizzle-kit + its 4 deps (@drizzle-team/brocli, @esbuild-kit/esm-loader, esbuild, tsx) from builder stage into runner stage
+- [x] Tag v0.1.2 and push to GitHub; portainer-stack.yml IMAGE_TAG default updated to 0.1.2
+- [x] Fix Dockerfile v2: pnpm virtual store — @esbuild-kit and @drizzle-team are NOT at top-level node_modules/; copy .pnpm/ virtual store entries directly instead
+- [x] Tag v0.1.3 and push to GitHub; portainer-stack.yml IMAGE_TAG default updated to 0.1.3
+
+## Phase: Replace drizzle-kit with standalone migration runner
+
+- [x] Write migrate.mjs using drizzle-orm/mysql2 migrator (prod dep, no drizzle-kit needed)
+- [x] Verify migrate.mjs runs cleanly on dev DB (backfilled 5 missing hashes from pnpm db:push history)
+- [x] Rewrite Dockerfile: remove all .pnpm virtual store COPY lines, replace CMD with node migrate.mjs
+- [x] Push to GitHub, tag v0.1.4, update portainer-stack.yml IMAGE_TAG to 0.1.4

@@ -1,0 +1,66 @@
+name: CI
+
+# Runs on every push to main and on every pull request targeting main.
+# This job is intentionally lightweight: it installs dependencies, pushes the
+# DB schema, and runs the full Vitest suite. No Docker build is performed here
+# (that happens in release.yml on push to main).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  PNPM_VERSION: "10.4.1"
+  NODE_VERSION: "22"
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    services:
+      db:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root_password
+          MYSQL_DATABASE: ttrpg_ocr_test
+          MYSQL_USER: ocr_user
+          MYSQL_PASSWORD: ci_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -u root -pci_root_password"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      DATABASE_URL: mysql://ocr_user:ci_password@127.0.0.1:3306/ttrpg_ocr_test
+      JWT_SECRET: ci_jwt_secret_minimum_32_characters_long
+      CREDENTIAL_ENCRYPTION_KEY: ci_encryption_key_minimum_32_chars_long
+      OWNER_OPEN_ID: ci_owner_open_id
+      OWNER_NAME: CI Runner
+      NODE_ENV: test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install pnpm
+        run: npm install -g pnpm@${{ env.PNPM_VERSION }}
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Push database schema
+        run: pnpm db:push
+
+      - name: Run tests
+        run: pnpm test

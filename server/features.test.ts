@@ -2,6 +2,17 @@ import { describe, expect, it, vi } from "vitest";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
 
+// Mock the LLM helper so tests don't require a real API key.
+// The mock returns a minimal response that satisfies the ramblings.generate
+// procedure's shape: { choices: [{ message: { content } }], model, usage }.
+vi.mock("./_core/llm", () => ({
+  invokeLLM: vi.fn().mockResolvedValue({
+    choices: [{ message: { content: "The dragons breathe fire and wisdom." } }],
+    model: "mock-model",
+    usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 },
+  }),
+}));
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function makeCtx(role: "admin" | "user" = "user"): TrpcContext {

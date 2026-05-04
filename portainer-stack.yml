@@ -1,0 +1,148 @@
+# =============================================================================
+# portainer-stack.yml — TTRPG OCR Console (Portainer Stack)
+# =============================================================================
+# Deploy this file directly from the Portainer UI:
+#   Stacks → Add Stack → Upload → select this file
+#   Then fill in the environment variables in the "Environment variables" panel.
+#
+# This file uses the pre-built image from GitHub Container Registry (GHCR).
+# The image is automatically built and pushed on every push to main via
+# .github/workflows/release.yml.
+#
+# Image: ghcr.io/pakgrou-porg/ttrpg-ocr-console:latest
+#
+# To pull a specific version, change the image tag to a git SHA or semver:
+#   image: ghcr.io/pakgrou-porg/ttrpg-ocr-console:v1.2.3
+#
+# GHCR authentication:
+#   If the repository is private, Portainer needs a registry credential.
+#   Portainer → Registries → Add Registry → GitHub Container Registry
+#   Username: your GitHub username
+#   Password: a GitHub PAT with packages:read scope
+# =============================================================================
+
+version: "3.9"
+
+services:
+
+  # ── MySQL 8 database ───────────────────────────────────────────────────────
+  # Stores users, providers, inscriptions, connections, and pipeline metadata.
+  # Data is persisted in the named volume "ocr_db_data".
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-ttrpg_ocr}
+      MYSQL_USER: ${MYSQL_USER:-ocr_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    volumes:
+      - ocr_db_data:/var/lib/mysql
+    networks:
+      - ocr_net
+    healthcheck:
+      test:
+        - CMD
+        - mysqladmin
+        - ping
+        - -h
+        - localhost
+        - -u
+        - root
+        - -p${MYSQL_ROOT_PASSWORD}
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ── TTRPG OCR Console ─────────────────────────────────────────────────────
+  # Pre-built image from GHCR. No build step required on the host.
+  # Migrations run automatically at startup: CMD runs node migrate.mjs before node dist/index.js.
+  console:
+    image: ghcr.io/pakgrou-porg/ttrpg-ocr-console:${IMAGE_TAG:-0.1.4}
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-3000}:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - ocr_net
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+
+      # ── Database ────────────────────────────────────────────────────────
+      # Connects to the bundled MySQL container over the internal Docker network.
+      DATABASE_URL: mysql://${MYSQL_USER:-ocr_user}:${MYSQL_PASSWORD}@db:3306/${MYSQL_DATABASE:-ttrpg_ocr}
+
+      # ── Secrets ─────────────────────────────────────────────────────────
+      # Generate with: openssl rand -base64 32
+      JWT_SECRET: ${JWT_SECRET}
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:-}
+
+      # ── Manus OAuth ─────────────────────────────────────────────────────
+      VITE_APP_ID: ${VITE_APP_ID:-}
+      OAUTH_SERVER_URL: ${OAUTH_SERVER_URL:-https://api.manus.im}
+      VITE_OAUTH_PORTAL_URL: ${VITE_OAUTH_PORTAL_URL:-https://manus.im}
+      OWNER_OPEN_ID: ${OWNER_OPEN_ID:-}
+      OWNER_NAME: ${OWNER_NAME:-}
+
+      # ── Manus built-in AI APIs (leave blank for self-hosted) ────────────
+      BUILT_IN_FORGE_API_URL: ${BUILT_IN_FORGE_API_URL:-}
+      BUILT_IN_FORGE_API_KEY: ${BUILT_IN_FORGE_API_KEY:-}
+      VITE_FRONTEND_FORGE_API_URL: ${VITE_FRONTEND_FORGE_API_URL:-}
+      VITE_FRONTEND_FORGE_API_KEY: ${VITE_FRONTEND_FORGE_API_KEY:-}
+
+      # ── Branding ────────────────────────────────────────────────────────
+      VITE_APP_TITLE: ${VITE_APP_TITLE:-TTRPG OCR Console}
+      VITE_APP_LOGO: ${VITE_APP_LOGO:-}
+
+      # ── Analytics (optional) ────────────────────────────────────────────
+      VITE_ANALYTICS_ENDPOINT: ${VITE_ANALYTICS_ENDPOINT:-}
+      VITE_ANALYTICS_WEBSITE_ID: ${VITE_ANALYTICS_WEBSITE_ID:-}
+
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - -qO-
+        - http://localhost:3000/api/trpc/health
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  ocr_db_data:
+    driver: local
+
+networks:
+  ocr_net:
+    driver: bridge
+
+# =============================================================================
+# Environment variables to set in Portainer UI (Stacks → Environment variables):
+#
+# REQUIRED:
+#   MYSQL_ROOT_PASSWORD       Strong root password for MySQL
+#   MYSQL_PASSWORD            Password for the ocr_user MySQL account
+#   JWT_SECRET                openssl rand -base64 32
+#   CREDENTIAL_ENCRYPTION_KEY openssl rand -base64 32  (separate from JWT_SECRET)
+#   VITE_APP_ID               Manus application ID (from Manus project settings)
+#   OWNER_OPEN_ID             Your Manus user open-id (grants admin on first login)
+#   OWNER_NAME                Your display name
+#
+# OPTIONAL (defaults shown):
+#   MYSQL_DATABASE            ttrpg_ocr
+#   MYSQL_USER                ocr_user
+#   HOST_PORT                 3000
+#   IMAGE_TAG                 0.1.4   (pin to a SHA like "a1b2c3d" or semver tag for stability; defaults to 0.1.4)
+#   OAUTH_SERVER_URL          https://api.manus.im
+#   VITE_OAUTH_PORTAL_URL     https://manus.im
+#   VITE_APP_TITLE            TTRPG OCR Console
+#   BUILT_IN_FORGE_API_URL    (leave blank if not using Manus-hosted LLM APIs)
+#   BUILT_IN_FORGE_API_KEY    (leave blank if not using Manus-hosted LLM APIs)
+#   VITE_FRONTEND_FORGE_API_URL
+#   VITE_FRONTEND_FORGE_API_KEY
+# =============================================================================
