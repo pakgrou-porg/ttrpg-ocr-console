@@ -1,4 +1,4 @@
-import express, { type Express } from "express";
+import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import fs from "fs";
 import path from "path";
 import { ENV } from "./env";
@@ -22,12 +22,10 @@ export function serveStatic(app: Express) {
     );
   }
 
-  app.use(express.static(distPath));
-
   const indexPath = path.resolve(distPath, "index.html");
   const configScript = buildRuntimeConfigScript();
 
-  app.use("*", (_req, res) => {
+  function serveIndex(_req: Request, res: Response) {
     let html: string;
     try {
       html = fs.readFileSync(indexPath, "utf-8");
@@ -37,5 +35,8 @@ export function serveStatic(app: Express) {
     }
     html = html.replace("</head>", `${configScript}</head>`);
     res.status(200).set({ "Content-Type": "text/html" }).send(html);
-  });
+  }
+
+  app.use(express.static(distPath, { index: false }));
+  app.use("*", serveIndex);
 }
