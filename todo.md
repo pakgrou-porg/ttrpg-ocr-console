@@ -493,4 +493,4 @@
 ## Phase: Fix Production Migration (drizzle-kit not found)
 
 - [x] Fix Dockerfile: drizzle-kit is a devDependency, not available after --prod install; copy drizzle-kit + its 4 deps (@drizzle-team/brocli, @esbuild-kit/esm-loader, esbuild, tsx) from builder stage into runner stage
-- [ ] Tag v0.1.2 and push
+- [x] Tag v0.1.2 and push to GitHub; portainer-stack.yml IMAGE_TAG default updated to 0.1.2
