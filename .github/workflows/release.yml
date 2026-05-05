@@ -39,17 +39,16 @@ jobs:
     name: Run Tests
     runs-on: ubuntu-latest
     services:
-      mysql:
-        image: mysql:8.0
+      db:
+        image: postgres:15
         env:
-          MYSQL_ROOT_PASSWORD: testroot
-          MYSQL_DATABASE: ttrpg_test
-          MYSQL_USER: test_user
-          MYSQL_PASSWORD: testpass
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: ttrpg_test
         ports:
-          - 3306:3306
+          - 5432:5432
         options: >-
-          --health-cmd="mysqladmin ping -h localhost -u root -ptestroot"
+          --health-cmd="pg_isready -U test_user -d ttrpg_test"
           --health-interval=10s
           --health-timeout=5s
           --health-retries=5
@@ -71,14 +70,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Push database schema
+      - name: Apply database migrations
         env:
-          DATABASE_URL: mysql://test_user:testpass@127.0.0.1:3306/ttrpg_test
-        run: pnpm db:push
+          DATABASE_URL: postgresql://test_user:testpass@127.0.0.1:5432/ttrpg_test
+        run: node migrate.mjs
 
       - name: Run tests
         env:
-          DATABASE_URL: mysql://test_user:testpass@127.0.0.1:3306/ttrpg_test
+          DATABASE_URL: postgresql://test_user:testpass@127.0.0.1:5432/ttrpg_test
           JWT_SECRET: test-jwt-secret-for-ci-only-not-production
           NODE_ENV: test
         run: pnpm test
@@ -145,7 +144,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            DATABASE_URL=mysql://build:build@localhost:3306/build
+            DATABASE_URL=postgresql://build:build@localhost:5432/postgres
             VITE_APP_ID=${{ vars.VITE_APP_ID }}
             VITE_OAUTH_PORTAL_URL=${{ vars.VITE_OAUTH_PORTAL_URL }}
             VITE_ANALYTICS_ENDPOINT=${{ vars.VITE_ANALYTICS_ENDPOINT }}
