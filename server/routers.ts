@@ -18,7 +18,7 @@ import {
   pingDatabase,
   getAllLlmProviders, getLlmProviderById, createLlmProvider, updateLlmProvider, deleteLlmProvider,
   getAllStageInscriptions, getStageInscriptionByStage, upsertStageInscription, updateStageInscription, deleteStageInscription,
-  getAllDbConnections, getDbConnectionById, createDbConnection, updateDbConnection, deleteDbConnection, setActiveDbConnection,
+  getAllSupabaseInstances, getSupabaseInstanceById, createSupabaseInstance, updateSupabaseInstance, deleteSupabaseInstance, setActiveSupabaseInstance, testSupabaseInstanceConnection,
   getDocumentById, getAllDocuments, createDocument, updateDocument, deleteDocument, searchDocuments,
   getPagesByDocumentId, getPageById, getPageByPhash, createDocumentPage, updateDocumentPage,
   getOcrResultByPageId, getOcrResultById, createOcrResult, updateOcrResult,
@@ -26,7 +26,7 @@ import {
 } from "./db";
 import { encryptSecret, decryptSecret, storeSecretHint, renderMaskedSecret } from "./crypto";
 import { ENV } from "./_core/env";
-import { FEATURE_AREAS, PROVIDER_TYPES, PIPELINE_STAGES, DB_CONNECTION_TYPES, DOCUMENT_STATUSES, OCR_RESULT_STATUSES, HITL_PRIORITIES, HITL_STATUSES } from "../drizzle/schema";
+import { FEATURE_AREAS, PROVIDER_TYPES, PIPELINE_STAGES, SUPABASE_CONNECTION_TYPES, SUPABASE_ROLES, SUPABASE_SYNC_MODES, DOCUMENT_STATUSES, OCR_RESULT_STATUSES, HITL_PRIORITIES, HITL_STATUSES } from "../drizzle/schema";
 
 /** Admin-only guard — throws FORBIDDEN if the caller is not an admin. */
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -1040,211 +1040,234 @@ export const appRouter = router({
     }),
   }),
 
-  // ─── Database Connections (The Vault Nexus) ───────────────────────────────
+  // ─── Supabase Instance Registry (The Vault Nexus) ────────────────────────
   connections: router({
-    /** List all database connections (credentials masked) */
+    /** List all Supabase instances (credentials masked) */
     list: adminProcedure.query(async () => {
-      const connections = await getAllDbConnections();
-      return connections.map(c => ({
-        ...c,
-        encryptedUsername: undefined,
+      const instances = await getAllSupabaseInstances();
+      return instances.map(i => ({
+        ...i,
         encryptedPassword: undefined,
-        usernameIv: undefined,
-        usernameAuthTag: undefined,
         passwordIv: undefined,
         passwordAuthTag: undefined,
-        hasCredentials: !!c.encryptedUsername,
+        encryptedServiceKey: undefined,
+        serviceKeyIv: undefined,
+        serviceKeyAuthTag: undefined,
+        hasPassword: !!i.encryptedPassword,
+        hasServiceKey: !!i.encryptedServiceKey,
       }));
     }),
 
-    /** Get a single connection by ID (credentials masked) */
+    /** Get a single instance by ID (credentials masked) */
     get: adminProcedure
       .input(z.object({ id: z.number().int() }))
       .query(async ({ input }) => {
-        const conn = await getDbConnectionById(input.id);
-        if (!conn) throw new TRPCError({ code: "NOT_FOUND", message: "Connection not found." });
+        const instance = await getSupabaseInstanceById(input.id);
+        if (!instance) throw new TRPCError({ code: "NOT_FOUND", message: "Instance not found." });
         return {
-          ...conn,
-          encryptedUsername: undefined,
+          ...instance,
           encryptedPassword: undefined,
-          usernameIv: undefined,
-          usernameAuthTag: undefined,
           passwordIv: undefined,
           passwordAuthTag: undefined,
-          hasCredentials: !!conn.encryptedUsername,
+          encryptedServiceKey: undefined,
+          serviceKeyIv: undefined,
+          serviceKeyAuthTag: undefined,
+          hasPassword: !!instance.encryptedPassword,
+          hasServiceKey: !!instance.encryptedServiceKey,
         };
       }),
 
-    /** Create a new database connection */
+    /** Register a new Supabase instance */
     create: adminProcedure
       .input(z.object({
         name: z.string().max(128),
-        connectionType: z.enum(DB_CONNECTION_TYPES),
+        connectionType: z.enum(SUPABASE_CONNECTION_TYPES),
         host: z.string().max(256),
         port: z.number().int().min(1).max(65535).default(5432),
-        databaseName: z.string().max(128),
-        username: z.string().optional(),
+        databaseName: z.string().max(128).default("postgres"),
         password: z.string().optional(),
-        useSsl: z.boolean().default(true),
+        serviceKey: z.string().optional(),
+        anonKey: z.string().optional(),
+        supabaseUrl: z.string().max(512).optional(),
+        role: z.enum(SUPABASE_ROLES).default("primary"),
+        syncMode: z.enum(SUPABASE_SYNC_MODES).default("primary_only"),
+        useSsl: z.boolean().default(false),
         notes: z.string().optional(),
       }))
       .mutation(async ({ input }) => {
-        let encryptedUsername: string | undefined;
-        let usernameIv: string | undefined;
-        let usernameAuthTag: string | undefined;
         let encryptedPassword: string | undefined;
         let passwordIv: string | undefined;
         let passwordAuthTag: string | undefined;
+        let encryptedServiceKey: string | undefined;
+        let serviceKeyIv: string | undefined;
+        let serviceKeyAuthTag: string | undefined;
+        let serviceKeyPrefix: string | undefined;
+        let serviceKeySuffix: string | undefined;
+        let serviceKeyLength: number | undefined;
 
-        if (input.username) {
-          const enc = encryptSecret(input.username);
-          encryptedUsername = enc.ciphertext;
-          usernameIv = enc.iv;
-          usernameAuthTag = enc.authTag;
-        }
         if (input.password) {
           const enc = encryptSecret(input.password);
           encryptedPassword = enc.ciphertext;
           passwordIv = enc.iv;
           passwordAuthTag = enc.authTag;
         }
+        if (input.serviceKey) {
+          const enc = encryptSecret(input.serviceKey);
+          encryptedServiceKey = enc.ciphertext;
+          serviceKeyIv = enc.iv;
+          serviceKeyAuthTag = enc.authTag;
+          const { prefix, suffix, length } = storeSecretHint(input.serviceKey);
+          serviceKeyPrefix = prefix;
+          serviceKeySuffix = suffix;
+          serviceKeyLength = length;
+        }
 
-        const id = await createDbConnection({
+        const id = await createSupabaseInstance({
           name: input.name,
           connectionType: input.connectionType,
           host: input.host,
           port: input.port,
           databaseName: input.databaseName,
-          encryptedUsername,
-          usernameIv,
-          usernameAuthTag,
           encryptedPassword,
           passwordIv,
           passwordAuthTag,
+          encryptedServiceKey,
+          serviceKeyIv,
+          serviceKeyAuthTag,
+          serviceKeyPrefix,
+          serviceKeySuffix,
+          serviceKeyLength,
+          anonKey: input.anonKey,
+          supabaseUrl: input.supabaseUrl,
+          role: input.role,
+          syncMode: input.syncMode,
           useSsl: input.useSsl,
           notes: input.notes,
         });
         return { success: true, id };
       }),
 
-    /** Update an existing database connection */
+    /** Update an existing Supabase instance */
     update: adminProcedure
       .input(z.object({
         id: z.number().int(),
         name: z.string().max(128).optional(),
-        connectionType: z.enum(DB_CONNECTION_TYPES).optional(),
         host: z.string().max(256).optional(),
         port: z.number().int().min(1).max(65535).optional(),
         databaseName: z.string().max(128).optional(),
-        username: z.string().optional(),
         password: z.string().optional(),
-        clearCredentials: z.boolean().optional(),
+        clearPassword: z.boolean().optional(),
+        serviceKey: z.string().optional(),
+        clearServiceKey: z.boolean().optional(),
+        anonKey: z.string().optional(),
+        supabaseUrl: z.string().max(512).optional(),
+        role: z.enum(SUPABASE_ROLES).optional(),
+        syncMode: z.enum(SUPABASE_SYNC_MODES).optional(),
         useSsl: z.boolean().optional(),
         notes: z.string().optional(),
       }))
       .mutation(async ({ input }) => {
         const updates: Record<string, unknown> = {};
         if (input.name !== undefined) updates.name = input.name;
-        if (input.connectionType !== undefined) updates.connectionType = input.connectionType;
         if (input.host !== undefined) updates.host = input.host;
         if (input.port !== undefined) updates.port = input.port;
         if (input.databaseName !== undefined) updates.databaseName = input.databaseName;
+        if (input.anonKey !== undefined) updates.anonKey = input.anonKey;
+        if (input.supabaseUrl !== undefined) updates.supabaseUrl = input.supabaseUrl;
+        if (input.role !== undefined) updates.role = input.role;
+        if (input.syncMode !== undefined) updates.syncMode = input.syncMode;
         if (input.useSsl !== undefined) updates.useSsl = input.useSsl;
         if (input.notes !== undefined) updates.notes = input.notes;
 
-        if (input.clearCredentials) {
-          updates.encryptedUsername = null;
-          updates.usernameIv = null;
-          updates.usernameAuthTag = null;
+        if (input.clearPassword) {
           updates.encryptedPassword = null;
           updates.passwordIv = null;
           updates.passwordAuthTag = null;
-        } else {
-          if (input.username) {
-            const enc = encryptSecret(input.username);
-            updates.encryptedUsername = enc.ciphertext;
-            updates.usernameIv = enc.iv;
-            updates.usernameAuthTag = enc.authTag;
-          }
-          if (input.password) {
-            const enc = encryptSecret(input.password);
-            updates.encryptedPassword = enc.ciphertext;
-            updates.passwordIv = enc.iv;
-            updates.passwordAuthTag = enc.authTag;
-          }
+        } else if (input.password) {
+          const enc = encryptSecret(input.password);
+          updates.encryptedPassword = enc.ciphertext;
+          updates.passwordIv = enc.iv;
+          updates.passwordAuthTag = enc.authTag;
         }
 
-        await updateDbConnection(input.id, updates as any);
+        if (input.clearServiceKey) {
+          updates.encryptedServiceKey = null;
+          updates.serviceKeyIv = null;
+          updates.serviceKeyAuthTag = null;
+          updates.serviceKeyPrefix = null;
+          updates.serviceKeySuffix = null;
+          updates.serviceKeyLength = null;
+        } else if (input.serviceKey) {
+          const enc = encryptSecret(input.serviceKey);
+          updates.encryptedServiceKey = enc.ciphertext;
+          updates.serviceKeyIv = enc.iv;
+          updates.serviceKeyAuthTag = enc.authTag;
+          const { prefix, suffix, length } = storeSecretHint(input.serviceKey);
+          updates.serviceKeyPrefix = prefix;
+          updates.serviceKeySuffix = suffix;
+          updates.serviceKeyLength = length;
+        }
+
+        await updateSupabaseInstance(input.id, updates);
         return { success: true };
       }),
 
-    /** Delete a database connection */
+    /** Remove a Supabase instance */
     delete: adminProcedure
       .input(z.object({ id: z.number().int() }))
       .mutation(async ({ input }) => {
-        await deleteDbConnection(input.id);
+        await deleteSupabaseInstance(input.id);
         return { success: true };
       }),
 
-    /** Set a connection as the active one */
+    /** Set an instance as the active pipeline target */
     setActive: adminProcedure
       .input(z.object({ id: z.number().int() }))
       .mutation(async ({ input }) => {
-        await setActiveDbConnection(input.id);
+        await setActiveSupabaseInstance(input.id);
         return { success: true };
       }),
 
-    /** Test a database connection */
+    /** Test Postgres connectivity to an instance (full round-trip query) */
     test: adminProcedure
       .input(z.object({ id: z.number().int() }))
       .mutation(async ({ input }) => {
-        const conn = await getDbConnectionById(input.id);
-        if (!conn) throw new TRPCError({ code: "NOT_FOUND", message: "Connection not found." });
-
-        const start = Date.now();
-        try {
-          // Decrypt credentials
-          let username = "";
-          let password = "";
-          try {
-            if (conn.encryptedUsername && conn.usernameIv && conn.usernameAuthTag) {
-              username = decryptSecret({ ciphertext: conn.encryptedUsername, iv: conn.usernameIv, authTag: conn.usernameAuthTag });
-            }
-            if (conn.encryptedPassword && conn.passwordIv && conn.passwordAuthTag) {
-              password = decryptSecret({ ciphertext: conn.encryptedPassword, iv: conn.passwordIv, authTag: conn.passwordAuthTag });
-            }
-          } catch {
-            await updateDbConnection(input.id, { lastTestStatus: "failed", lastTestedAt: new Date() });
-            return { ok: false, latencyMs: Date.now() - start, error: "Failed to decrypt stored credentials." };
-          }
-
-          // TCP connectivity check — verify the host:port is reachable
-          const { createConnection } = await import("net");
-          await new Promise<void>((resolve, reject) => {
-            const socket = createConnection({ host: conn.host, port: conn.port, timeout: 5000 }, () => {
-              socket.destroy();
-              resolve();
-            });
-            socket.on("error", (err) => { socket.destroy(); reject(err); });
-            socket.on("timeout", () => { socket.destroy(); reject(new Error("Connection timed out")); });
-          });
-
-          const latencyMs = Date.now() - start;
-          await updateDbConnection(input.id, { lastTestStatus: "success", lastTestedAt: new Date() });
-          return { ok: true, latencyMs, message: `TCP connection to ${conn.host}:${conn.port} successful (${username ? "credentials stored" : "no credentials"})` };
-        } catch (error: any) {
-          await updateDbConnection(input.id, { lastTestStatus: "failed", lastTestedAt: new Date() });
-          return { ok: false, latencyMs: Date.now() - start, error: "Connection failed. Verify host, port, and network access." };
+        const result = await testSupabaseInstanceConnection(input.id);
+        if (!result.ok) {
+          const instance = await getSupabaseInstanceById(input.id);
+          if (!instance) throw new TRPCError({ code: "NOT_FOUND", message: "Instance not found." });
         }
+        return result;
       }),
 
-    /** Get available connection types */
-    types: adminProcedure.query(() => {
-      return DB_CONNECTION_TYPES.map(t => ({
+    /** Update bootstrap status for an instance */
+    setBootstrapStatus: adminProcedure
+      .input(z.object({
+        id: z.number().int(),
+        status: z.enum(["pending", "in_progress", "completed", "failed"]),
+      }))
+      .mutation(async ({ input }) => {
+        const updates: Record<string, unknown> = { bootstrapStatus: input.status };
+        if (input.status === "completed") updates.bootstrapCompletedAt = new Date();
+        await updateSupabaseInstance(input.id, updates);
+        return { success: true };
+      }),
+
+    /** Get available types, roles, and sync modes */
+    types: adminProcedure.query(() => ({
+      connectionTypes: SUPABASE_CONNECTION_TYPES.map(t => ({
         id: t,
-        label: t.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" "),
-      }));
-    }),
+        label: t === "supabase_local" ? "Supabase Local" : "Supabase Cloud",
+      })),
+      roles: SUPABASE_ROLES.map(r => ({
+        id: r,
+        label: r.charAt(0).toUpperCase() + r.slice(1),
+      })),
+      syncModes: SUPABASE_SYNC_MODES.map(m => ({
+        id: m,
+        label: { primary_only: "Primary Only", mirror: "Mirror (Both)", failover: "Failover" }[m] ?? m,
+      })),
+    })),
   }),
 
   // ─── Library (Documents & Pages — Enter the Arkanum) ─────────────────────

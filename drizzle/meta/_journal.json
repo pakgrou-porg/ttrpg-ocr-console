@@ -1,110 +1,12 @@
 {
   "version": "7",
-  "dialect": "mysql",
+  "dialect": "postgresql",
   "entries": [
     {
       "idx": 0,
-      "version": "5",
-      "when": 1777563466083,
-      "tag": "0000_strong_mockingbird",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "5",
-      "when": 1777563512844,
-      "tag": "0001_luxuriant_wolfsbane",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "5",
-      "when": 1777569389041,
-      "tag": "0002_lowly_sunfire",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "5",
-      "when": 1777587659845,
-      "tag": "0003_grey_amphibian",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "5",
-      "when": 1777588988575,
-      "tag": "0004_breezy_the_stranger",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "5",
-      "when": 1777590868000,
-      "tag": "0005_yummy_sentry",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "5",
-      "when": 1777723222472,
-      "tag": "0006_little_zzzax",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "5",
-      "when": 1777723449379,
-      "tag": "0007_cuddly_blazing_skull",
-      "breakpoints": true
-    },
-    {
-      "idx": 8,
-      "version": "5",
-      "when": 1777723525718,
-      "tag": "0008_complete_sunset_bain",
-      "breakpoints": true
-    },
-    {
-      "idx": 9,
-      "version": "5",
-      "when": 1777740804884,
-      "tag": "0009_black_bastion",
-      "breakpoints": true
-    },
-    {
-      "idx": 10,
-      "version": "5",
-      "when": 1777744385149,
-      "tag": "0010_clever_famine",
-      "breakpoints": true
-    },
-    {
-      "idx": 11,
-      "version": "5",
-      "when": 1777744651743,
-      "tag": "0011_misty_bromley",
-      "breakpoints": true
-    },
-    {
-      "idx": 12,
-      "version": "5",
-      "when": 1777748040985,
-      "tag": "0012_swift_the_phantom",
-      "breakpoints": true
-    },
-    {
-      "idx": 13,
-      "version": "5",
-      "when": 1777771145112,
-      "tag": "0013_married_magdalene",
-      "breakpoints": true
-    },
-    {
-      "idx": 14,
-      "version": "5",
-      "when": 1777774822674,
-      "tag": "0014_mute_mattie_franklin",
+      "version": "7",
+      "when": 1746489600000,
+      "tag": "0000_initial_postgres",
       "breakpoints": true
     }
   ]

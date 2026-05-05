@@ -1,1 +1,0 @@
-ALTER TABLE `llm_providers` MODIFY COLUMN `capabilities` json;

@@ -1,6 +1,6 @@
-import { and, asc, eq, gte } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/mysql2";
-import { desc, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, ne, or, sql } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
 import {
   InsertUser, users,
   userProfiles, InsertUserProfile,
@@ -17,17 +17,19 @@ import {
   pageProcessingAttempts, InsertPageProcessingAttempt,
   llmProviders, InsertLlmProvider,
   stageInscriptions, InsertStageInscription,
-  dbConnections, InsertDbConnection,
+  supabaseInstances, InsertSupabaseInstance,
   promptVersions, InsertPromptVersion,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
+let _client: ReturnType<typeof postgres> | null = null;
 let _db: ReturnType<typeof drizzle> | null = null;
 
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
-      _db = drizzle(process.env.DATABASE_URL);
+      _client = postgres(process.env.DATABASE_URL);
+      _db = drizzle(_client);
     } catch (error) {
       console.warn("[Database] Failed to connect:", error);
       _db = null;
@@ -45,15 +47,15 @@ export async function upsertUser(user: InsertUser): Promise<void> {
 
   try {
     const values: InsertUser = { openId: user.openId };
-    const updateSet: Record<string, unknown> = {};
+    const updateSet: Partial<InsertUser> = {};
     const textFields = ["name", "email", "loginMethod"] as const;
     type TextField = (typeof textFields)[number];
     const assignNullable = (field: TextField) => {
       const value = user[field];
       if (value === undefined) return;
       const normalized = value ?? null;
-      values[field] = normalized;
-      updateSet[field] = normalized;
+      values[field] = normalized as any;
+      updateSet[field] = normalized as any;
     };
     textFields.forEach(assignNullable);
     if (user.lastSignedIn !== undefined) { values.lastSignedIn = user.lastSignedIn; updateSet.lastSignedIn = user.lastSignedIn; }
@@ -61,7 +63,7 @@ export async function upsertUser(user: InsertUser): Promise<void> {
     else if (user.openId === ENV.ownerOpenId) { values.role = 'admin'; updateSet.role = 'admin'; }
     if (!values.lastSignedIn) values.lastSignedIn = new Date();
     if (Object.keys(updateSet).length === 0) updateSet.lastSignedIn = new Date();
-    await db.insert(users).values(values).onDuplicateKeyUpdate({ set: updateSet });
+    await db.insert(users).values(values).onConflictDoUpdate({ target: users.openId, set: updateSet as any });
   } catch (error) {
     console.error("[Database] Failed to upsert user:", error);
     throw error;
@@ -113,7 +115,7 @@ export async function upsertUserProfile(profile: InsertUserProfile) {
   if (profile.avatarUrl !== undefined) updateSet.avatarUrl = profile.avatarUrl;
   if (profile.savedEntries !== undefined) updateSet.savedEntries = profile.savedEntries;
   if (profile.savedGroups !== undefined) updateSet.savedGroups = profile.savedGroups;
-  await db.insert(userProfiles).values(profile).onDuplicateKeyUpdate({ set: updateSet });
+  await db.insert(userProfiles).values(profile).onConflictDoUpdate({ target: userProfiles.userId, set: updateSet as any });
 }
 
 // ─── User Permissions ─────────────────────────────────────────────────────────
@@ -127,7 +129,6 @@ export async function getUserPermissions(userId: number) {
 export async function setUserPermission(permission: InsertUserPermission) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  // Check if a record already exists for this user+featureArea
   const existing = await db.select()
     .from(userPermissions)
     .where(and(
@@ -218,12 +219,11 @@ export async function upsertSystemPrompt(prompt: InsertSystemPrompt, savedBy?: n
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  // Always auto-increment — ignore caller-supplied version to prevent conflicts
   const existing = await getSystemPromptByName(prompt.name);
   const versionToSave = existing ? (existing.version + 1) : 1;
 
-  // Upsert the canonical system_prompts row first (holds the authoritative version)
-  await db.insert(systemPrompts).values({ ...prompt, version: versionToSave }).onDuplicateKeyUpdate({
+  await db.insert(systemPrompts).values({ ...prompt, version: versionToSave }).onConflictDoUpdate({
+    target: systemPrompts.name,
     set: {
       promptText: prompt.promptText,
       description: prompt.description,
@@ -231,15 +231,17 @@ export async function upsertSystemPrompt(prompt: InsertSystemPrompt, savedBy?: n
     },
   });
 
-  // Write the new version to prompt_versions history (unique index prevents duplicates on race)
   await db.insert(promptVersions).values({
     promptName: prompt.name,
     promptText: prompt.promptText,
     version: versionToSave,
     savedBy: savedBy ?? null,
-  }).onDuplicateKeyUpdate({ set: { promptText: prompt.promptText } });
+  }).onConflictDoUpdate({
+    target: [promptVersions.promptName, promptVersions.version],
+    set: { promptText: prompt.promptText },
+  });
 
-  // Trim history to last 3 versions for this prompt
+  // Trim history to last 3 versions
   const history = await db
     .select({ id: promptVersions.id })
     .from(promptVersions)
@@ -270,7 +272,6 @@ export async function seedDefaultPrompts() {
   if (!db) return;
 
   const defaults: InsertSystemPrompt[] = [
-    // ── Phase 1: Ingestion & Layout ──────────────────────────────────────────
     {
       name: "document_intelligence",
       category: "pipeline",
@@ -321,14 +322,14 @@ Output JSON Schema:
     {
       name: "bbox_detection",
       category: "pipeline",
-      description: "Identifies visually distinct content elements, defines precise bounding boxes, and classifies semantic types. Handles both full-page and cropped mixed-content regions.",
+      description: "Identifies visually distinct content elements, defines precise bounding boxes, and classifies semantic types.",
       promptText: `Analyze the provided TTRPG image—whether a full page layout or a cropped mixed-content region. Identify visually distinct content elements, define their precise bounding boxes, and classify their semantic types.
 
 Domain Rules:
 1. Processing Path: Evaluate columns strictly left-to-right. Within each column, evaluate regions top-to-bottom. Assign sequential, 1-indexed "sequence" values following this exact path.
 2. Spatial Mapping: Bounding boxes must utilize pixel coordinates {x, y, w, h} relative to the top-left origin of the provided image.
-3. Granularity: If a single bounding region contains disparate content types (e.g., a text flow merging into an inline table), flag it with isMixedBoundary = true and immediately delineate the internal components within the sub_regions array.
-4. Format Constraints: Output must be raw JSON only. Strip all markdown formatting, code blocks, preambles, and explanations.
+3. Granularity: If a single bounding region contains disparate content types, flag it with isMixedBoundary = true and delineate internal components within the sub_regions array.
+4. Format Constraints: Output must be raw JSON only.
 
 Output JSON Schema:
 {
@@ -342,19 +343,12 @@ Output JSON Schema:
       "sequence": "integer",
       "regionType": "enum (text | table | illustration | map | graphic | advertisement | header | footer | page_number | sidebar | callout | unknown)",
       "bbox": { "x": "integer", "y": "integer", "w": "integer", "h": "integer" },
-      "contentTypeFlags": ["array of strings (e.g., 'stat_block', 'has_bold_terms')"],
+      "contentTypeFlags": ["array of strings"],
       "isMixedBoundary": "boolean",
-      "sub_regions": [
-        {
-          "sequence": "integer",
-          "regionType": "string",
-          "bbox": { "x": "integer", "y": "integer", "w": "integer", "h": "integer" },
-          "contentTypeFlags": ["array of strings"]
-        }
-      ]
+      "sub_regions": []
     }
   ],
-  "resolved": "boolean (true if complex boundaries successfully subdivided)",
+  "resolved": "boolean",
   "confidence": "integer (0-100)"
 }`,
       version: 1,
@@ -362,14 +356,14 @@ Output JSON Schema:
     {
       name: "content_type_classify",
       category: "pipeline",
-      description: "Resolves ambiguous or mixed-boundary regions from bbox_detection. Outputs refined sub-region splits with corrected content type classifications and pixel-accurate bounding boxes.",
+      description: "Resolves ambiguous or mixed-boundary regions from bbox_detection. Outputs refined sub-region splits with corrected content type classifications.",
       promptText: `Analyze the provided TTRPG image—whether a full page layout or a cropped mixed-content region. Identify visually distinct content elements, define their precise bounding boxes, and classify their semantic types.
 
 Domain Rules:
-1. Processing Path: Evaluate columns strictly left-to-right. Within each column, evaluate regions top-to-bottom. Assign sequential, 1-indexed "sequence" values following this exact path.
+1. Processing Path: Evaluate columns strictly left-to-right. Within each column, evaluate regions top-to-bottom.
 2. Spatial Mapping: Bounding boxes must utilize pixel coordinates {x, y, w, h} relative to the top-left origin of the provided image.
-3. Granularity: If a single bounding region contains disparate content types (e.g., a text flow merging into an inline table), flag it with isMixedBoundary = true and immediately delineate the internal components within the sub_regions array.
-4. Format Constraints: Output must be raw JSON only. Strip all markdown formatting, code blocks, preambles, and explanations.
+3. Granularity: Flag mixed-boundary regions with isMixedBoundary = true and delineate sub_regions.
+4. Format Constraints: Output must be raw JSON only.
 
 Output JSON Schema:
 {
@@ -383,36 +377,28 @@ Output JSON Schema:
       "sequence": "integer",
       "regionType": "enum (text | table | illustration | map | graphic | advertisement | header | footer | page_number | sidebar | callout | unknown)",
       "bbox": { "x": "integer", "y": "integer", "w": "integer", "h": "integer" },
-      "contentTypeFlags": ["array of strings (e.g., 'stat_block', 'has_bold_terms')"],
+      "contentTypeFlags": ["array of strings"],
       "isMixedBoundary": "boolean",
-      "sub_regions": [
-        {
-          "sequence": "integer",
-          "regionType": "string",
-          "bbox": { "x": "integer", "y": "integer", "w": "integer", "h": "integer" },
-          "contentTypeFlags": ["array of strings"]
-        }
-      ]
+      "sub_regions": []
     }
   ],
-  "resolved": "boolean (true if complex boundaries successfully subdivided)",
+  "resolved": "boolean",
   "confidence": "integer (0-100)"
 }`,
       version: 1,
     },
-    // ── Phase 2: OCR Extraction & Validation ─────────────────────────────────
     {
       name: "ocr_extraction",
       category: "pipeline",
-      description: "Extracts text and tabular data from TTRPG region images into structured JSON. Applies semantic hierarchy and game-specific formatting rules.",
+      description: "Extracts text and tabular data from TTRPG region images into structured JSON.",
       promptText: `Extract text and tabular data from the provided TTRPG region image into structured JSON. Apply semantic hierarchy and game-specific formatting.
 
 Domain Rules:
-1. Abbreviations are canonical. Do not expand or correct AC, HP, STR, DEX, CON, INT, WIS, CHA, CR, XP, DC, or dice notation (d4/d20/etc). Guide spelling corrections using the provided lexicon_terms.
+1. Abbreviations are canonical. Do not expand or correct AC, HP, STR, DEX, CON, INT, WIS, CHA, CR, XP, DC, or dice notation (d4/d20/etc).
 2. Preserve formatting semantics. Translate bold text to rules terms, italics to spells/titles.
 3. Obey reading order context provided in content_regions.
-4. Output must be raw JSON only. Do not include markdown formatting, code blocks, preamble, or explanation.
-5. If table structure is detected, map to tabular schema (stat_block or generic). Otherwise, map to text schema.
+4. Output must be raw JSON only.
+5. If table structure is detected, map to tabular schema. Otherwise, map to text schema.
 
 Output JSON Schema (Text):
 {
@@ -423,9 +409,9 @@ Output JSON Schema (Text):
       "block_type": "enum (heading | paragraph | stat_line | rule_term)",
       "level": "integer (optional, for headings)",
       "text": "string",
-      "term": "string (optional, for rule_term)",
-      "definition": "string (optional, for rule_term)",
-      "formatting": ["array of strings (e.g., bold, italic)"]
+      "term": "string (optional)",
+      "definition": "string (optional)",
+      "formatting": ["array of strings"]
     }
   ],
   "reading_order_verified": "boolean",
@@ -436,13 +422,13 @@ Output JSON Schema (Text):
     {
       name: "content_break_detect",
       category: "pipeline",
-      description: "Analyzes extracted text for a single page and a look-ahead buffer to identify hierarchical structural breaks and cross-page sentence continuity.",
+      description: "Analyzes extracted text for structural breaks and cross-page sentence continuity.",
       promptText: `Analyze the extracted text array for a single TTRPG page and the look-ahead buffer containing the tail end of the previous page. Identify hierarchical structural breaks and sentence continuity.
 
 Domain Rules:
 1. Determine if the first sentence continues a thought from the look-ahead buffer.
 2. Determine if the final sentence on the page is incomplete.
-3. Output must be raw JSON only. Do not include markdown formatting, code blocks, preamble, or explanation.
+3. Output must be raw JSON only.
 
 Output JSON Schema:
 {
@@ -467,13 +453,13 @@ Output JSON Schema:
     {
       name: "summarisation",
       category: "pipeline",
-      description: "Generates hierarchical summaries (short + long) for a complete TTRPG section, extracting key terms and entities for embedding metadata and RAG retrieval.",
+      description: "Generates hierarchical summaries for a complete TTRPG section, extracting key terms and entities for embedding metadata and RAG retrieval.",
       promptText: `Analyze the provided assembled text for a complete TTRPG section. Generate hierarchical summaries for embedding metadata and context retrieval.
 
 Domain Rules:
-1. Identify and extract canonical game terms (e.g., initiative, attack roll, conditions). Do not alter or expand TTRPG abbreviations.
+1. Identify and extract canonical game terms. Do not alter or expand TTRPG abbreviations.
 2. Write summaries strictly reflecting the mechanics and lore presented.
-3. Output must be raw JSON only. Do not include markdown formatting, code blocks, preamble, or explanation.
+3. Output must be raw JSON only.
 
 Output JSON Schema:
 {
@@ -491,14 +477,14 @@ Output JSON Schema:
     {
       name: "quality_validation",
       category: "pipeline",
-      description: "Scores OCR extraction quality on completeness, layout accuracy, context decisions, and text continuity. Drives the accept / escalate / HITL decision.",
+      description: "Scores OCR extraction quality on completeness, layout accuracy, context decisions, and text continuity.",
       promptText: `Assess the provided OCR extraction JSON against the source page image/layout_metadata. Score extraction quality strictly on predefined dimensions.
 
 Domain Rules:
 1. Heavily penalize failures in layout accuracy (merging sidebars, violating column order).
 2. Heavily penalize context failures (misidentifying stat blocks, stripping required formatting).
-3. If overall score is below 50, strictly recommend escalate_to_pass3 or flag_hitl based on pass_number.
-4. Output must be raw JSON only. Do not include markdown formatting, code blocks, preamble, or explanation.
+3. If overall score is below 50, strictly recommend escalate_to_pass3 or flag_hitl.
+4. Output must be raw JSON only.
 
 Output JSON Schema:
 {
@@ -511,13 +497,7 @@ Output JSON Schema:
     "context_decisions": "integer",
     "text_continuity": "integer"
   },
-  "issues": [
-    {
-      "severity": "enum (minor | major | critical)",
-      "dimension": "string",
-      "description": "string"
-    }
-  ],
+  "issues": [{ "severity": "enum (minor | major | critical)", "dimension": "string", "description": "string" }],
   "recommendation": "enum (accept | escalate_to_pass3 | flag_hitl)",
   "confidence": "integer (0-100)"
 }`,
@@ -526,27 +506,20 @@ Output JSON Schema:
     {
       name: "pass_comparison",
       category: "pipeline",
-      description: "Contrasts all available pass outputs (Pass 1–4) to select the best candidate or flag for HITL when passes are irreconcilably different.",
+      description: "Contrasts all available pass outputs (Pass 1–4) to select the best candidate or flag for HITL.",
       promptText: `Analyze multiple OCR extraction pass outputs for the same TTRPG page. Select the optimal extraction candidate or escalate irreconcilable differences.
 
 Domain Rules:
-1. Prioritize passes that maintain distinct layout boundaries (e.g., isolating sidebars) and preserve complex tabular structures (stat blocks).
+1. Prioritize passes that maintain distinct layout boundaries and preserve complex tabular structures.
 2. Explicitly log mechanical differences in behavior between passes.
-3. Output must be raw JSON only. Do not include markdown formatting, code blocks, preamble, or explanation.
+3. Output must be raw JSON only.
 
 Output JSON Schema:
 {
   "passes_compared": ["array of integers"],
   "recommended_pass": "integer",
   "winner_rationale": "string",
-  "differences": [
-    {
-      "region_sequence": "integer",
-      "dimension": "string",
-      "passX_behaviour": "string",
-      "passY_behaviour": "string"
-    }
-  ],
+  "differences": [{ "region_sequence": "integer", "dimension": "string", "passX_behaviour": "string", "passY_behaviour": "string" }],
   "hitl_required": "boolean",
   "confidence": "integer (0-100)"
 }`,
@@ -555,14 +528,14 @@ Output JSON Schema:
     {
       name: "tabular_extraction",
       category: "pipeline",
-      description: "Specialised extraction for complex TTRPG tabular data: multi-row stat blocks, spell lists, merged-cell equipment tables. Invoked when ocr_extraction produces low-confidence table output.",
+      description: "Specialised extraction for complex TTRPG tabular data: multi-row stat blocks, spell lists, merged-cell equipment tables.",
       promptText: `Perform specialized extraction on complex TTRPG tabular data (e.g., multi-row stat blocks, spell lists, merged-cell equipment tables).
 
 Domain Rules:
 1. Preserve row/column relationships precisely. Handle merged headers correctly.
 2. Retain all canonical abbreviations.
 3. Extract footnotes and associate them accurately.
-4. Output must be raw JSON only. Do not include markdown formatting, code blocks, preamble, or explanation.
+4. Output must be raw JSON only.
 
 Output JSON Schema:
 {
@@ -577,16 +550,15 @@ Output JSON Schema:
 }`,
       version: 1,
     },
-    // ── Console AI ───────────────────────────────────────────────────────────
     {
       name: "voice_of_arkanum",
       category: "console_experience",
-      description: "Generates thematic TTRPG lore aligned with the preferred game system, drawing structural context from the database schema summary.",
+      description: "Generates thematic TTRPG lore aligned with the preferred game system.",
       promptText: `Generate thematic TTRPG lore based on {{random_seed}}, aligned with {{preferred_game}} and drawing structural context from {{database_schema_summary}}.
 
 Domain Rules:
 1. Tone must be evocative, atmospheric, and highly specific to the mechanical/lore realities of the target game system.
-2. Output must be raw JSON only. Do not include markdown formatting, code blocks, preamble, or explanation.
+2. Output must be raw JSON only.
 
 Output JSON Schema:
 {
@@ -599,22 +571,19 @@ Output JSON Schema:
     {
       name: "arkanum_search",
       category: "console_experience",
-      description: "Translates natural language user queries into structured database search parameters for the TTRPG lore database.",
+      description: "Translates natural language user queries into structured database search parameters.",
       promptText: `Translate the following natural language user query: "{{user_query}}" into structured database search parameters for the TTRPG lore database.
 
 Domain Rules:
 1. Map recognized entities to exact terminology associated with {{preferred_game}}.
 2. Restrict filters to {{available_filters}}.
-3. Output must be raw JSON only. Do not include markdown formatting, code blocks, preamble, or explanation.
+3. Output must be raw JSON only.
 
 Output JSON Schema:
 {
   "search_intent": "string",
   "extracted_keywords": ["array of strings"],
-  "filters": {
-    "document_type": "string",
-    "entity_type": "string"
-  },
+  "filters": { "document_type": "string", "entity_type": "string" },
   "confidence": "integer (0-100)"
 }`,
       version: 1,
@@ -622,27 +591,20 @@ Output JSON Schema:
     {
       name: "referee",
       category: "console_experience",
-      description: "Authoritative rules referee that answers rules questions and resolves edge cases by citing source material from the lore database.",
+      description: "Authoritative rules referee that answers rules questions and resolves edge cases.",
       promptText: `You are The Referee — an authoritative, impartial rules arbiter for TTRPG systems. Your role is to answer specific rules questions, resolve edge cases, and cite the relevant source material from the lore database.
 
 Domain Rules:
 1. Always cite the specific rule source (book, page, section) when available in {{retrieved_context}}.
 2. If a rule is ambiguous or has known errata, state both interpretations clearly.
 3. Preserve all TTRPG abbreviations (AC, HP, DC, etc.) exactly as used in the source material.
-4. Output must be raw JSON only. Do not include markdown formatting, code blocks, preamble, or explanation.
+4. Output must be raw JSON only.
 
 Output JSON Schema:
 {
-  "ruling": "string (clear, direct answer to the rules question)",
-  "citations": [
-    {
-      "source": "string (book/document title)",
-      "section": "string",
-      "page": "string (if available)",
-      "excerpt": "string (relevant quoted text)"
-    }
-  ],
-  "ambiguity_notes": "string (optional — note if rule is contested or has errata)",
+  "ruling": "string",
+  "citations": [{ "source": "string", "section": "string", "page": "string", "excerpt": "string" }],
+  "ambiguity_notes": "string (optional)",
   "confidence": "integer (0-100)"
 }`,
       version: 1,
@@ -652,20 +614,18 @@ Output JSON Schema:
   for (const prompt of defaults) {
     const existing = await getSystemPromptByName(prompt.name);
     if (!existing) {
-      // Insert the canonical row
-      await db.insert(systemPrompts).values(prompt);
-      // Write the initial version history row (no savedBy — system seed)
+      await db.insert(systemPrompts).values(prompt).onConflictDoNothing();
       await db.insert(promptVersions).values({
         promptName: prompt.name,
         promptText: prompt.promptText,
         version: prompt.version ?? 1,
         savedBy: null,
-      });
+      }).onConflictDoNothing();
     }
   }
 }
 
-// ─── System Config ───────────────────────────────────────────────────────────
+// ─── System Config ────────────────────────────────────────────────────────────
 
 export async function getAllSystemConfig() {
   const db = await getDb();
@@ -689,7 +649,8 @@ export async function getSystemConfigByKey(key: string) {
 export async function upsertSystemConfig(config: InsertSystemConfig) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.insert(systemConfig).values(config).onDuplicateKeyUpdate({
+  await db.insert(systemConfig).values(config).onConflictDoUpdate({
+    target: systemConfig.key,
     set: { value: config.value, updatedBy: config.updatedBy },
   });
 }
@@ -700,7 +661,7 @@ export async function deleteSystemConfig(key: string) {
   await db.delete(systemConfig).where(eq(systemConfig.key, key));
 }
 
-// ─── Ingestion Jobs ──────────────────────────────────────────────────────────
+// ─── Ingestion Jobs ───────────────────────────────────────────────────────────
 
 export async function getAllIngestionJobs() {
   const db = await getDb();
@@ -712,12 +673,10 @@ export async function getActiveIngestionJobs() {
   const db = await getDb();
   if (!db) return [];
   return db.select().from(ingestionJobs)
-    .where(
-      and(
-        sql`${ingestionJobs.status} != 'completed'`,
-        sql`${ingestionJobs.status} != 'failed'`
-      )
-    )
+    .where(and(
+      ne(ingestionJobs.status, "completed"),
+      ne(ingestionJobs.status, "failed")
+    ))
     .orderBy(desc(ingestionJobs.createdAt));
 }
 
@@ -731,8 +690,8 @@ export async function getIngestionJobById(id: number) {
 export async function createIngestionJob(job: InsertIngestionJob) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(ingestionJobs).values(job);
-  return result[0].insertId;
+  const [row] = await db.insert(ingestionJobs).values(job).returning({ id: ingestionJobs.id });
+  return row.id;
 }
 
 export async function updateIngestionJobStatus(id: number, updates: Partial<InsertIngestionJob>) {
@@ -756,7 +715,7 @@ export async function getIngestionJobStats() {
   };
 }
 
-// ─── Telemetry Events ────────────────────────────────────────────────────────
+// ─── Telemetry Events ─────────────────────────────────────────────────────────
 
 export async function recordTelemetryEvent(event: InsertTelemetryEvent) {
   const db = await getDb();
@@ -809,7 +768,7 @@ export async function getTelemetrySummary() {
   };
 }
 
-// ─── Health Check (DB ping) ──────────────────────────────────────────────────
+// ─── Health Check ─────────────────────────────────────────────────────────────
 
 export async function pingDatabase(): Promise<{ ok: boolean; latencyMs: number }> {
   const start = Date.now();
@@ -823,9 +782,7 @@ export async function pingDatabase(): Promise<{ ok: boolean; latencyMs: number }
   }
 }
 
-// ─── LLM Providers ──────────────────────────────────────────────────────────
-
-
+// ─── LLM Providers ───────────────────────────────────────────────────────────
 
 export async function getAllLlmProviders() {
   const db = await getDb();
@@ -843,8 +800,8 @@ export async function getLlmProviderById(id: number) {
 export async function createLlmProvider(provider: InsertLlmProvider) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(llmProviders).values(provider);
-  return result[0].insertId;
+  const [row] = await db.insert(llmProviders).values(provider).returning({ id: llmProviders.id });
+  return row.id;
 }
 
 export async function updateLlmProvider(id: number, updates: Partial<InsertLlmProvider>) {
@@ -856,7 +813,6 @@ export async function updateLlmProvider(id: number, updates: Partial<InsertLlmPr
 export async function deleteLlmProvider(id: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  // Clear any inscriptions that reference this provider
   await db.update(stageInscriptions)
     .set({ primaryProviderId: null })
     .where(eq(stageInscriptions.primaryProviderId, id));
@@ -866,7 +822,7 @@ export async function deleteLlmProvider(id: number) {
   await db.delete(llmProviders).where(eq(llmProviders.id, id));
 }
 
-// ─── Stage Inscriptions ─────────────────────────────────────────────────────
+// ─── Stage Inscriptions ───────────────────────────────────────────────────────
 
 export async function getAllStageInscriptions() {
   const db = await getDb();
@@ -885,7 +841,6 @@ export async function getStageInscriptionByStage(stage: string) {
 export async function upsertStageInscription(inscription: InsertStageInscription) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  // Use INSERT ... ON DUPLICATE KEY UPDATE for upsert on unique stage column
   const existing = await getStageInscriptionByStage(inscription.stage);
   if (existing) {
     await db.update(stageInscriptions)
@@ -893,8 +848,8 @@ export async function upsertStageInscription(inscription: InsertStageInscription
       .where(eq(stageInscriptions.stage, inscription.stage));
     return existing.id;
   } else {
-    const result = await db.insert(stageInscriptions).values(inscription);
-    return result[0].insertId;
+    const [row] = await db.insert(stageInscriptions).values(inscription).returning({ id: stageInscriptions.id });
+    return row.id;
   }
 }
 
@@ -910,7 +865,6 @@ export async function deleteStageInscription(id: number) {
   await db.delete(stageInscriptions).where(eq(stageInscriptions.id, id));
 }
 
-// ─── Legacy aliases for backward compatibility ──────────────────────────────
 export const getAllModelAssignments = getAllStageInscriptions;
 export const getModelAssignmentsByStage = (stage: string) =>
   getStageInscriptionByStage(stage).then(r => r ? [r] : []);
@@ -918,50 +872,74 @@ export const createModelAssignment = upsertStageInscription;
 export const updateModelAssignment = updateStageInscription;
 export const deleteModelAssignment = deleteStageInscription;
 
-// ─── Database Connections ───────────────────────────────────────────────────
+// ─── Supabase Instances ───────────────────────────────────────────────────────
 
-export async function getAllDbConnections() {
+export async function getAllSupabaseInstances() {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(dbConnections).orderBy(dbConnections.name);
+  return db.select().from(supabaseInstances).orderBy(supabaseInstances.role, supabaseInstances.name);
 }
 
-export async function getDbConnectionById(id: number) {
+export async function getSupabaseInstanceById(id: number) {
   const db = await getDb();
   if (!db) return undefined;
-  const result = await db.select().from(dbConnections).where(eq(dbConnections.id, id)).limit(1);
+  const result = await db.select().from(supabaseInstances).where(eq(supabaseInstances.id, id)).limit(1);
   return result.length > 0 ? result[0] : undefined;
 }
 
-export async function createDbConnection(connection: InsertDbConnection) {
+export async function createSupabaseInstance(instance: InsertSupabaseInstance) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(dbConnections).values(connection);
-  return result[0].insertId;
+  const [row] = await db.insert(supabaseInstances).values(instance).returning({ id: supabaseInstances.id });
+  return row.id;
 }
 
-export async function updateDbConnection(id: number, updates: Partial<InsertDbConnection> & Record<string, unknown>) {
+export async function updateSupabaseInstance(id: number, updates: Partial<InsertSupabaseInstance> & Record<string, unknown>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(dbConnections).set(updates as Partial<InsertDbConnection>).where(eq(dbConnections.id, id));
+  await db.update(supabaseInstances).set(updates as Partial<InsertSupabaseInstance>).where(eq(supabaseInstances.id, id));
 }
 
-export async function deleteDbConnection(id: number) {
+export async function deleteSupabaseInstance(id: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.delete(dbConnections).where(eq(dbConnections.id, id));
+  await db.delete(supabaseInstances).where(eq(supabaseInstances.id, id));
 }
 
-export async function setActiveDbConnection(id: number) {
+export async function setActiveSupabaseInstance(id: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  // Deactivate all connections first
-  await db.update(dbConnections).set({ isActive: false }).where(sql`1=1`);
-  // Activate the selected one
-  await db.update(dbConnections).set({ isActive: true }).where(eq(dbConnections.id, id));
+  await db.update(supabaseInstances).set({ isActive: false }).where(sql`true`);
+  await db.update(supabaseInstances).set({ isActive: true }).where(eq(supabaseInstances.id, id));
 }
 
-// ─── Documents (Library Shelves) ────────────────────────────────────────────
+export async function testSupabaseInstanceConnection(id: number): Promise<{ ok: boolean; latencyMs: number; message?: string; error?: string }> {
+  const instance = await getSupabaseInstanceById(id);
+  if (!instance) return { ok: false, latencyMs: 0, error: "Instance not found." };
+
+  const { decryptSecret } = await import("./crypto");
+  const start = Date.now();
+  let testClient: ReturnType<typeof postgres> | null = null;
+  try {
+    let password = "postgres";
+    if (instance.encryptedPassword && instance.passwordIv && instance.passwordAuthTag) {
+      password = decryptSecret({ ciphertext: instance.encryptedPassword, iv: instance.passwordIv, authTag: instance.passwordAuthTag });
+    }
+    const url = `postgresql://postgres:${password}@${instance.host}:${instance.port}/${instance.databaseName}`;
+    testClient = postgres(url, { max: 1, connect_timeout: 5, ssl: instance.useSsl ? "require" : false });
+    await testClient`SELECT 1`;
+    const latencyMs = Date.now() - start;
+    await updateSupabaseInstance(id, { lastTestStatus: "success", lastTestedAt: new Date() });
+    return { ok: true, latencyMs, message: `Connected to ${instance.host}:${instance.port}/${instance.databaseName} (${latencyMs}ms)` };
+  } catch (err: any) {
+    await updateSupabaseInstance(id, { lastTestStatus: "failed", lastTestedAt: new Date() });
+    return { ok: false, latencyMs: Date.now() - start, error: err?.message ?? "Connection failed." };
+  } finally {
+    if (testClient) await testClient.end({ timeout: 2 }).catch(() => {});
+  }
+}
+
+// ─── Documents ────────────────────────────────────────────────────────────────
 
 export async function getAllDocuments() {
   const db = await getDb();
@@ -979,9 +957,8 @@ export async function getDocumentById(id: number) {
 export async function createDocument(doc: InsertDocument) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(documents).values(doc);
-  const insertId = result[0].insertId;
-  const [created] = await db.select().from(documents).where(eq(documents.id, insertId));
+  const [row] = await db.insert(documents).values(doc).returning({ id: documents.id });
+  const [created] = await db.select().from(documents).where(eq(documents.id, row.id));
   return created;
 }
 
@@ -994,8 +971,6 @@ export async function updateDocument(id: number, updates: Partial<InsertDocument
 export async function deleteDocument(id: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  // P1: Wrap cascade delete in a transaction to prevent partial deletion
-  // if a concurrent write reinserts related rows during deletion.
   await db.transaction(async (tx) => {
     const pages = await tx.select({ id: documentPages.id }).from(documentPages).where(eq(documentPages.documentId, id));
     const pageIds = pages.map(p => p.id);
@@ -1015,12 +990,16 @@ export async function searchDocuments(query: string) {
   if (!db) return [];
   const pattern = `%${query}%`;
   return db.select().from(documents)
-    .where(sql`${documents.title} LIKE ${pattern} OR ${documents.filename} LIKE ${pattern} OR ${documents.gameSystem} LIKE ${pattern}`)
+    .where(or(
+      ilike(documents.title, pattern),
+      ilike(documents.filename, pattern),
+      ilike(documents.gameSystem, pattern),
+    ))
     .orderBy(desc(documents.createdAt))
     .limit(50);
 }
 
-// ─── Document Pages ─────────────────────────────────────────────────────────
+// ─── Document Pages ───────────────────────────────────────────────────────────
 
 export async function getPagesByDocumentId(documentId: number) {
   const db = await getDb();
@@ -1047,10 +1026,9 @@ export async function getPageByPhash(phash: string) {
 export async function createDocumentPage(page: InsertDocumentPage) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(documentPages).values(page);
-  const newId = result[0].insertId;
-  const created = await db.select().from(documentPages).where(eq(documentPages.id, newId)).limit(1);
-  return created[0]!;
+  const [row] = await db.insert(documentPages).values(page).returning({ id: documentPages.id });
+  const [created] = await db.select().from(documentPages).where(eq(documentPages.id, row.id)).limit(1);
+  return created!;
 }
 
 export async function updateDocumentPage(id: number, updates: Partial<InsertDocumentPage>) {
@@ -1059,7 +1037,7 @@ export async function updateDocumentPage(id: number, updates: Partial<InsertDocu
   await db.update(documentPages).set(updates).where(eq(documentPages.id, id));
 }
 
-// ─── OCR Results ────────────────────────────────────────────────────────────
+// ─── OCR Results ──────────────────────────────────────────────────────────────
 
 export async function getOcrResultByPageId(pageId: number) {
   const db = await getDb();
@@ -1078,10 +1056,9 @@ export async function getOcrResultById(id: number) {
 export async function createOcrResult(ocrResult: InsertOcrResult & Record<string, unknown>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(ocrResults).values(ocrResult as InsertOcrResult);
-  const newId = result[0].insertId;
-  const created = await db.select().from(ocrResults).where(eq(ocrResults.id, newId)).limit(1);
-  return created[0]!;
+  const [row] = await db.insert(ocrResults).values(ocrResult as InsertOcrResult).returning({ id: ocrResults.id });
+  const [created] = await db.select().from(ocrResults).where(eq(ocrResults.id, row.id)).limit(1);
+  return created!;
 }
 
 export async function updateOcrResult(id: number, updates: Partial<InsertOcrResult> & Record<string, unknown>) {
@@ -1090,7 +1067,7 @@ export async function updateOcrResult(id: number, updates: Partial<InsertOcrResu
   await db.update(ocrResults).set(updates as Partial<InsertOcrResult>).where(eq(ocrResults.id, id));
 }
 
-// ─── HITL Queue ─────────────────────────────────────────────────────────────
+// ─── HITL Queue ───────────────────────────────────────────────────────────────
 
 const PRIORITY_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
 
@@ -1136,10 +1113,9 @@ export async function getHitlItemsByPageId(pageId: number) {
 export async function createHitlItem(item: InsertHitlQueueItem & Record<string, unknown>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(hitlQueue).values(item as InsertHitlQueueItem);
-  const newId = result[0].insertId;
-  const created = await db.select().from(hitlQueue).where(eq(hitlQueue.id, newId)).limit(1);
-  return created[0]!;
+  const [row] = await db.insert(hitlQueue).values(item as InsertHitlQueueItem).returning({ id: hitlQueue.id });
+  const [created] = await db.select().from(hitlQueue).where(eq(hitlQueue.id, row.id)).limit(1);
+  return created!;
 }
 
 export async function updateHitlItem(id: number, updates: Partial<InsertHitlQueueItem> & Record<string, unknown>) {
@@ -1148,7 +1124,25 @@ export async function updateHitlItem(id: number, updates: Partial<InsertHitlQueu
   await db.update(hitlQueue).set(updates as Partial<InsertHitlQueueItem>).where(eq(hitlQueue.id, id));
 }
 
-// ─── Page Processing Attempts ───────────────────────────────────────────────
+export async function getHitlStats() {
+  const db = await getDb();
+  if (!db) return { total: 0, queued: 0, inProgress: 0, resolved: 0, skipped: 0, escalated: 0, byCritical: 0, byHigh: 0, byMedium: 0, byLow: 0 };
+  const all = await db.select().from(hitlQueue);
+  return {
+    total: all.length,
+    queued: all.filter(i => i.status === "queued").length,
+    inProgress: all.filter(i => i.status === "in_progress").length,
+    resolved: all.filter(i => i.status === "resolved").length,
+    skipped: all.filter(i => i.status === "skipped").length,
+    escalated: all.filter(i => i.status === "escalated").length,
+    byCritical: all.filter(i => i.priority === "critical").length,
+    byHigh: all.filter(i => i.priority === "high").length,
+    byMedium: all.filter(i => i.priority === "medium").length,
+    byLow: all.filter(i => i.priority === "low").length,
+  };
+}
+
+// ─── Page Processing Attempts ─────────────────────────────────────────────────
 
 export async function getAttemptsForPage(pageId: number) {
   const db = await getDb();
@@ -1169,32 +1163,13 @@ export async function getAttemptsForOcrResult(ocrResultId: number) {
 export async function createPageProcessingAttempt(attempt: InsertPageProcessingAttempt) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(pageProcessingAttempts).values(attempt);
-  const newId = result[0].insertId;
-  const created = await db.select().from(pageProcessingAttempts).where(eq(pageProcessingAttempts.id, newId)).limit(1);
-  return created[0]!;
+  const [row] = await db.insert(pageProcessingAttempts).values(attempt).returning({ id: pageProcessingAttempts.id });
+  const [created] = await db.select().from(pageProcessingAttempts).where(eq(pageProcessingAttempts.id, row.id)).limit(1);
+  return created!;
 }
 
 export async function updatePageProcessingAttempt(id: number, updates: Partial<InsertPageProcessingAttempt>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.update(pageProcessingAttempts).set(updates).where(eq(pageProcessingAttempts.id, id));
-}
-
-export async function getHitlStats() {
-  const db = await getDb();
-  if (!db) return { total: 0, queued: 0, inProgress: 0, resolved: 0, skipped: 0, escalated: 0, byCritical: 0, byHigh: 0, byMedium: 0, byLow: 0 };
-  const all = await db.select().from(hitlQueue);
-  return {
-    total: all.length,
-    queued: all.filter(i => i.status === "queued").length,
-    inProgress: all.filter(i => i.status === "in_progress").length,
-    resolved: all.filter(i => i.status === "resolved").length,
-    skipped: all.filter(i => i.status === "skipped").length,
-    escalated: all.filter(i => i.status === "escalated").length,
-    byCritical: all.filter(i => i.priority === "critical").length,
-    byHigh: all.filter(i => i.priority === "high").length,
-    byMedium: all.filter(i => i.priority === "medium").length,
-    byLow: all.filter(i => i.priority === "low").length,
-  };
 }

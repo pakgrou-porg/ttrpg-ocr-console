@@ -1,5 +1,28 @@
 # ─── TTRPG OCR Console — Portainer Stack ─────────────────────────────────────
 #
+# This stack connects to an EXTERNAL Supabase stack rather than bundling its own
+# database. The Supabase stack must be running and reachable before deploying.
+#
+# ── Connecting to your Supabase stack ─────────────────────────────────────────
+#
+# Option A — Shared Docker network (recommended for Portainer):
+#   1. Add a named network to your Supabase docker-compose.yml:
+#        networks:
+#          supabase_net:
+#            name: supabase_net
+#            driver: bridge
+#      And attach every Supabase service to it:
+#        networks:
+#          - supabase_net
+#   2. Set DATABASE_URL below using the Supabase DB container name:
+#        DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@supabase-db:5432/postgres
+#
+# Option B — Host-exposed port (simpler, no network config needed):
+#   The supabase/postgres image exposes port 5432 on the host.
+#   From inside a Docker container, reach the host via host.docker.internal (Docker Desktop)
+#   or the host machine's IP (native Linux Docker).
+#        DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@host.docker.internal:5432/postgres
+#
 # Usage (Portainer):
 #   1. In Portainer → Stacks → Add Stack → "Repository" tab
 #   2. Set the Git URL to your fork of this repo
@@ -17,30 +40,6 @@ version: "3.9"
 
 services:
 
-  # ── MySQL / TiDB-compatible database ──────────────────────────────────────
-  # The console uses Drizzle ORM with a MySQL dialect.
-  # For local testing a plain MySQL 8 container is sufficient.
-  # Replace with your existing TiDB / PlanetScale / Aiven connection string
-  # by removing this service and setting DATABASE_URL directly.
-  db:
-    image: mysql:8.0
-    restart: unless-stopped
-    environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-changeme}
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-ttrpg_ocr}
-      MYSQL_USER: ${MYSQL_USER:-ocr_user}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-changeme}
-    volumes:
-      - db_data:/var/lib/mysql
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-changeme}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-    networks:
-      - ocr_net
-
   # ── TTRPG OCR Console (Node.js / Express + React) ─────────────────────────
   console:
     # Option A: Build from local source (default for development)
@@ -55,16 +54,22 @@ services:
     restart: unless-stopped
     ports:
       - "${HOST_PORT:-3000}:3000"
-    depends_on:
-      db:
-        condition: service_healthy
     environment:
       NODE_ENV: production
       PORT: 3000
 
-      # ── Required: Database ──────────────────────────────────────────────
-      # Format: mysql://USER:PASSWORD@HOST:PORT/DATABASE
-      DATABASE_URL: mysql://${MYSQL_USER:-ocr_user}:${MYSQL_PASSWORD:-changeme}@db:3306/${MYSQL_DATABASE:-ttrpg_ocr}
+      # ── Required: Supabase database connection ──────────────────────────
+      # Format: postgresql://USER:PASSWORD@HOST:PORT/DATABASE
+      # See network options at the top of this file.
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+
+      # ── Optional: Supabase REST API (Kong gateway) ──────────────────────
+      # Used for storage, realtime, and future edge function calls.
+      # Local:  http://supabase-kong:8000  (shared network) or http://localhost:8100 (host port)
+      # Cloud:  https://<project-ref>.supabase.co
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:-}
+      SUPABASE_SERVICE_KEY: ${SUPABASE_SERVICE_KEY:-}
 
       # ── Required: Session & Encryption secrets ──────────────────────────
       # Generate with: openssl rand -base64 32
@@ -79,7 +84,6 @@ services:
       OWNER_NAME: ${OWNER_NAME:-}
 
       # ── Optional: Manus built-in AI APIs ────────────────────────────────
-      # Leave blank if you are not using the built-in LLM / image generation
       BUILT_IN_FORGE_API_URL: ${BUILT_IN_FORGE_API_URL:-}
       BUILT_IN_FORGE_API_KEY: ${BUILT_IN_FORGE_API_KEY:-}
       VITE_FRONTEND_FORGE_API_URL: ${VITE_FRONTEND_FORGE_API_URL:-}
@@ -93,8 +97,6 @@ services:
       VITE_ANALYTICS_ENDPOINT: ${VITE_ANALYTICS_ENDPOINT:-}
       VITE_ANALYTICS_WEBSITE_ID: ${VITE_ANALYTICS_WEBSITE_ID:-}
 
-    networks:
-      - ocr_net
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/trpc/health"]
       interval: 30s
@@ -102,10 +104,13 @@ services:
       retries: 3
       start_period: 20s
 
-volumes:
-  db_data:
-    driver: local
+    # ── Network: uncomment and set name to match your Supabase network ────
+    # networks:
+    #   - supabase_net
 
-networks:
-  ocr_net:
-    driver: bridge
+# ── External network (Option A — shared Supabase network) ─────────────────
+# Uncomment if you added supabase_net to your Supabase docker-compose.yml
+# networks:
+#   supabase_net:
+#     external: true
+#     name: supabase_net
