@@ -26,7 +26,7 @@ COPY . .
 # DATABASE_URL is required by drizzle.config.ts at build time for schema
 # introspection. We pass a dummy value here; the real value is injected
 # at container runtime via environment variables.
-ARG DATABASE_URL=mysql://build:build@localhost:3306/build
+ARG DATABASE_URL=postgresql://build:build@localhost:5432/postgres
 ENV DATABASE_URL=${DATABASE_URL}
 
 # Vite statically replaces import.meta.env.VITE_* at build time.
