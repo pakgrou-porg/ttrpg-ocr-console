@@ -34,7 +34,7 @@ export function registerGoogleOAuthRoutes(app: Express) {
       client_id: ENV.googleClientId,
       redirect_uri: `${ENV.appUrl}/api/auth/google/callback`,
       response_type: "code",
-      scope: "https://www.googleapis.com/auth/drive.file",
+      scope: "https://www.googleapis.com/auth/drive.readonly",
       access_type: "offline",
       prompt: "consent", // always return refresh_token
       state,
