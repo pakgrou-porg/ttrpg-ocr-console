@@ -71,24 +71,20 @@ export function DriveFilePicker({ onFilesPicked, disabled, defaultFolderId = DEF
 
       const { google } = window;
 
-      // Folder-scoped view starting at DandD_Materials
-      const folderView = new google.picker.DocsView(google.picker.ViewId.FOLDERS)
-        .setParent(defaultFolderId)
-        .setSelectFolderEnabled(true);
-
-      // File view also scoped to the default folder, PDFs + images only
+      // Single DOCS view: shows both files and subfolders, allows navigation into them.
+      // Scoped to DandD_Materials by default. LIST mode sorts alphabetically.
       const fileView = new google.picker.DocsView(google.picker.ViewId.DOCS)
         .setParent(defaultFolderId)
-        .setMimeTypes("application/pdf,image/png,image/jpeg,image/webp,image/tiff")
+        .setIncludeFolders(true)
+        .setMimeTypes("application/pdf,image/png,image/jpeg,image/webp,image/tiff,application/vnd.google-apps.folder")
         .setMode(google.picker.DocsViewMode.LIST);
 
       const picker = new google.picker.PickerBuilder()
         .addView(fileView)
-        .addView(folderView)
         .setOAuthToken(tokenData.accessToken)
         .setDeveloperKey(apiKey)
         .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
-        .setTitle("Select files or folders (DandD_Materials)")
+        .setTitle("Select files (DandD_Materials)")
         .setCallback((data: any) => {
           if (data.action === google.picker.Action.PICKED && data.docs?.length) {
             const files: DriveFile[] = data.docs

@@ -1,5 +1,5 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Activity, Clock, CheckCircle2, AlertCircle, Pause, RotateCcw, Loader2, Gamepad2, Plus, Trash2, Pencil, Check, X } from "lucide-react";
+import { Activity, Clock, CheckCircle2, AlertCircle, Pause, RotateCcw, Loader2, Gamepad2, Plus, Trash2, Pencil, Check, X, ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
@@ -101,6 +101,17 @@ export default function OverseeScribes() {
     { refetchInterval: 10000 }
   );
 
+  const [expandedJobId, setExpandedJobId] = useState<number | null>(null);
+
+  const deleteMut = trpc.jobs.delete.useMutation({
+    onSuccess: () => { refetch(); toast.success("Job removed."); },
+    onError: (e) => toast.error(e.message),
+  });
+  const clearMut = trpc.jobs.clear.useMutation({
+    onSuccess: () => { refetch(); toast.success("Jobs cleared."); },
+    onError: (e) => toast.error(e.message),
+  });
+
   const statusColors: Record<string, { bg: string; text: string; dot?: boolean }> = {
     queued: { bg: "bg-muted/50", text: "text-muted-foreground" },
     processing: { bg: "bg-blue-500/10", text: "text-blue-500", dot: true },
@@ -109,10 +120,13 @@ export default function OverseeScribes() {
     binarization: { bg: "bg-yellow-500/10", text: "text-yellow-500", dot: true },
     completed: { bg: "bg-green-500/10", text: "text-green-500" },
     failed: { bg: "bg-red-500/10", text: "text-red-500" },
+    review: { bg: "bg-orange-500/10", text: "text-orange-500" },
     hitl_review: { bg: "bg-orange-500/10", text: "text-orange-500", dot: true },
   };
 
   const getStatusStyle = (status: string) => statusColors[status] || statusColors.queued;
+  const hasFailed = (jobs ?? []).some((j: any) => j.status === "failed");
+  const hasCompleted = (jobs ?? []).some((j: any) => j.status === "completed");
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -183,13 +197,22 @@ export default function OverseeScribes() {
       <Card className="bg-card/50 backdrop-blur-sm border-border/50">
         <CardHeader className="flex flex-row items-center justify-between">
           <div>
-            <CardTitle className="text-2xl">Active Transcription Queue</CardTitle>
+            <CardTitle className="text-2xl">Transcription Queue</CardTitle>
             <CardDescription>Current status of PDF processing batches.</CardDescription>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" className="gap-2">
-              <Pause className="w-4 h-4" /> Pause All
-            </Button>
+            {hasFailed && (
+              <Button variant="outline" size="sm" className="gap-2 text-red-400 border-red-500/30 hover:bg-red-500/10"
+                onClick={() => clearMut.mutate({ statuses: ["failed"] })} disabled={clearMut.isPending}>
+                <Trash2 className="w-4 h-4" /> Clear Failed
+              </Button>
+            )}
+            {hasCompleted && (
+              <Button variant="outline" size="sm" className="gap-2 text-muted-foreground"
+                onClick={() => clearMut.mutate({ statuses: ["completed"] })} disabled={clearMut.isPending}>
+                <Trash2 className="w-4 h-4" /> Clear Completed
+              </Button>
+            )}
             <Button variant="outline" size="sm" className="gap-2" onClick={() => refetch()}>
               <RotateCcw className="w-4 h-4" /> Refresh
             </Button>
@@ -215,7 +238,8 @@ export default function OverseeScribes() {
                     <th className="px-4 py-3">Source File</th>
                     <th className="px-4 py-3">Progress</th>
                     <th className="px-4 py-3">Status</th>
-                    <th className="px-4 py-3 rounded-tr-md">Started</th>
+                    <th className="px-4 py-3">Started</th>
+                    <th className="px-4 py-3 rounded-tr-md"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/50">
@@ -223,28 +247,51 @@ export default function OverseeScribes() {
                     const style = getStatusStyle(job.status);
                     const progress = job.totalPages > 0 ? Math.round((job.processedPages / job.totalPages) * 100) : 0;
                     const progressColor = job.status === "completed" ? "bg-green-500" : job.status === "failed" ? "bg-red-500" : "bg-blue-500";
+                    const isExpanded = expandedJobId === job.id;
                     return (
-                      <tr key={job.id} className="hover:bg-muted/20 transition-colors">
-                        <td className="px-4 py-3 font-mono">JOB-{job.id}</td>
-                        <td className="px-4 py-3 font-medium">{job.sourceFile}</td>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-2">
-                            <div className="w-full bg-muted rounded-full h-2 max-w-[100px]">
-                              <div className={`${progressColor} h-2 rounded-full`} style={{ width: `${progress}%` }}></div>
+                      <>
+                        <tr key={job.id} className="hover:bg-muted/20 transition-colors">
+                          <td className="px-4 py-3 font-mono">JOB-{job.id}</td>
+                          <td className="px-4 py-3 font-medium max-w-[200px] truncate" title={job.sourceFile}>{job.sourceFile}</td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-2">
+                              <div className="w-full bg-muted rounded-full h-2 max-w-[100px]">
+                                <div className={`${progressColor} h-2 rounded-full`} style={{ width: `${progress}%` }}></div>
+                              </div>
+                              <span className="text-xs font-mono">{progress}%</span>
                             </div>
-                            <span className="text-xs font-mono">{progress}%</span>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium ${style.bg} ${style.text} border border-current/20`}>
-                            {style.dot && <span className={`w-1.5 h-1.5 rounded-full bg-current animate-pulse`}></span>}
-                            {job.status.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-xs text-muted-foreground">
-                          {job.startedAt ? new Date(job.startedAt).toLocaleString() : "—"}
-                        </td>
-                      </tr>
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-1.5">
+                              <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium ${style.bg} ${style.text} border border-current/20`}>
+                                {style.dot && <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse"></span>}
+                                {job.status.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())}
+                              </span>
+                              {job.errorMessage && (
+                                <button onClick={() => setExpandedJobId(isExpanded ? null : job.id)} className="text-red-400 hover:text-red-300">
+                                  {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-xs text-muted-foreground">
+                            {job.startedAt ? new Date(job.startedAt).toLocaleString() : "—"}
+                          </td>
+                          <td className="px-4 py-3">
+                            <button onClick={() => deleteMut.mutate({ id: job.id })} disabled={deleteMut.isPending}
+                              className="text-muted-foreground hover:text-destructive transition-colors">
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </td>
+                        </tr>
+                        {isExpanded && job.errorMessage && (
+                          <tr key={`${job.id}-err`} className="bg-red-500/5">
+                            <td colSpan={6} className="px-4 py-2">
+                              <p className="text-xs font-mono text-red-400 whitespace-pre-wrap break-all">{job.errorMessage}</p>
+                            </td>
+                          </tr>
+                        )}
+                      </>
                     );
                   })}
                 </tbody>

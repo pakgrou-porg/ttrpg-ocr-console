@@ -716,6 +716,19 @@ export async function getIngestionJobStats() {
   };
 }
 
+export async function deleteIngestionJob(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(ingestionJobs).where(eq(ingestionJobs.id, id));
+}
+
+export async function clearIngestionJobsByStatus(statuses: string[]) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const { inArray } = await import("drizzle-orm");
+  await db.delete(ingestionJobs).where(inArray(ingestionJobs.status, statuses));
+}
+
 // ─── Telemetry Events ─────────────────────────────────────────────────────────
 
 export async function recordTelemetryEvent(event: InsertTelemetryEvent) {

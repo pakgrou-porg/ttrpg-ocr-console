@@ -13,7 +13,7 @@ import {
   getUserPermissions, setUserPermission, deleteUserPermission, getAllPermissionsForAllUsers,
   createInvitation, getAllInvitations, revokeInvitation,
   getAllSystemConfig, getSystemConfigByCategory, upsertSystemConfig, deleteSystemConfig,
-  getAllIngestionJobs, getActiveIngestionJobs, getIngestionJobById, createIngestionJob, updateIngestionJobStatus, getIngestionJobStats,
+  getAllIngestionJobs, getActiveIngestionJobs, getIngestionJobById, createIngestionJob, updateIngestionJobStatus, getIngestionJobStats, deleteIngestionJob, clearIngestionJobsByStatus,
   recordTelemetryEvent, getTelemetryEvents, getTelemetrySummary,
   pingDatabase,
   getAllLlmProviders, getLlmProviderById, createLlmProvider, updateLlmProvider, deleteLlmProvider,
@@ -286,6 +286,22 @@ export const appRouter = router({
         } as any);
         startJob(id);
         return { success: true, id };
+      }),
+
+    /** Delete a single job by ID */
+    delete: adminProcedure
+      .input(z.object({ id: z.number().int() }))
+      .mutation(async ({ input }) => {
+        await deleteIngestionJob(input.id);
+        return { success: true };
+      }),
+
+    /** Clear all jobs with the given statuses */
+    clear: adminProcedure
+      .input(z.object({ statuses: z.array(z.string()).min(1) }))
+      .mutation(async ({ input }) => {
+        await clearIngestionJobsByStatus(input.statuses);
+        return { success: true };
       }),
 
     /** Update job status (used by pipeline workers) */
