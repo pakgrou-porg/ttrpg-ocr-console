@@ -70,10 +70,10 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Push database schema
+      - name: Apply database migrations
         env:
           DATABASE_URL: postgresql://test_user:testpass@127.0.0.1:5432/ttrpg_test
-        run: pnpm db:push
+        run: node migrate.mjs
 
       - name: Run tests
         env:
