@@ -760,8 +760,11 @@ export const appRouter = router({
 
           // ── OpenAI (no standalone "openai" type — handled via openai_compatible) ──
           if (input.providerType === "openai_compatible") {
-            const base = (input.baseUrl ?? "https://api.openai.com").replace(/\/$/, "");
-            const res = await fetch(`${base}/v1/models`, { headers, signal: AbortSignal.timeout(15000) });
+            const host = (input.baseUrl ?? "https://api.openai.com").replace(/\/$/, "");
+            const portSuffix = input.port ? `:${input.port}` : "";
+            const prefix = (input.apiPrefix ?? "/v1").replace(/\/$/, "");
+            const base = `${host}${portSuffix}`;
+            const res = await fetch(`${base}${prefix}/models`, { headers, signal: AbortSignal.timeout(15000) });
             if (!res.ok) return { ok: false, error: `HTTP ${res.status}`, models: [] };
             const data = await res.json() as any;
             // OpenAI vision models: gpt-4o, gpt-4-turbo, gpt-4-vision, o4-mini, o3
