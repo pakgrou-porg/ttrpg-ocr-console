@@ -30,13 +30,17 @@ function HitlCard({ item, onResolved }: { item: any; onResolved: () => void }) {
   const [notes, setNotes] = useState("");
   const [correctedText, setCorrectedText] = useState("");
 
-  const resolve = trpc.hitl.resolve.useMutation({
-    onSuccess: () => { toast({ title: "Review submitted" }); onResolved(); },
-    onError: (e) => toast({ title: "Error", description: e.message, variant: "destructive" }),
-  });
+  const resolveMut = trpc.hitl.resolve.useMutation({ onSuccess: () => { toast({ title: "Approved" }); onResolved(); }, onError: (e) => toast({ title: "Error", description: e.message, variant: "destructive" }) });
+  const skipMut = trpc.hitl.skip.useMutation({ onSuccess: () => { toast({ title: "Skipped" }); onResolved(); }, onError: (e) => toast({ title: "Error", description: e.message, variant: "destructive" }) });
+  const escalateMut = trpc.hitl.escalate.useMutation({ onSuccess: () => { toast({ title: "Escalated" }); onResolved(); }, onError: (e) => toast({ title: "Error", description: e.message, variant: "destructive" }) });
+
+  const isPending = resolveMut.isPending || skipMut.isPending || escalateMut.isPending;
 
   const submit = (action: HitlAction) => {
-    resolve.mutate({ id: item.id, action, resolutionNotes: notes || undefined, correctedText: correctedText || undefined });
+    const opts = { resolutionNotes: notes || undefined };
+    if (action === "resolved") resolveMut.mutate({ id: item.id, ...opts, correctedText: correctedText || undefined });
+    else if (action === "skipped") skipMut.mutate({ id: item.id, ...opts });
+    else escalateMut.mutate({ id: item.id, ...opts });
   };
 
   const rawText = item.ocr?.rawText ?? item.ocr?.structuredData ? JSON.stringify(item.ocr?.structuredData, null, 2) : null;
@@ -110,16 +114,16 @@ function HitlCard({ item, onResolved }: { item: any; onResolved: () => void }) {
 
           <div className="flex gap-2 justify-end">
             <Button variant="outline" size="sm" className="gap-1.5 text-yellow-500 border-yellow-500/30 hover:bg-yellow-500/10"
-              onClick={() => submit("escalated")} disabled={resolve.isPending}>
+              onClick={() => submit("escalated")} disabled={isPending}>
               <ArrowUpCircle className="w-4 h-4" /> Escalate
             </Button>
             <Button variant="outline" size="sm" className="gap-1.5"
-              onClick={() => submit("skipped")} disabled={resolve.isPending}>
+              onClick={() => submit("skipped")} disabled={isPending}>
               <XCircle className="w-4 h-4" /> Skip
             </Button>
             <Button size="sm" className="gap-1.5 bg-green-600 hover:bg-green-700 text-white"
-              onClick={() => submit("resolved")} disabled={resolve.isPending}>
-              {resolve.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+              onClick={() => submit("resolved")} disabled={isPending}>
+              {resolveMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
               Approve
             </Button>
           </div>

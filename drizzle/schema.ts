@@ -552,6 +552,7 @@ export type HitlStatus = (typeof HITL_STATUSES)[number];
 export const HITL_FLAG_CATEGORIES = [
   "doc_type_unknown",
   "ocr_quality_failed",
+  "low_confidence",
   "layout_ambiguous",
   "content_type_conflict",
   "continuity_error",

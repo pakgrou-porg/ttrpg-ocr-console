@@ -1876,44 +1876,80 @@ export const appRouter = router({
 
   // ─── HITL Review Queue ────────────────────────────────────────────────────────
   hitl: router({
-    list: adminProcedure
+    flag: protectedProcedure
       .input(z.object({
-        status: z.enum(["queued", "in_progress", "resolved", "skipped", "escalated"]).optional(),
-        limit: z.number().int().min(1).max(200).default(50),
+        pageId: z.number().int(),
+        reason: z.string().max(1000),
+        flagCategory: z.string().max(64).optional(),
+        priority: z.enum(HITL_PRIORITIES).optional(),
       }))
-      .query(async ({ input }) => {
-        const items = await getAllHitlItems({ status: input.status ?? "queued", limit: input.limit, orderByPriority: true });
-        // Enrich with page and OCR data
-        const enriched = await Promise.all(items.map(async (item) => {
-          const page = await getPageById(item.pageId);
-          const ocr = page ? await getOcrResultByPageId(page.id) : null;
-          return { ...item, page: page ?? null, ocr: ocr ?? null };
-        }));
-        return enriched;
+      .mutation(async ({ input }) => {
+        const item = await createHitlItem({
+          pageId: input.pageId,
+          reason: input.reason,
+          flagCategory: input.flagCategory as any,
+          priority: input.priority ?? "medium",
+        });
+        return { success: true, id: item.id };
       }),
 
-    stats: adminProcedure.query(async () => {
+    list: protectedProcedure
+      .input(z.object({
+        status: z.enum(HITL_STATUSES).optional(),
+        priority: z.enum(HITL_PRIORITIES).optional(),
+        limit: z.number().int().min(1).max(200).default(50),
+      }).optional())
+      .query(async ({ input }) => {
+        return getAllHitlItems({
+          status: input?.status,
+          priority: input?.priority,
+          limit: input?.limit ?? 50,
+          orderByPriority: true,
+        });
+      }),
+
+    get: protectedProcedure
+      .input(z.object({ id: z.number().int() }))
+      .query(async ({ input }) => {
+        const item = await getHitlItemById(input.id);
+        if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "HITL item not found." });
+        const page = await getPageById(item.pageId);
+        const ocrResult = page ? await getOcrResultByPageId(page.id) : null;
+        const document = page ? await getDocumentById((page as any).documentId) : null;
+        return { item, page: page ?? null, ocrResult: ocrResult ?? null, document: document ?? null };
+      }),
+
+    stats: protectedProcedure.query(async () => {
       return getHitlStats();
     }),
 
-    resolve: adminProcedure
+    assign: protectedProcedure
       .input(z.object({
         id: z.number().int(),
-        action: z.enum(["resolved", "skipped", "escalated"]),
+        assignedTo: z.number().int(),
+      }))
+      .mutation(async ({ input }) => {
+        const item = await getHitlItemById(input.id);
+        if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "HITL item not found." });
+        await updateHitlItem(input.id, { assignedTo: input.assignedTo, status: "in_progress" });
+        return { success: true };
+      }),
+
+    resolve: protectedProcedure
+      .input(z.object({
+        id: z.number().int(),
         resolutionNotes: z.string().max(2000).optional(),
         correctedText: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
         const item = await getHitlItemById(input.id);
         if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "HITL item not found." });
-
         await updateHitlItem(input.id, {
-          status: input.action,
+          status: "resolved",
           resolutionNotes: input.resolutionNotes,
           resolvedBy: ctx.user.id,
           resolvedAt: new Date(),
         });
-
         if (input.correctedText && item.ocrResultId) {
           await updateOcrResult(item.ocrResultId, {
             correctedText: input.correctedText,
@@ -1922,7 +1958,40 @@ export const appRouter = router({
             status: "corrected",
           });
         }
+        return { success: true };
+      }),
 
+    skip: protectedProcedure
+      .input(z.object({
+        id: z.number().int(),
+        resolutionNotes: z.string().max(2000).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const item = await getHitlItemById(input.id);
+        if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "HITL item not found." });
+        await updateHitlItem(input.id, {
+          status: "skipped",
+          resolutionNotes: input.resolutionNotes,
+          resolvedBy: ctx.user.id,
+          resolvedAt: new Date(),
+        });
+        return { success: true };
+      }),
+
+    escalate: protectedProcedure
+      .input(z.object({
+        id: z.number().int(),
+        resolutionNotes: z.string().max(2000).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const item = await getHitlItemById(input.id);
+        if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "HITL item not found." });
+        await updateHitlItem(input.id, {
+          status: "escalated",
+          resolutionNotes: input.resolutionNotes,
+          resolvedBy: ctx.user.id,
+          resolvedAt: new Date(),
+        });
         return { success: true };
       }),
   }),
