@@ -25,6 +25,7 @@ import {
   getHitlItemById, getHitlItemsByPageId, getAllHitlItems, createHitlItem, updateHitlItem, getHitlStats,
 } from "./db";
 import { encryptSecret, decryptSecret, storeSecretHint, renderMaskedSecret } from "./crypto";
+import { startJob } from "./pipeline/runner";
 import { ENV } from "./_core/env";
 import { FEATURE_AREAS, PROVIDER_TYPES, PIPELINE_STAGES, SUPABASE_CONNECTION_TYPES, SUPABASE_ROLES, SUPABASE_SYNC_MODES, DOCUMENT_STATUSES, OCR_RESULT_STATUSES, HITL_PRIORITIES, HITL_STATUSES } from "../drizzle/schema";
 
@@ -265,7 +266,7 @@ export const appRouter = router({
       return getIngestionJobStats();
     }),
 
-    /** Create a new ingestion job */
+    /** Create a new ingestion job and start the pipeline */
     create: adminProcedure
       .input(z.object({
         sourceFile: z.string().max(512),
@@ -278,6 +279,7 @@ export const appRouter = router({
           gameSystem: input.gameSystem,
           totalPages: input.totalPages,
         });
+        startJob(id);
         return { success: true, id };
       }),
 

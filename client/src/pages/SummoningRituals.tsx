@@ -2,25 +2,62 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Database, Save, Plus, Trash2, UploadCloud } from "lucide-react";
+import { Database, Save, Plus, Trash2, UploadCloud, Loader2, CheckCircle2 } from "lucide-react";
 import { useState } from "react";
+import { trpc } from "@/lib/trpc";
+import { useToast } from "@/hooks/use-toast";
+
+const GAME_SYSTEMS = [
+  "Dungeons & Dragons 5e",
+  "Pathfinder 2e",
+  "Call of Cthulhu 7e",
+  "Custom / Other",
+];
 
 export default function SummoningRituals() {
+  const { toast } = useToast();
+
+  // ── Ingestion form ──────────────────────────────────────────────────────────
+  const [gameSystem, setGameSystem] = useState(GAME_SYSTEMS[0]);
+  const [sourceFile, setSourceFile] = useState("");
+  const [lastJobId, setLastJobId] = useState<number | null>(null);
+
+  const createJob = trpc.jobs.create.useMutation({
+    onSuccess(data) {
+      setLastJobId(data.id);
+      setSourceFile("");
+      toast({ title: "Ritual begun", description: `Job #${data.id} is now running.` });
+    },
+    onError(err) {
+      toast({ title: "Summoning failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const handleSubmit = () => {
+    const trimmed = sourceFile.trim();
+    if (!trimmed) {
+      toast({ title: "Path required", description: "Provide a local PDF or image path.", variant: "destructive" });
+      return;
+    }
+    createJob.mutate({ sourceFile: trimmed, gameSystem });
+  };
+
+  // ── Lexicon ─────────────────────────────────────────────────────────────────
   const [lexicon, setLexicon] = useState([
-    "Armor Class", "Hit Points", "Saving Throw", "Dexterity", "Constitution", "Intelligence", "Wisdom", "Charisma", "Initiative", "Proficiency Bonus"
+    "Armor Class", "Hit Points", "Saving Throw", "Dexterity", "Constitution",
+    "Intelligence", "Wisdom", "Charisma", "Initiative", "Proficiency Bonus",
   ]);
   const [newTerm, setNewTerm] = useState("");
 
   const addTerm = () => {
-    if (newTerm && !lexicon.includes(newTerm)) {
-      setLexicon([...lexicon, newTerm]);
+    const t = newTerm.trim();
+    if (t && !lexicon.includes(t)) {
+      setLexicon([...lexicon, t]);
       setNewTerm("");
     }
   };
 
-  const removeTerm = (term: string) => {
-    setLexicon(lexicon.filter(t => t !== term));
-  };
+  const removeTerm = (term: string) => setLexicon(lexicon.filter(t => t !== term));
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -42,33 +79,46 @@ export default function SummoningRituals() {
               <UploadCloud className="w-5 h-5 text-primary" />
               New Summoning Ritual
             </CardTitle>
-              <CardDescription>Configure a new PDF ingestion batch to summon knowledge.</CardDescription>
+            <CardDescription>Configure a new PDF ingestion batch to summon knowledge.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
             <div className="space-y-2">
               <Label htmlFor="game-system">Game System</Label>
-              <select id="game-system" className="w-full h-10 px-3 rounded-md border border-input bg-background/50 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
-                <option>Dungeons & Dragons 5e</option>
-                <option>Pathfinder 2e</option>
-                <option>Call of Cthulhu 7e</option>
-                <option>Custom / Other</option>
+              <select
+                id="game-system"
+                value={gameSystem}
+                onChange={e => setGameSystem(e.target.value)}
+                className="w-full h-10 px-3 rounded-md border border-input bg-background/50 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              >
+                {GAME_SYSTEMS.map(s => <option key={s}>{s}</option>)}
               </select>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="source-name">Source Material Name</Label>
-              <Input id="source-name" placeholder="e.g., 'Monster Manual v3'" className="bg-background/50" />
+              <Label htmlFor="pdf-path">Source File Path (PDF or image)</Label>
+              <Input
+                id="pdf-path"
+                value={sourceFile}
+                onChange={e => setSourceFile(e.target.value)}
+                placeholder="/app/input/monster-manual.pdf"
+                className="font-mono bg-background/50"
+              />
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="pdf-path">Local PDF Path</Label>
-              <Input id="pdf-path" placeholder="/home/ubuntu/ttrpg-ocr/input/..." className="font-mono bg-background/50" />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="page-range">Page Range (Optional)</Label>
-              <Input id="page-range" placeholder="e.g., '10-50, 75-100'" className="bg-background/50" />
-            </div>
-            <Button className="w-full gap-2 mt-4 bg-primary hover:bg-primary/90 text-primary-foreground">
-              <Plus className="w-4 h-4" />
-              Begin Summoning
+
+            {lastJobId && (
+              <div className="flex items-center gap-2 text-sm text-green-500">
+                <CheckCircle2 className="w-4 h-4" />
+                Job #{lastJobId} started — check the Chronicle for progress.
+              </div>
+            )}
+
+            <Button
+              className="w-full gap-2 mt-4 bg-primary hover:bg-primary/90 text-primary-foreground"
+              onClick={handleSubmit}
+              disabled={createJob.isPending}
+            >
+              {createJob.isPending
+                ? <><Loader2 className="w-4 h-4 animate-spin" /> Summoning…</>
+                : <><Plus className="w-4 h-4" /> Begin Summoning</>}
             </Button>
           </CardContent>
         </Card>
@@ -81,11 +131,11 @@ export default function SummoningRituals() {
           </CardHeader>
           <CardContent>
             <div className="flex gap-4 mb-6">
-              <Input 
-                placeholder="Add new term (e.g., 'Eldritch Blast')" 
+              <Input
+                placeholder="Add new term (e.g., 'Eldritch Blast')"
                 value={newTerm}
                 onChange={(e) => setNewTerm(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && addTerm()}
+                onKeyDown={(e) => e.key === "Enter" && addTerm()}
                 className="bg-background/50"
               />
               <Button onClick={addTerm} className="gap-2 whitespace-nowrap">
@@ -93,7 +143,7 @@ export default function SummoningRituals() {
                 Add Term
               </Button>
             </div>
-            
+
             <div className="flex flex-wrap gap-2 max-h-[300px] overflow-y-auto p-2 border border-border/50 rounded-md bg-muted/10">
               {lexicon.map((term) => (
                 <div key={term} className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-secondary text-secondary-foreground border border-border/50 text-sm">
