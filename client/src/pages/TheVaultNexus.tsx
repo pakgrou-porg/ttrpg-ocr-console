@@ -13,7 +13,7 @@ import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import {
   Database, Plus, Trash2, TestTube, Loader2, CheckCircle2, XCircle,
-  Shield, Plug, ChevronDown, ChevronUp, Clock, Info, RefreshCw,
+  Shield, Plug, ChevronDown, ChevronUp, Clock, Info, RefreshCw, Pencil,
 } from "lucide-react";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -75,8 +75,11 @@ const defaultForm = {
 
 export default function TheVaultNexus() {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [form, setForm] = useState(defaultForm);
+  const [editForm, setEditForm] = useState(defaultForm);
 
   const { data: instances, isLoading, refetch } = trpc.connections.list.useQuery();
   const { data: typesMeta } = trpc.connections.types.useQuery();
@@ -88,6 +91,11 @@ export default function TheVaultNexus() {
 
   const deleteMutation = trpc.connections.delete.useMutation({
     onSuccess: () => { toast.success("Instance removed."); refetch(); },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const updateMutation = trpc.connections.update.useMutation({
+    onSuccess: () => { toast.success("Instance updated."); refetch(); setIsEditOpen(false); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -130,6 +138,48 @@ export default function TheVaultNexus() {
 
   const f = (field: keyof typeof defaultForm, value: any) =>
     setForm(prev => ({ ...prev, [field]: value }));
+
+  const ef = (field: keyof typeof defaultForm, value: any) =>
+    setEditForm(prev => ({ ...prev, [field]: value }));
+
+  const openEdit = (inst: any) => {
+    setEditingId(inst.id);
+    setEditForm({
+      name: inst.name,
+      connectionType: inst.connectionType,
+      host: inst.host,
+      port: inst.port,
+      databaseName: inst.databaseName,
+      password: "",
+      serviceKey: "",
+      anonKey: inst.anonKey ?? "",
+      supabaseUrl: inst.supabaseUrl ?? "",
+      role: inst.role,
+      syncMode: inst.syncMode,
+      useSsl: inst.useSsl,
+      notes: inst.notes ?? "",
+    });
+    setIsEditOpen(true);
+  };
+
+  const handleUpdate = () => {
+    if (!editingId) return;
+    updateMutation.mutate({
+      id: editingId,
+      name: editForm.name,
+      host: editForm.host,
+      port: editForm.port,
+      databaseName: editForm.databaseName,
+      password: editForm.password || undefined,
+      serviceKey: editForm.serviceKey || undefined,
+      anonKey: editForm.anonKey || undefined,
+      supabaseUrl: editForm.supabaseUrl || undefined,
+      role: editForm.role as any,
+      syncMode: editForm.syncMode as any,
+      useSsl: editForm.useSsl,
+      notes: editForm.notes || undefined,
+    });
+  };
 
   return (
     <div className="space-y-6">
@@ -393,10 +443,21 @@ export default function TheVaultNexus() {
                         </Button>
                       )}
                       <Button
+                        variant="ghost" size="sm" className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
+                        onClick={() => openEdit(inst)}
+                        title="Edit instance"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
                         variant="ghost" size="sm" className="h-8 w-8 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
-                        onClick={() => { if (confirm("Remove this Supabase instance?")) deleteMutation.mutate({ id: inst.id }); }}
-                        disabled={inst.isActive}
-                        title={inst.isActive ? "Cannot remove the active instance" : "Remove instance"}
+                        onClick={() => {
+                          const msg = inst.isActive
+                            ? "This is the active instance. Removing it will leave no active pipeline target. Continue?"
+                            : "Remove this Supabase instance?";
+                          if (confirm(msg)) deleteMutation.mutate({ id: inst.id });
+                        }}
+                        title="Remove instance"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
@@ -502,6 +563,120 @@ export default function TheVaultNexus() {
           })}
         </div>
       )}
+
+      {/* ── Edit Dialog ─────────────────────────────────────────────────── */}
+      <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Edit Supabase Instance</DialogTitle>
+            <DialogDescription>
+              Leave password / service key blank to keep the existing stored value.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-1">
+            <div className="space-y-2">
+              <Label>Instance Name</Label>
+              <Input value={editForm.name} onChange={e => ef("name", e.target.value)} />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label>Type</Label>
+                <Select value={editForm.connectionType} onValueChange={v => ef("connectionType", v)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {typesMeta?.connectionTypes.map(t => (
+                      <SelectItem key={t.id} value={t.id}>{t.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Role</Label>
+                <Select value={editForm.role} onValueChange={v => ef("role", v)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {typesMeta?.roles.map(r => (
+                      <SelectItem key={r.id} value={r.id}>{r.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Sync Mode</Label>
+              <Select value={editForm.syncMode} onValueChange={v => ef("syncMode", v)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {typesMeta?.syncModes.map(m => (
+                    <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid grid-cols-3 gap-3">
+              <div className="col-span-2 space-y-2">
+                <Label>Host</Label>
+                <Input value={editForm.host} onChange={e => ef("host", e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label>Port</Label>
+                <Input type="number" value={editForm.port} onChange={e => ef("port", Number(e.target.value))} />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Database Name</Label>
+              <Input value={editForm.databaseName} onChange={e => ef("databaseName", e.target.value)} />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label>DB Password <span className="text-muted-foreground text-xs">(blank = keep existing)</span></Label>
+                <Input type="password" placeholder="••••••••" value={editForm.password} onChange={e => ef("password", e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label>Service Role Key <span className="text-muted-foreground text-xs">(blank = keep existing)</span></Label>
+                <Input type="password" placeholder="eyJ…" value={editForm.serviceKey} onChange={e => ef("serviceKey", e.target.value)} />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Anon Key</Label>
+              <Input placeholder="eyJ…" value={editForm.anonKey} onChange={e => ef("anonKey", e.target.value)} />
+            </div>
+
+            <div className="space-y-2">
+              <Label>Supabase REST URL</Label>
+              <Input placeholder="http://localhost:8100" value={editForm.supabaseUrl} onChange={e => ef("supabaseUrl", e.target.value)} />
+            </div>
+
+            <div className="flex items-center gap-3">
+              <Switch id="edit-ssl-toggle" checked={editForm.useSsl} onCheckedChange={v => ef("useSsl", v)} />
+              <Label htmlFor="edit-ssl-toggle">Require SSL / TLS</Label>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Notes <span className="text-muted-foreground text-xs">(optional)</span></Label>
+              <Textarea placeholder="Optional notes…" value={editForm.notes} onChange={e => ef("notes", e.target.value)} rows={2} />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsEditOpen(false)}>Cancel</Button>
+            <Button
+              onClick={handleUpdate}
+              disabled={!editForm.name || !editForm.host || !editForm.databaseName || updateMutation.isPending}
+            >
+              {updateMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+              Save Changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
