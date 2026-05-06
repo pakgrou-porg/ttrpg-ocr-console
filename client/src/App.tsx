@@ -21,6 +21,7 @@ import TheArtificers from "@/pages/TheArtificers";
 import TheAssignments from "@/pages/TheAssignments";
 import TheVaultNexus from "@/pages/TheVaultNexus";
 import ArchivistsDesk from "@/pages/ArchivistsDesk";
+import TrialsOfTruth from "@/pages/TrialsOfTruth";
 import NotFound from "@/pages/NotFound";
 
 function Router() {
@@ -72,6 +73,11 @@ function Router() {
           <PermissionGate featureArea="incantations_runes">
             <IncantationsRunes />
           </PermissionGate>
+        </Route>
+        <Route path="/inner-sanctum/trials-of-truth">
+          <AdminGate>
+            <TrialsOfTruth />
+          </AdminGate>
         </Route>
         <Route path="/inner-sanctum/the-artificers">
           <AdminGate>

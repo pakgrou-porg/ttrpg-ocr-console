@@ -272,13 +272,17 @@ export const appRouter = router({
         sourceFile: z.string().max(512),
         gameSystem: z.string().max(128).optional(),
         totalPages: z.number().int().min(0).default(0),
+        storageProvider: z.enum(["local", "google_drive"]).default("local"),
+        driveFileId: z.string().max(512).optional(),
       }))
       .mutation(async ({ input }) => {
         const id = await createIngestionJob({
           sourceFile: input.sourceFile,
           gameSystem: input.gameSystem,
           totalPages: input.totalPages,
-        });
+          storageProvider: input.storageProvider,
+          driveFileId: input.driveFileId,
+        } as any);
         startJob(id);
         return { success: true, id };
       }),
@@ -1842,6 +1846,84 @@ export const appRouter = router({
           flaggedCount: flaggedPages.filter(Boolean).length,
           percentComplete: pages.length > 0 ? Math.round((ocrCompleteCount / pages.length) * 100) : 0,
         };
+      }),
+  }),
+
+  // ─── Google Drive ─────────────────────────────────────────────────────────────
+  google: router({
+    status: protectedProcedure.query(async () => {
+      const { isGoogleConnected } = await import("./pipeline/drive");
+      const connected = await isGoogleConnected();
+      return { connected, clientId: ENV.googleClientId || null };
+    }),
+
+    getAccessToken: adminProcedure.query(async () => {
+      const { getGoogleAccessToken } = await import("./pipeline/drive");
+      try {
+        const accessToken = await getGoogleAccessToken();
+        return { accessToken };
+      } catch {
+        return { accessToken: null };
+      }
+    }),
+
+    disconnect: adminProcedure.mutation(async () => {
+      const { clearGoogleTokens } = await import("./pipeline/drive");
+      await clearGoogleTokens();
+      return { success: true };
+    }),
+  }),
+
+  // ─── HITL Review Queue ────────────────────────────────────────────────────────
+  hitl: router({
+    list: adminProcedure
+      .input(z.object({
+        status: z.enum(["queued", "in_progress", "resolved", "skipped", "escalated"]).optional(),
+        limit: z.number().int().min(1).max(200).default(50),
+      }))
+      .query(async ({ input }) => {
+        const items = await getAllHitlItems({ status: input.status ?? "queued", limit: input.limit, orderByPriority: true });
+        // Enrich with page and OCR data
+        const enriched = await Promise.all(items.map(async (item) => {
+          const page = await getPageById(item.pageId);
+          const ocr = page ? await getOcrResultByPageId(page.id) : null;
+          return { ...item, page: page ?? null, ocr: ocr ?? null };
+        }));
+        return enriched;
+      }),
+
+    stats: adminProcedure.query(async () => {
+      return getHitlStats();
+    }),
+
+    resolve: adminProcedure
+      .input(z.object({
+        id: z.number().int(),
+        action: z.enum(["resolved", "skipped", "escalated"]),
+        resolutionNotes: z.string().max(2000).optional(),
+        correctedText: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const item = await getHitlItemById(input.id);
+        if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "HITL item not found." });
+
+        await updateHitlItem(input.id, {
+          status: input.action,
+          resolutionNotes: input.resolutionNotes,
+          resolvedBy: ctx.user.id,
+          resolvedAt: new Date(),
+        });
+
+        if (input.correctedText && item.ocrResultId) {
+          await updateOcrResult(item.ocrResultId, {
+            correctedText: input.correctedText,
+            correctedBy: ctx.user.id,
+            correctedAt: new Date(),
+            status: "corrected",
+          });
+        }
+
+        return { success: true };
       }),
   }),
 });

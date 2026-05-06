@@ -131,6 +131,8 @@ export type InsertSystemConfig = typeof systemConfig.$inferInsert;
 export const ingestionJobs = pgTable("ingestion_jobs", {
   id: serial("id").primaryKey(),
   sourceFile: varchar("source_file", { length: 512 }).notNull(),
+  storageProvider: varchar("storage_provider", { length: 32 }).default("local").notNull(),
+  driveFileId: varchar("drive_file_id", { length: 512 }),
   gameSystem: varchar("game_system", { length: 128 }),
   status: varchar("status", { length: 32 }).default("queued").notNull(),
   currentPhase: integer("current_phase").default(1),
@@ -579,3 +581,25 @@ export const hitlQueue = pgTable("hitl_queue", {
 
 export type HitlQueueItem = typeof hitlQueue.$inferSelect;
 export type InsertHitlQueueItem = typeof hitlQueue.$inferInsert;
+
+// ─── Google OAuth Tokens ───────────────────────────────────────────────────────
+//
+// Stores a single system-wide Google OAuth token set (for the admin's personal
+// Google Drive account). Access token is encrypted at rest.
+
+export const googleOAuthTokens = pgTable("google_oauth_tokens", {
+  id: serial("id").primaryKey(),
+  encryptedAccessToken: text("encrypted_access_token"),
+  accessTokenIv: varchar("access_token_iv", { length: 64 }),
+  accessTokenAuthTag: varchar("access_token_auth_tag", { length: 64 }),
+  encryptedRefreshToken: text("encrypted_refresh_token"),
+  refreshTokenIv: varchar("refresh_token_iv", { length: 64 }),
+  refreshTokenAuthTag: varchar("refresh_token_auth_tag", { length: 64 }),
+  expiresAt: timestamp("expires_at"),
+  scope: text("scope"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export type GoogleOAuthToken = typeof googleOAuthTokens.$inferSelect;
+export type InsertGoogleOAuthToken = typeof googleOAuthTokens.$inferInsert;

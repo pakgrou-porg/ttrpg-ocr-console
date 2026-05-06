@@ -59,4 +59,10 @@ export const ENV = {
   supabaseUrl: optionalEnv("SUPABASE_URL"),
   supabaseAnonKey: optionalEnv("SUPABASE_ANON_KEY"),
   supabaseServiceKey: optionalEnv("SUPABASE_SERVICE_KEY"),
+  // Google Drive OAuth 2.0
+  googleClientId: optionalEnv("GOOGLE_CLIENT_ID"),
+  googleClientSecret: optionalEnv("GOOGLE_CLIENT_SECRET"),
+  googleApiKey: optionalEnv("GOOGLE_API_KEY"),
+  // Canonical public URL — must match the Google OAuth redirect URI
+  appUrl: optionalEnv("APP_URL", "http://localhost:3000"),
 };

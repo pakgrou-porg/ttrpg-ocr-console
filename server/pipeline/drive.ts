@@ -1,0 +1,160 @@
+import { createWriteStream } from "fs";
+import { unlink } from "fs/promises";
+import { pipeline } from "stream/promises";
+import { Readable } from "stream";
+import { ENV } from "../_core/env";
+import { encryptSecret, decryptSecret } from "../crypto";
+import { getDb } from "../db";
+import { googleOAuthTokens } from "../../drizzle/schema";
+import { desc, eq } from "drizzle-orm";
+
+// ── Token management ──────────────────────────────────────────────────────────
+
+interface TokenRow {
+  encryptedAccessToken: string | null;
+  accessTokenIv: string | null;
+  accessTokenAuthTag: string | null;
+  encryptedRefreshToken: string | null;
+  refreshTokenIv: string | null;
+  refreshTokenAuthTag: string | null;
+  expiresAt: Date | null;
+}
+
+async function refreshAccessToken(refreshToken: string): Promise<{ accessToken: string; expiresAt: Date }> {
+  const res = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: ENV.googleClientId,
+      client_secret: ENV.googleClientSecret,
+      refresh_token: refreshToken,
+      grant_type: "refresh_token",
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Google token refresh failed: ${res.status} ${text.slice(0, 200)}`);
+  }
+  const data = await res.json() as any;
+  const expiresAt = new Date(Date.now() + (data.expires_in ?? 3600) * 1000);
+  return { accessToken: data.access_token, expiresAt };
+}
+
+export async function getGoogleAccessToken(): Promise<string> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const rows = await db.select().from(googleOAuthTokens).orderBy(desc(googleOAuthTokens.id)).limit(1);
+  const row = rows[0] as TokenRow | undefined;
+  if (!row?.encryptedRefreshToken) throw new Error("Google Drive not connected. Authorize via Settings.");
+
+  const refreshToken = decryptSecret({
+    ciphertext: row.encryptedRefreshToken,
+    iv: row.refreshTokenIv ?? "",
+    authTag: row.refreshTokenAuthTag ?? "",
+  });
+
+  // Return cached access token if still valid (5-minute buffer)
+  const now = new Date(Date.now() + 5 * 60 * 1000);
+  if (row.encryptedAccessToken && row.expiresAt && row.expiresAt > now) {
+    return decryptSecret({
+      ciphertext: row.encryptedAccessToken,
+      iv: row.accessTokenIv ?? "",
+      authTag: row.accessTokenAuthTag ?? "",
+    });
+  }
+
+  // Refresh
+  const { accessToken, expiresAt } = await refreshAccessToken(refreshToken);
+  const enc = encryptSecret(accessToken);
+  await db.update(googleOAuthTokens)
+    .set({
+      encryptedAccessToken: enc.ciphertext,
+      accessTokenIv: enc.iv,
+      accessTokenAuthTag: enc.authTag,
+      expiresAt,
+    })
+    .where(eq(googleOAuthTokens.id, (rows[0] as any).id));
+
+  return accessToken;
+}
+
+export async function isGoogleConnected(): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const rows = await db.select({ id: googleOAuthTokens.id, r: googleOAuthTokens.encryptedRefreshToken })
+    .from(googleOAuthTokens).limit(1);
+  return rows.length > 0 && !!rows[0].r;
+}
+
+export async function storeGoogleTokens(opts: {
+  accessToken: string;
+  refreshToken: string;
+  expiresIn: number;
+  scope?: string;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const encAccess = encryptSecret(opts.accessToken);
+  const encRefresh = encryptSecret(opts.refreshToken);
+  const expiresAt = new Date(Date.now() + opts.expiresIn * 1000);
+
+  const existing = await db.select({ id: googleOAuthTokens.id }).from(googleOAuthTokens).limit(1);
+  const values = {
+    encryptedAccessToken: encAccess.ciphertext,
+    accessTokenIv: encAccess.iv,
+    accessTokenAuthTag: encAccess.authTag,
+    encryptedRefreshToken: encRefresh.ciphertext,
+    refreshTokenIv: encRefresh.iv,
+    refreshTokenAuthTag: encRefresh.authTag,
+    expiresAt,
+    scope: opts.scope ?? null,
+  };
+
+  if (existing.length > 0) {
+    await db.update(googleOAuthTokens).set(values).where(eq(googleOAuthTokens.id, existing[0].id));
+  } else {
+    await db.insert(googleOAuthTokens).values(values);
+  }
+}
+
+export async function clearGoogleTokens(): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(googleOAuthTokens);
+}
+
+// ── File operations ───────────────────────────────────────────────────────────
+
+export async function downloadDriveFile(fileId: string, destPath: string): Promise<string> {
+  const token = await getGoogleAccessToken();
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+    headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(300_000), // 5 min for large PDFs
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Drive download failed: ${res.status} ${text.slice(0, 200)}`);
+  }
+  await pipeline(Readable.fromWeb(res.body as any), createWriteStream(destPath));
+  return destPath;
+}
+
+export async function getDriveFileName(fileId: string): Promise<string> {
+  const token = await getGoogleAccessToken();
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=name`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`Drive metadata fetch failed: ${res.status}`);
+  const data = await res.json() as any;
+  return data.name ?? fileId;
+}
+
+export async function deleteLocalFile(filePath: string): Promise<void> {
+  try {
+    await unlink(filePath);
+  } catch {
+    // best-effort cleanup
+  }
+}

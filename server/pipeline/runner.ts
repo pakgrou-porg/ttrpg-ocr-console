@@ -6,13 +6,15 @@ import {
   getIngestionJobById, updateIngestionJobStatus,
   createDocument, updateDocument,
   createDocumentPage, updateDocumentPage,
-  createOcrResult,
+  createOcrResult, createHitlItem,
 } from "../db";
 import { invokeStage, parseJsonResponse, UserContentPart } from "./invoke";
+import { downloadDriveFile, getDriveFileName, deleteLocalFile } from "./drive";
 
 const execFileAsync = promisify(execFile);
 
 const WORKSPACE = process.env.PIPELINE_WORKSPACE ?? "/app/workspace";
+const MAX_PAGES = 10; // HITL stabilization limit — process at most 10 pages per job
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
@@ -56,8 +58,22 @@ async function _runJob(jobId: number): Promise<void> {
   const pagesDir = join(jobWorkspace, "pages");
   await mkdir(pagesDir, { recursive: true });
 
+  // ── Resolve source file (local path or Drive download) ──────────────────────
+  let sourceFile = job.sourceFile;
+  let tempDownloadPath: string | null = null;
+
+  if ((job as any).storageProvider === "google_drive" && (job as any).driveFileId) {
+    await updateIngestionJobStatus(jobId, { currentStage: "downloading_source" });
+    const driveFileId = (job as any).driveFileId as string;
+    const fileName = await getDriveFileName(driveFileId);
+    tempDownloadPath = join(jobWorkspace, fileName);
+    await downloadDriveFile(driveFileId, tempDownloadPath);
+    sourceFile = tempDownloadPath;
+    console.log(`[Pipeline] Job ${jobId}: downloaded "${fileName}" from Google Drive`);
+  }
+
   const documentId = await createDocument({
-    filename: job.sourceFile,
+    filename: basename(sourceFile),
     gameSystem: job.gameSystem ?? undefined,
     status: "phase1_non_ocr",
     ingestionJobId: jobId,
@@ -66,11 +82,21 @@ async function _runJob(jobId: number): Promise<void> {
   // ── Stage: pdf_to_png ─────────────────────────────────────────────────────
   await updateIngestionJobStatus(jobId, { currentStage: "pdf_to_png" });
 
-  const pageFiles = await convertToPages(job.sourceFile, pagesDir);
+  let pageFiles = await convertToPages(sourceFile, pagesDir);
   if (pageFiles.length === 0) throw new Error("No pages produced from source file");
 
+  // Delete the Drive temp download now that pages are extracted
+  if (tempDownloadPath) await deleteLocalFile(tempDownloadPath);
+
+  // Cap at MAX_PAGES for HITL stabilization period
+  const wasCapped = pageFiles.length > MAX_PAGES;
+  if (wasCapped) {
+    console.log(`[Pipeline] Job ${jobId}: capping at ${MAX_PAGES} of ${pageFiles.length} pages (HITL mode)`);
+    pageFiles = pageFiles.slice(0, MAX_PAGES);
+  }
+
   await updateIngestionJobStatus(jobId, { totalPages: pageFiles.length });
-  console.log(`[Pipeline] Job ${jobId}: ${pageFiles.length} pages`);
+  console.log(`[Pipeline] Job ${jobId}: ${pageFiles.length} pages to process`);
 
   // Create documentPage records for all pages upfront
   const pageIds: number[] = [];
@@ -89,12 +115,10 @@ async function _runJob(jobId: number): Promise<void> {
     currentStage: "document_intelligence",
   });
 
-  const sampleFiles = pageFiles.slice(0, Math.min(10, pageFiles.length));
+  const sampleFiles = pageFiles.slice(0, Math.min(5, pageFiles.length));
   try {
     const sampleContent: UserContentPart[] = [];
-    for (const f of sampleFiles) {
-      sampleContent.push(await imageContent(f));
-    }
+    for (const f of sampleFiles) sampleContent.push(await imageContent(f));
     sampleContent.push({ type: "text", text: "Analyze these document pages and extract the metadata." });
 
     const result = await invokeStage("document_intelligence", sampleContent);
@@ -106,11 +130,10 @@ async function _runJob(jobId: number): Promise<void> {
       documentType: (meta.document_type as string) || undefined,
       documentSummary: (meta.document_summary as string) || undefined,
     });
-
-    console.log(`[Pipeline] Job ${jobId}: document_intelligence complete — "${meta.canonical_title}"`);
+    console.log(`[Pipeline] Job ${jobId}: document_intelligence — "${meta.canonical_title}"`);
   } catch (err: any) {
     console.warn(`[Pipeline] Job ${jobId}: document_intelligence failed (continuing): ${err.message}`);
-    await updateDocument(documentId, { title: basename(job.sourceFile) });
+    await updateDocument(documentId, { title: basename(sourceFile) });
   }
 
   // ── Per-page stages ───────────────────────────────────────────────────────
@@ -122,10 +145,7 @@ async function _runJob(jobId: number): Promise<void> {
     const pageId = pageIds[i];
     const pagePath = pageFiles[i];
 
-    await updateIngestionJobStatus(jobId, {
-      currentStage: "layout_analysis",
-      processedPages,
-    });
+    await updateIngestionJobStatus(jobId, { currentStage: "layout_analysis", processedPages });
 
     const imgPart = await imageContent(pagePath);
     const pageContent: UserContentPart[] = [imgPart, { type: "text", text: "Analyze this page." }];
@@ -134,9 +154,7 @@ async function _runJob(jobId: number): Promise<void> {
     try {
       const r = await invokeStage("layout_analysis", pageContent);
       const data = parseJsonResponse(r.content);
-      await updateDocumentPage(pageId, {
-        layoutType: (data.layout_type as string) || undefined,
-      });
+      await updateDocumentPage(pageId, { layoutType: (data.layout_type as string) || undefined });
     } catch (err: any) {
       console.warn(`[Pipeline] Job ${jobId} p${pageNum} layout_analysis: ${err.message}`);
     }
@@ -155,6 +173,7 @@ async function _runJob(jobId: number): Promise<void> {
 
     // ocr_extraction
     let ocrConfidence = 0;
+    let ocrResultId: number | null = null;
     try {
       await updateIngestionJobStatus(jobId, { currentStage: "ocr_extraction" });
       const regionContext = regions.length > 0
@@ -164,7 +183,7 @@ async function _runJob(jobId: number): Promise<void> {
       const data = parseJsonResponse(r.content);
       ocrConfidence = typeof data.confidence === "number" ? data.confidence : 0;
 
-      await createOcrResult({
+      const ocrResult = await createOcrResult({
         pageId,
         structuredData: data,
         rawText: JSON.stringify(data.content_blocks ?? data),
@@ -173,24 +192,33 @@ async function _runJob(jobId: number): Promise<void> {
         pass1Model: r.model,
         auditLog: [{ timestamp: new Date().toISOString(), action: "pass1", model: r.model }],
       });
+      ocrResultId = ocrResult.id;
 
       await updateDocumentPage(pageId, { ocrCompleted: true, ocrConfidence });
     } catch (err: any) {
       console.warn(`[Pipeline] Job ${jobId} p${pageNum} ocr_extraction: ${err.message}`);
-      await createOcrResult({ pageId, status: "failed", confidence: 0 });
+      const ocrResult = await createOcrResult({ pageId, status: "failed", confidence: 0 });
+      ocrResultId = ocrResult.id;
     }
+
+    // Queue every page for HITL review
+    await createHitlItem({
+      pageId,
+      ocrResultId: ocrResultId ?? undefined,
+      reason: `Page ${pageNum} of ${pageFiles.length} — initial HITL review`,
+      flagCategory: "manual_flag",
+      priority: "medium",
+    });
 
     confidences.push(ocrConfidence);
     processedPages++;
 
-    const avgConfidence = Math.round(
-      confidences.reduce((a, b) => a + b, 0) / confidences.length,
-    );
+    const avgConfidence = Math.round(confidences.reduce((a, b) => a + b, 0) / confidences.length);
     await updateIngestionJobStatus(jobId, { processedPages, avgConfidence });
     console.log(`[Pipeline] Job ${jobId}: page ${pageNum}/${pageFiles.length} (confidence: ${ocrConfidence})`);
   }
 
-  // ── Finalize ──────────────────────────────────────────────────────────────
+  // ── Finalize — HITL required ──────────────────────────────────────────────
   const avgConfidence = confidences.length > 0
     ? Math.round(confidences.reduce((a, b) => a + b, 0) / confidences.length)
     : 0;
@@ -199,17 +227,17 @@ async function _runJob(jobId: number): Promise<void> {
     processedPages,
     avgConfidence,
     totalPages: pageFiles.length,
-    status: "completed",
+    status: "hitl_required",
   });
 
   await updateIngestionJobStatus(jobId, {
-    status: "completed",
+    status: "review",
     processedPages,
     avgConfidence,
     completedAt: new Date(),
   });
 
-  console.log(`[Pipeline] Job ${jobId} complete. ${processedPages} pages, avg confidence: ${avgConfidence}`);
+  console.log(`[Pipeline] Job ${jobId}: ${processedPages} pages queued for HITL review (avg confidence: ${avgConfidence})`);
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -218,7 +246,6 @@ async function convertToPages(sourceFile: string, pagesDir: string): Promise<str
   if (/\.(png|jpe?g|webp|tiff?)$/i.test(sourceFile)) {
     return [sourceFile];
   }
-
   if (/\.pdf$/i.test(sourceFile)) {
     const outputPrefix = join(pagesDir, "page");
     await execFileAsync("pdftoppm", ["-png", "-r", "150", sourceFile, outputPrefix]);
@@ -228,14 +255,10 @@ async function convertToPages(sourceFile: string, pagesDir: string): Promise<str
       .sort()
       .map(f => join(pagesDir, f));
   }
-
   throw new Error(`Unsupported source format: ${sourceFile}. Expected .pdf or image file.`);
 }
 
 async function imageContent(filePath: string): Promise<{ type: "image_url"; image_url: { url: string } }> {
   const b64 = await readFile(filePath, "base64");
-  return {
-    type: "image_url",
-    image_url: { url: `data:image/png;base64,${b64}` },
-  };
+  return { type: "image_url", image_url: { url: `data:image/png;base64,${b64}` } };
 }
