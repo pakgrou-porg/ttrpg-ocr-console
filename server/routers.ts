@@ -1259,21 +1259,15 @@ export const appRouter = router({
         return { success: true };
       }),
 
-    /** Get available types, roles, and sync modes */
-    types: adminProcedure.query(() => ({
-      connectionTypes: SUPABASE_CONNECTION_TYPES.map(t => ({
-        id: t,
-        label: t === "supabase_local" ? "Supabase Local" : "Supabase Cloud",
-      })),
-      roles: SUPABASE_ROLES.map(r => ({
-        id: r,
-        label: r.charAt(0).toUpperCase() + r.slice(1),
-      })),
-      syncModes: SUPABASE_SYNC_MODES.map(m => ({
-        id: m,
-        label: { primary_only: "Primary Only", mirror: "Mirror (Both)", failover: "Failover" }[m] ?? m,
-      })),
-    })),
+    /** Get available connection types as a flat array */
+    types: adminProcedure.query(() => {
+      const labels: Record<string, string> = {
+        supabase_local: "Supabase Local",
+        supabase_cloud: "Supabase Cloud",
+        postgres_docker: "PostgreSQL (Docker)",
+      };
+      return SUPABASE_CONNECTION_TYPES.map(t => ({ id: t, label: labels[t] ?? t }));
+    }),
   }),
 
   // ─── Library (Documents & Pages — Enter the Arkanum) ─────────────────────

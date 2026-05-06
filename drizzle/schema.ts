@@ -305,7 +305,7 @@ export type InsertModelAssignment = InsertStageInscription;
 // Supports primary/secondary roles, mirroring, and bootstrap state tracking.
 // The console's own DATABASE_URL is separate (set via environment variable).
 
-export const SUPABASE_CONNECTION_TYPES = ["supabase_local", "supabase_cloud"] as const;
+export const SUPABASE_CONNECTION_TYPES = ["supabase_local", "supabase_cloud", "postgres_docker"] as const;
 export type SupabaseConnectionType = (typeof SUPABASE_CONNECTION_TYPES)[number];
 
 export const SUPABASE_ROLES = ["primary", "secondary"] as const;
