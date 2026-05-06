@@ -33,10 +33,14 @@ console.log("[migrate] Starting database migrations...");
 console.log(`[migrate] Migrations folder: ${migrationsFolder}`);
 
 // Use max:1 for a dedicated single-connection migration client.
-// ssl:false — Supabase self-hosted postgres does not present a TLS cert on the
-// internal Docker network; postgres-js defaults to prefer-ssl which causes
-// ETIMEDOUT when the handshake is rejected.
-const client = postgres(DATABASE_URL, { max: 1, ssl: false });
+// SSL is driven by the connection string: add ?sslmode=disable for self-hosted
+// Docker deployments (no TLS cert on internal bridge network); omit for
+// Supabase Cloud which requires SSL.
+const url = new URL(DATABASE_URL);
+const sslMode = url.searchParams.get("sslmode");
+const sslOption = sslMode === "disable" ? false : sslMode === "require" ? true : undefined;
+const clientOptions = { max: 1, ...(sslOption !== undefined && { ssl: sslOption }) };
+const client = postgres(DATABASE_URL, clientOptions);
 
 try {
   // Smoke-test connectivity before running the full migrator
