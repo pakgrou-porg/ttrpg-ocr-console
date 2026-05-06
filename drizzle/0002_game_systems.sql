@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS "game_systems" (
 
 CREATE TRIGGER update_game_systems_updated_at
   BEFORE UPDATE ON "game_systems"
-  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
 INSERT INTO "game_systems" ("name", "abbreviation", "sort_order") VALUES
   ('Dungeons & Dragons 5e', 'D&D 5e', 0),
