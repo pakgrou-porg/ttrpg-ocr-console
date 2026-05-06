@@ -32,15 +32,27 @@ const migrationsFolder = join(__dirname, "drizzle");
 console.log("[migrate] Starting database migrations...");
 console.log(`[migrate] Migrations folder: ${migrationsFolder}`);
 
-// Use max:1 for a dedicated single-connection migration client
-const client = postgres(DATABASE_URL, { max: 1 });
+// Use max:1 for a dedicated single-connection migration client.
+// SSL is driven by the connection string: add ?sslmode=disable for self-hosted
+// Docker deployments (no TLS cert on internal bridge network); omit for
+// Supabase Cloud which requires SSL.
+const url = new URL(DATABASE_URL);
+const sslMode = url.searchParams.get("sslmode");
+const sslOption = sslMode === "disable" ? false : sslMode === "require" ? true : undefined;
+const clientOptions = { max: 1, ...(sslOption !== undefined && { ssl: sslOption }) };
+const client = postgres(DATABASE_URL, clientOptions);
 
 try {
+  // Smoke-test connectivity before running the full migrator
+  await client`SELECT 1`;
+  console.log("[migrate] Database connection verified.");
   const db = drizzle(client);
   await migrate(db, { migrationsFolder });
   console.log("[migrate] All migrations applied successfully.");
 } catch (err) {
   console.error("[migrate] Migration failed:", err.message ?? err);
+  if (err.code) console.error("[migrate] Error code:", err.code);
+  if (err.stack) console.error("[migrate] Stack:", err.stack);
   process.exit(1);
 } finally {
   await client.end();
