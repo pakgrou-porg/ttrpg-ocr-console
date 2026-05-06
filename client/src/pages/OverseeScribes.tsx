@@ -1,7 +1,96 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Activity, Clock, CheckCircle2, AlertCircle, Pause, RotateCcw, Loader2 } from "lucide-react";
+import { Activity, Clock, CheckCircle2, AlertCircle, Pause, RotateCcw, Loader2, Gamepad2, Plus, Trash2, Pencil, Check, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
+import { useState } from "react";
+import { toast } from "sonner";
+
+function GameSystemAdmin() {
+  const { data: systems, refetch } = trpc.gameSystems.listAll.useQuery();
+  const [newName, setNewName] = useState("");
+  const [newAbbr, setNewAbbr] = useState("");
+  const [editId, setEditId] = useState<number | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editAbbr, setEditAbbr] = useState("");
+
+  const createMut = trpc.gameSystems.create.useMutation({
+    onSuccess: () => { refetch(); setNewName(""); setNewAbbr(""); toast.success("Game system added."); },
+    onError: (e) => toast.error(e.message),
+  });
+  const updateMut = trpc.gameSystems.update.useMutation({
+    onSuccess: () => { refetch(); setEditId(null); toast.success("Updated."); },
+    onError: (e) => toast.error(e.message),
+  });
+  const deleteMut = trpc.gameSystems.delete.useMutation({
+    onSuccess: () => { refetch(); toast.success("Removed."); },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const startEdit = (s: { id: number; name: string; abbreviation: string | null }) => {
+    setEditId(s.id); setEditName(s.name); setEditAbbr(s.abbreviation ?? "");
+  };
+
+  return (
+    <Card className="bg-card/50 backdrop-blur-sm border-border/50">
+      <CardHeader>
+        <CardTitle className="text-2xl flex items-center gap-2">
+          <Gamepad2 className="w-5 h-5 text-primary" /> Game Systems
+        </CardTitle>
+        <CardDescription>Manage the list of game systems available in Summoning Rituals.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {/* Add new */}
+        <div className="flex gap-2">
+          <Input placeholder="Name (e.g. Dungeons & Dragons 5e)" value={newName} onChange={e => setNewName(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && newName.trim() && createMut.mutate({ name: newName.trim(), abbreviation: newAbbr.trim() || undefined })}
+            className="bg-background/50" />
+          <Input placeholder="Abbrev." value={newAbbr} onChange={e => setNewAbbr(e.target.value)} className="bg-background/50 w-28" />
+          <Button size="sm" className="gap-1.5 flex-shrink-0" disabled={!newName.trim() || createMut.isPending}
+            onClick={() => createMut.mutate({ name: newName.trim(), abbreviation: newAbbr.trim() || undefined })}>
+            <Plus className="w-3.5 h-3.5" /> Add
+          </Button>
+        </div>
+
+        {/* List */}
+        <div className="space-y-1">
+          {systems?.map(s => (
+            <div key={s.id} className={`flex items-center gap-2 p-2 rounded-md border ${s.isActive ? "border-border/40 bg-muted/10" : "border-dashed border-border/30 opacity-50"}`}>
+              {editId === s.id ? (
+                <>
+                  <Input value={editName} onChange={e => setEditName(e.target.value)} className="h-7 text-xs bg-background/50 flex-1" />
+                  <Input value={editAbbr} onChange={e => setEditAbbr(e.target.value)} placeholder="Abbrev." className="h-7 text-xs bg-background/50 w-20" />
+                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => updateMut.mutate({ id: s.id, name: editName, abbreviation: editAbbr || null })}>
+                    <Check className="w-3.5 h-3.5 text-green-500" />
+                  </Button>
+                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => setEditId(null)}>
+                    <X className="w-3.5 h-3.5" />
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <span className="flex-1 text-sm">{s.name}</span>
+                  {s.abbreviation && <span className="text-xs text-muted-foreground">{s.abbreviation}</span>}
+                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-muted-foreground" onClick={() => updateMut.mutate({ id: s.id, isActive: !s.isActive })}>
+                    {s.isActive ? <X className="w-3.5 h-3.5" /> : <Check className="w-3.5 h-3.5" />}
+                  </Button>
+                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-muted-foreground" onClick={() => startEdit(s)}>
+                    <Pencil className="w-3.5 h-3.5" />
+                  </Button>
+                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                    onClick={() => { if (confirm(`Remove "${s.name}"?`)) deleteMut.mutate({ id: s.id }); }}>
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </Button>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+        <p className="text-xs text-muted-foreground">Inactive systems are hidden in Summoning Rituals. Click ✕ on a row to deactivate it.</p>
+      </CardContent>
+    </Card>
+  );
+}
 
 export default function OverseeScribes() {
   const { data: stats, isLoading: statsLoading } = trpc.jobs.stats.useQuery(undefined, {
@@ -164,6 +253,8 @@ export default function OverseeScribes() {
           )}
         </CardContent>
       </Card>
+
+      <GameSystemAdmin />
     </div>
   );
 }

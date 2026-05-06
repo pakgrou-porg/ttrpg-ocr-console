@@ -15,6 +15,13 @@
       "when": 1746576000000,
       "tag": "0001_google_drive",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1746748800000,
+      "tag": "0002_game_systems",
+      "breakpoints": true
     }
   ]
 }

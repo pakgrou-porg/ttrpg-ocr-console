@@ -2,18 +2,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Database, Save, Plus, Trash2, UploadCloud, Loader2, CheckCircle2, HardDrive, FolderOpen, Link2Off, Link2 } from "lucide-react";
+import { Database, Save, Plus, Trash2, UploadCloud, Loader2, CheckCircle2, HardDrive, FolderOpen, Link2Off, Link2, X } from "lucide-react";
 import { useState, useRef } from "react";
 import { trpc } from "@/lib/trpc";
 import { useToast } from "@/hooks/use-toast";
-import { DriveFilePicker } from "@/components/DriveFilePicker";
-
-const GAME_SYSTEMS = [
-  "Dungeons & Dragons 5e",
-  "Pathfinder 2e",
-  "Call of Cthulhu 7e",
-  "Custom / Other",
-];
+import { DriveFilePicker, type DriveFile } from "@/components/DriveFilePicker";
 
 type InputMode = "drive" | "upload" | "local";
 
@@ -26,23 +19,22 @@ export default function SummoningRituals() {
     onSuccess: () => { refetchGoogleStatus(); toast({ title: "Google Drive disconnected" }); },
   });
 
+  // ── Game systems from DB ────────────────────────────────────────────────────
+  const { data: gameSystemsData } = trpc.gameSystems.list.useQuery();
+  const gameSystems = gameSystemsData?.map(g => g.name) ?? ["Dungeons & Dragons 5e"];
+
   // ── Ingestion form ──────────────────────────────────────────────────────────
   const [inputMode, setInputMode] = useState<InputMode>("drive");
-  const [gameSystem, setGameSystem] = useState(GAME_SYSTEMS[0]);
+  const [gameSystem, setGameSystem] = useState("");
   const [localPath, setLocalPath] = useState("");
-  const [driveFile, setDriveFile] = useState<{ id: string; name: string } | null>(null);
+  const [driveFiles, setDriveFiles] = useState<DriveFile[]>([]);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
-  const [lastJobId, setLastJobId] = useState<number | null>(null);
+  const [lastJobIds, setLastJobIds] = useState<number[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const effectiveGameSystem = gameSystem || gameSystems[0] || "Dungeons & Dragons 5e";
+
   const createJob = trpc.jobs.create.useMutation({
-    onSuccess(data) {
-      setLastJobId(data.id);
-      setLocalPath("");
-      setDriveFile(null);
-      setUploadFile(null);
-      toast({ title: "Ritual begun", description: `Job #${data.id} is now processing up to 10 pages.` });
-    },
     onError(err) {
       toast({ title: "Summoning failed", description: err.message, variant: "destructive" });
     },
@@ -52,16 +44,29 @@ export default function SummoningRituals() {
 
   const handleSubmit = async () => {
     if (inputMode === "drive") {
-      if (!driveFile) {
-        toast({ title: "No file selected", description: "Pick a file from Google Drive.", variant: "destructive" });
+      if (!driveFiles.length) {
+        toast({ title: "No files selected", description: "Pick files from Google Drive.", variant: "destructive" });
         return;
       }
-      createJob.mutate({
-        sourceFile: driveFile.name,
-        gameSystem,
-        storageProvider: "google_drive",
-        driveFileId: driveFile.id,
-      });
+      const ids: number[] = [];
+      for (const f of driveFiles) {
+        try {
+          const data = await createJob.mutateAsync({
+            sourceFile: f.name,
+            gameSystem: effectiveGameSystem,
+            storageProvider: "google_drive",
+            driveFileId: f.id,
+          });
+          ids.push(data.id);
+        } catch {
+          // individual error already toasted by onError
+        }
+      }
+      if (ids.length) {
+        setLastJobIds(ids);
+        setDriveFiles([]);
+        toast({ title: "Ritual begun", description: `${ids.length} job(s) started — up to 10 pages each.` });
+      }
     } else if (inputMode === "upload") {
       if (!uploadFile) {
         toast({ title: "No file selected", description: "Choose a PDF to upload.", variant: "destructive" });
@@ -71,14 +76,14 @@ export default function SummoningRituals() {
       try {
         const formData = new FormData();
         formData.append("file", uploadFile);
-        formData.append("gameSystem", gameSystem);
+        formData.append("gameSystem", effectiveGameSystem);
         const res = await fetch("/api/upload/ingest", { method: "POST", body: formData });
         if (!res.ok) {
           const err = await res.json().catch(() => ({ error: res.statusText }));
           throw new Error(err.error ?? "Upload failed");
         }
         const data = await res.json();
-        setLastJobId(data.jobId);
+        setLastJobIds([data.jobId]);
         setUploadFile(null);
         if (fileInputRef.current) fileInputRef.current.value = "";
         toast({ title: "Ritual begun", description: `Job #${data.jobId} is now processing up to 10 pages.` });
@@ -93,7 +98,10 @@ export default function SummoningRituals() {
         toast({ title: "Path required", description: "Provide a local file path.", variant: "destructive" });
         return;
       }
-      createJob.mutate({ sourceFile: trimmed, gameSystem, storageProvider: "local" });
+      const data = await createJob.mutateAsync({ sourceFile: trimmed, gameSystem: effectiveGameSystem, storageProvider: "local" });
+      setLastJobIds([data.id]);
+      setLocalPath("");
+      toast({ title: "Ritual begun", description: `Job #${data.id} is now processing up to 10 pages.` });
     }
   };
 
@@ -177,29 +185,45 @@ export default function SummoningRituals() {
               <Label htmlFor="game-system">Game System</Label>
               <select
                 id="game-system"
-                value={gameSystem}
+                value={effectiveGameSystem}
                 onChange={e => setGameSystem(e.target.value)}
                 className="w-full h-10 px-3 rounded-md border border-input bg-background/50 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
               >
-                {GAME_SYSTEMS.map(s => <option key={s}>{s}</option>)}
+                {gameSystems.map(s => <option key={s}>{s}</option>)}
               </select>
             </div>
 
             {/* Input-mode-specific controls */}
             {inputMode === "drive" && (
               <div className="space-y-2">
-                <Label>Source File</Label>
+                <Label>Source Files</Label>
                 <div className="flex gap-2 items-center">
                   <DriveFilePicker
-                    onFilePicked={f => setDriveFile({ id: f.id, name: f.name })}
+                    onFilesPicked={files => setDriveFiles(prev => {
+                      const existing = new Set(prev.map(f => f.id));
+                      const added = files.filter(f => !existing.has(f.id));
+                      return [...prev, ...added].sort((a, b) => a.name.localeCompare(b.name));
+                    })}
                     disabled={!googleStatus?.connected || isPending}
                   />
-                  {driveFile && (
-                    <span className="text-sm text-muted-foreground truncate max-w-[200px]" title={driveFile.name}>
-                      {driveFile.name}
-                    </span>
+                  {driveFiles.length > 0 && (
+                    <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => setDriveFiles([])}>
+                      Clear all
+                    </Button>
                   )}
                 </div>
+                {driveFiles.length > 0 && (
+                  <div className="space-y-1 max-h-40 overflow-y-auto border border-border/40 rounded-md p-2 bg-muted/10">
+                    {driveFiles.map(f => (
+                      <div key={f.id} className="flex items-center justify-between gap-2 text-xs">
+                        <span className="truncate text-muted-foreground" title={f.name}>{f.name}</span>
+                        <button onClick={() => setDriveFiles(prev => prev.filter(x => x.id !== f.id))} className="flex-shrink-0 text-muted-foreground hover:text-destructive">
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {!googleStatus?.connected && (
                   <p className="text-xs text-muted-foreground">Connect Google Drive above to use the file picker.</p>
                 )}
@@ -234,10 +258,12 @@ export default function SummoningRituals() {
               </div>
             )}
 
-            {lastJobId && (
+            {lastJobIds.length > 0 && (
               <div className="flex items-center gap-2 text-sm text-green-500">
-                <CheckCircle2 className="w-4 h-4" />
-                Job #{lastJobId} started — check the Chronicle for progress, then review in Trials of Truth.
+                <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+                {lastJobIds.length === 1
+                  ? `Job #${lastJobIds[0]} started — check the Chronicle for progress, then review in Trials of Truth.`
+                  : `${lastJobIds.length} jobs started (${lastJobIds.map(id => `#${id}`).join(", ")}) — review in Trials of Truth.`}
               </div>
             )}
 

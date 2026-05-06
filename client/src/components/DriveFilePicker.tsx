@@ -3,15 +3,16 @@ import { Button } from "@/components/ui/button";
 import { HardDrive, Loader2 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 
-interface DriveFile {
+export interface DriveFile {
   id: string;
   name: string;
   mimeType: string;
 }
 
 interface Props {
-  onFilePicked: (file: DriveFile) => void;
+  onFilesPicked: (files: DriveFile[]) => void;
   disabled?: boolean;
+  defaultFolderId?: string;
 }
 
 declare global {
@@ -20,6 +21,9 @@ declare global {
     google: any;
   }
 }
+
+// Default to DandD_Materials folder
+const DEFAULT_FOLDER_ID = "1t_mKKlP7aynS2ijfiXaz9KWlYONZ9PFV";
 
 let gapiLoaded = false;
 let pickerLoaded = false;
@@ -42,10 +46,10 @@ function loadPickerLib(): Promise<void> {
   });
 }
 
-export function DriveFilePicker({ onFilePicked, disabled }: Props) {
+export function DriveFilePicker({ onFilesPicked, disabled, defaultFolderId = DEFAULT_FOLDER_ID }: Props) {
   const [loading, setLoading] = useState(false);
   const { data: tokenData } = trpc.google.getAccessToken.useQuery(undefined, {
-    staleTime: 55 * 60 * 1000, // re-fetch before 60-min expiry
+    staleTime: 55 * 60 * 1000,
   });
 
   const runtimeConfig = (window as any).__RUNTIME_CONFIG__ ?? {};
@@ -57,7 +61,7 @@ export function DriveFilePicker({ onFilePicked, disabled }: Props) {
       return;
     }
     if (!tokenData?.accessToken) {
-      alert("Google Drive not connected. Connect it first in Settings.");
+      alert("Google Drive not connected. Connect it first above.");
       return;
     }
     setLoading(true);
@@ -66,17 +70,31 @@ export function DriveFilePicker({ onFilePicked, disabled }: Props) {
       await loadPickerLib();
 
       const { google } = window;
-      const view = new google.picker.View(google.picker.ViewId.DOCS);
-      view.setMimeTypes("application/pdf,image/png,image/jpeg,image/webp,image/tiff");
+
+      // Folder-scoped view starting at DandD_Materials
+      const folderView = new google.picker.DocsView(google.picker.ViewId.FOLDERS)
+        .setParent(defaultFolderId)
+        .setSelectFolderEnabled(true);
+
+      // File view also scoped to the default folder, PDFs + images only
+      const fileView = new google.picker.DocsView(google.picker.ViewId.DOCS)
+        .setParent(defaultFolderId)
+        .setMimeTypes("application/pdf,image/png,image/jpeg,image/webp,image/tiff")
+        .setMode(google.picker.DocsViewMode.LIST);
 
       const picker = new google.picker.PickerBuilder()
-        .addView(view)
+        .addView(fileView)
+        .addView(folderView)
         .setOAuthToken(tokenData.accessToken)
         .setDeveloperKey(apiKey)
+        .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
+        .setTitle("Select files or folders (DandD_Materials)")
         .setCallback((data: any) => {
           if (data.action === google.picker.Action.PICKED && data.docs?.length) {
-            const doc = data.docs[0];
-            onFilePicked({ id: doc.id, name: doc.name, mimeType: doc.mimeType });
+            const files: DriveFile[] = data.docs
+              .map((doc: any) => ({ id: doc.id, name: doc.name, mimeType: doc.mimeType }))
+              .sort((a: DriveFile, b: DriveFile) => a.name.localeCompare(b.name));
+            onFilesPicked(files);
           }
         })
         .build();

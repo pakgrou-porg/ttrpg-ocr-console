@@ -14,7 +14,11 @@
       "PowerShell($env:PATH = \"$env:APPDATA\\\\npm;$env:PATH\"; cd \"C:\\\\Users\\\\karlm\\\\git_repos\\\\ttrpg-ocr-console\"; pnpm install --no-frozen-lockfile 2>&1 | Select-Object -Last 15)",
       "Bash(gh run *)",
       "WebFetch(domain:api.github.com)",
-      "Bash(curl -s \"https://api.github.com/repos/pakgrou-porg/ttrpg-ocr-console/actions/runs?per_page=5\")"
+      "Bash(curl -s \"https://api.github.com/repos/pakgrou-porg/ttrpg-ocr-console/actions/runs?per_page=5\")",
+      "Bash(git tag *)",
+      "Bash(pnpm install *)",
+      "Bash(git commit *)",
+      "Bash(xargs grep *)"
     ]
   }
 }

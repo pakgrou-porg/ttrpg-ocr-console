@@ -373,6 +373,20 @@ export const supabaseInstances = pgTable("supabase_instances", {
 export type SupabaseInstance = typeof supabaseInstances.$inferSelect;
 export type InsertSupabaseInstance = typeof supabaseInstances.$inferInsert;
 
+// ─── Game Systems ─────────────────────────────────────────────────────────────
+
+export const gameSystems = pgTable("game_systems", {
+  id: serial("id").primaryKey(),
+  name: varchar("name", { length: 128 }).notNull(),
+  abbreviation: varchar("abbreviation", { length: 32 }),
+  sortOrder: integer("sort_order").default(0).notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export type GameSystem = typeof gameSystems.$inferSelect;
+export type InsertGameSystem = typeof gameSystems.$inferInsert;
+
 // ─── Library Shelves: Documents ───────────────────────────────────────────────
 
 export const DOCUMENT_TYPES = ["book", "guide", "periodical", "magazine", "supplement", "adventure", "unknown"] as const;

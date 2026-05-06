@@ -23,6 +23,7 @@ import {
   getPagesByDocumentId, getPageById, getPageByPhash, createDocumentPage, updateDocumentPage,
   getOcrResultByPageId, getOcrResultById, createOcrResult, updateOcrResult,
   getHitlItemById, getHitlItemsByPageId, getAllHitlItems, createHitlItem, updateHitlItem, getHitlStats,
+  getAllGameSystems, createGameSystem, updateGameSystem, deleteGameSystem,
 } from "./db";
 import { encryptSecret, decryptSecret, storeSecretHint, renderMaskedSecret } from "./crypto";
 import { startJob } from "./pipeline/runner";
@@ -1866,6 +1867,44 @@ export const appRouter = router({
       await clearGoogleTokens();
       return { success: true };
     }),
+  }),
+
+  // ─── Game Systems ─────────────────────────────────────────────────────────────
+  gameSystems: router({
+    list: protectedProcedure.query(() => getAllGameSystems(true)),
+
+    listAll: adminProcedure.query(() => getAllGameSystems(false)),
+
+    create: adminProcedure
+      .input(z.object({
+        name: z.string().min(1).max(128),
+        abbreviation: z.string().max(32).optional(),
+        sortOrder: z.number().int().default(0),
+      }))
+      .mutation(async ({ input }) => {
+        return createGameSystem({ ...input, isActive: true });
+      }),
+
+    update: adminProcedure
+      .input(z.object({
+        id: z.number().int(),
+        name: z.string().min(1).max(128).optional(),
+        abbreviation: z.string().max(32).nullable().optional(),
+        sortOrder: z.number().int().optional(),
+        isActive: z.boolean().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const { id, ...updates } = input;
+        await updateGameSystem(id, updates as any);
+        return { success: true };
+      }),
+
+    delete: adminProcedure
+      .input(z.object({ id: z.number().int() }))
+      .mutation(async ({ input }) => {
+        await deleteGameSystem(input.id);
+        return { success: true };
+      }),
   }),
 });
 
