@@ -277,10 +277,10 @@ describe("connections (Database Connection Config)", () => {
 
   it("lists available connection types", async () => {
     const caller = appRouter.createCaller(createAdminContext());
-    const types = await caller.connections.types();
-    expect(Array.isArray(types)).toBe(true);
-    expect(types.some((t: any) => t.id === "supabase_cloud")).toBe(true);
-    expect(types.some((t: any) => t.id === "postgres_docker")).toBe(true);
+    const { connectionTypes } = await caller.connections.types();
+    expect(Array.isArray(connectionTypes)).toBe(true);
+    expect(connectionTypes.some((t: any) => t.id === "supabase_cloud")).toBe(true);
+    expect(connectionTypes.some((t: any) => t.id === "supabase_local")).toBe(true);
   });
 
   it("denies non-admin from creating connections", async () => {
@@ -288,11 +288,10 @@ describe("connections (Database Connection Config)", () => {
     await expect(
       caller.connections.create({
         name: "Local Docker",
-        connectionType: "postgres_docker",
+        connectionType: "supabase_local",
         host: "localhost",
         port: 5432,
-        databaseName: "ttrpg_ocr",
-        username: "postgres",
+        databaseName: "postgres",
         password: "secret",
       })
     ).rejects.toThrow();
@@ -306,7 +305,6 @@ describe("connections (Database Connection Config)", () => {
       host: "db.test.supabase.co",
       port: 5432,
       databaseName: "postgres",
-      username: "postgres",
       password: "test-password-123",
     });
     expect(result).toHaveProperty("id");
@@ -316,11 +314,10 @@ describe("connections (Database Connection Config)", () => {
     const caller = appRouter.createCaller(createAdminContext());
     const created = await caller.connections.create({
       name: `Test Connection Ping ${suffix}`,
-      connectionType: "postgres_docker",
+      connectionType: "supabase_local",
       host: "localhost",
       port: 5432,
-      databaseName: "test_db",
-      username: "user",
+      databaseName: "postgres",
       password: "pass",
     });
     // Test will fail since the host doesn't exist, but the procedure should not throw
@@ -333,11 +330,10 @@ describe("connections (Database Connection Config)", () => {
     const caller = appRouter.createCaller(createAdminContext());
     const created = await caller.connections.create({
       name: `To Delete Connection ${suffix}`,
-      connectionType: "postgres_docker",
+      connectionType: "supabase_local",
       host: "localhost",
       port: 5432,
-      databaseName: "deleteme",
-      username: "user",
+      databaseName: "postgres",
       password: "pass",
     });
     const result = await caller.connections.delete({ id: created.id });
