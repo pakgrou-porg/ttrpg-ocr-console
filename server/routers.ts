@@ -1116,10 +1116,10 @@ export const appRouter = router({
           encryptedServiceKey = enc.ciphertext;
           serviceKeyIv = enc.iv;
           serviceKeyAuthTag = enc.authTag;
-          const { prefix, suffix, length } = storeSecretHint(input.serviceKey);
-          serviceKeyPrefix = prefix;
-          serviceKeySuffix = suffix;
-          serviceKeyLength = length;
+          const { keyPrefix, keySuffix, keyLength } = storeSecretHint(input.serviceKey);
+          serviceKeyPrefix = keyPrefix;
+          serviceKeySuffix = keySuffix;
+          serviceKeyLength = keyLength;
         }
 
         const id = await createSupabaseInstance({
@@ -1202,10 +1202,10 @@ export const appRouter = router({
           updates.encryptedServiceKey = enc.ciphertext;
           updates.serviceKeyIv = enc.iv;
           updates.serviceKeyAuthTag = enc.authTag;
-          const { prefix, suffix, length } = storeSecretHint(input.serviceKey);
-          updates.serviceKeyPrefix = prefix;
-          updates.serviceKeySuffix = suffix;
-          updates.serviceKeyLength = length;
+          const { keyPrefix, keySuffix, keyLength } = storeSecretHint(input.serviceKey);
+          updates.serviceKeyPrefix = keyPrefix;
+          updates.serviceKeySuffix = keySuffix;
+          updates.serviceKeyLength = keyLength;
         }
 
         await updateSupabaseInstance(input.id, updates);

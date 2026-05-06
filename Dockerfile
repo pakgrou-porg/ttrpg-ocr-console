@@ -70,7 +70,7 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/drizzle ./drizzle
 
 # Copy the standalone migration runner.
-# This script uses drizzle-orm/mysql2 migrator (a prod dependency) to apply
+# This script uses drizzle-orm/postgres-js migrator (a prod dependency) to apply
 # SQL migration files from the drizzle/ directory. It replaces `pnpm db:push`
 # (which requires drizzle-kit, a devDependency) entirely.
 COPY migrate.mjs ./migrate.mjs
