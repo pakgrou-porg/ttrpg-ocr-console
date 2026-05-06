@@ -8,6 +8,13 @@
       "when": 1746489600000,
       "tag": "0000_initial_postgres",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1778064818271,
+      "tag": "0001_greedy_la_nuit",
+      "breakpoints": true
     }
   ]
 }
