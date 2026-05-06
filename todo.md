@@ -503,3 +503,14 @@
 - [x] Verify migrate.mjs runs cleanly on dev DB (backfilled 5 missing hashes from pnpm db:push history)
 - [x] Rewrite Dockerfile: remove all .pnpm virtual store COPY lines, replace CMD with node migrate.mjs
 - [x] Push to GitHub, tag v0.1.4, update portainer-stack.yml IMAGE_TAG to 0.1.4
+
+## Phase: Alignment with v0.1.13–v0.1.15 PostgreSQL migration
+
+- [x] Pull and analyze all commits since v0.1.4 (v0.1.5–v0.1.15)
+- [x] Rewrite portainer-stack.yml for PostgreSQL/Supabase (remove MySQL service, join supabase_net, add CREDENTIAL_ENCRYPTION_KEY, all secrets via env vars)
+- [x] Add sslmode=disable to DATABASE_URL for self-hosted Docker bridge network
+- [x] Fix Dockerfile comment: mysql2 -> postgres-js migrator
+- [x] Fix SecretHint destructuring in server/routers.ts (prefix/suffix/length -> keyPrefix/keySuffix/keyLength)
+- [x] Merge v0.1.15 SSL improvements (sslmode driven by connection string), tag v0.1.16, push to GitHub
+- [x] pnpm install updated: mysql2 removed, postgres (postgres-js) added
+- [x] TypeScript: 0 errors after all fixes
