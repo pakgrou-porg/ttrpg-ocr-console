@@ -48,7 +48,7 @@ services:
       # ── Database ────────────────────────────────────────────────────────────
       # Direct PostgreSQL connection to the Supabase db container.
       # Uses the internal Docker network hostname "supabase-db".
-      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@supabase-db:5432/postgres
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@supabase-db:5432/postgres?sslmode=disable
 
       # ── Secrets ─────────────────────────────────────────────────────────────
       # Generate with: openssl rand -base64 32
