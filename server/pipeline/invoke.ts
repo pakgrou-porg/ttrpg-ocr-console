@@ -44,11 +44,21 @@ export interface StageInvokeResult {
   providerId: number;
 }
 
+export interface InvokeOptions {
+  /** Pre-fill the assistant turn with "{" to force immediate JSON output */
+  prefillJson?: boolean;
+  /** Few-shot examples inserted before the real user message */
+  fewShotExamples?: Array<{ user: string; assistant: string }>;
+  /** Merged last (overrides inscription + provider settings) */
+  overrideBody?: Record<string, unknown>;
+}
+
 export async function invokeStage(
   stage: string,
   userContent: UserContentPart[],
   extraSystemContext?: string,
   fallbackSystemPrompt?: string,
+  options?: InvokeOptions,
 ): Promise<StageInvokeResult> {
   const inscription = await getStageInscriptionByStage(stage);
   if (!inscription) throw new Error(`[CONFIG] No stage inscription configured for "${stage}". Add an inscription in Conclave → Stage Inscriptions.`);
@@ -93,7 +103,21 @@ export async function invokeStage(
 
   const messages: any[] = [];
   if (systemPrompt.trim()) messages.push({ role: "system", content: systemPrompt });
+
+  // Few-shot examples before the real request
+  if (options?.fewShotExamples) {
+    for (const ex of options.fewShotExamples) {
+      messages.push({ role: "user",      content: ex.user });
+      messages.push({ role: "assistant", content: ex.assistant });
+    }
+  }
+
   messages.push({ role: "user", content: userContent });
+
+  // Assistant pre-fill forces the model to start with { immediately
+  if (options?.prefillJson) {
+    messages.push({ role: "assistant", content: "{" });
+  }
 
   const body: Record<string, unknown> = {
     messages,
@@ -102,6 +126,7 @@ export async function invokeStage(
   };
   if (provider.defaultModelId) body.model = provider.defaultModelId;
   if (inscription.llmSettings) Object.assign(body, inscription.llmSettings);
+  if (options?.overrideBody)   Object.assign(body, options.overrideBody);
 
   const res = await fetchWithRetry(url, {
     method: "POST",
@@ -117,9 +142,14 @@ export async function invokeStage(
 
   const data = await res.json() as any;
   const rawContent = data.choices?.[0]?.message?.content ?? "";
-  const content = typeof rawContent === "string"
+  let content = typeof rawContent === "string"
     ? rawContent
     : (rawContent as any[]).filter((p: any) => p.type === "text").map((p: any) => p.text).join("");
+
+  // When pre-filling with "{", the API returns the completion without the prefix
+  if (options?.prefillJson && !content.trimStart().startsWith("{")) {
+    content = "{" + content;
+  }
 
   return {
     content,

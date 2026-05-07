@@ -1072,6 +1072,15 @@ export async function searchDocuments(query: string) {
     .limit(50);
 }
 
+// ─── Document helpers ─────────────────────────────────────────────────────────
+
+export async function getDocumentByJobId(jobId: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(documents).where(eq(documents.ingestionJobId, jobId)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
 // ─── Document Pages ───────────────────────────────────────────────────────────
 
 export async function getPagesByDocumentId(documentId: number) {
@@ -1080,6 +1089,25 @@ export async function getPagesByDocumentId(documentId: number) {
   return db.select().from(documentPages)
     .where(eq(documentPages.documentId, documentId))
     .orderBy(documentPages.pageNumber);
+}
+
+export async function getPagesByDocumentIdPaginated(documentId: number, offset: number, limit: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(documentPages)
+    .where(eq(documentPages.documentId, documentId))
+    .orderBy(documentPages.pageNumber)
+    .offset(offset)
+    .limit(limit);
+}
+
+export async function getDocumentPageCount(documentId: number) {
+  const db = await getDb();
+  if (!db) return 0;
+  const { count: countFn } = await import("drizzle-orm");
+  const [row] = await db.select({ count: countFn() }).from(documentPages)
+    .where(eq(documentPages.documentId, documentId));
+  return Number(row?.count ?? 0);
 }
 
 export async function getPageById(id: number) {

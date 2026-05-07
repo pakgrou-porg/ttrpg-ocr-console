@@ -20,7 +20,8 @@ import {
   getAllStageInscriptions, getStageInscriptionByStage, upsertStageInscription, updateStageInscription, deleteStageInscription,
   getAllSupabaseInstances, getSupabaseInstanceById, createSupabaseInstance, updateSupabaseInstance, deleteSupabaseInstance, setActiveSupabaseInstance, testSupabaseInstanceConnection,
   getDocumentById, getAllDocuments, createDocument, updateDocument, deleteDocument, searchDocuments,
-  getPagesByDocumentId, getPageById, getPageByPhash, createDocumentPage, updateDocumentPage,
+  getDocumentByJobId, getPagesByDocumentId, getPagesByDocumentIdPaginated, getDocumentPageCount,
+  getPageById, getPageByPhash, createDocumentPage, updateDocumentPage,
   getPagesByIds, getDocumentsByIds, getOcrResultsByPageIds,
   getOcrResultByPageId, getOcrResultById, createOcrResult, updateOcrResult,
   getHitlItemById, getHitlItemsByIds, getHitlItemsByPageId, getAllHitlItems, createHitlItem, updateHitlItem, getHitlStats,
@@ -1411,6 +1412,38 @@ export const appRouter = router({
       .mutation(async ({ input }) => {
         await deleteDocument(input.id);
         return { success: true };
+      }),
+
+    /** Get the document created by a specific ingestion job */
+    getByJobId: protectedProcedure
+      .input(z.object({ jobId: z.number().int() }))
+      .query(async ({ input }) => {
+        return (await getDocumentByJobId(input.jobId)) ?? null;
+      }),
+
+    /** Browse pages for a document, enriched with OCR results, paginated */
+    browsePagesWithOcr: protectedProcedure
+      .input(z.object({
+        documentId: z.number().int(),
+        offset: z.number().int().min(0).default(0),
+        limit: z.number().int().min(1).max(50).default(10),
+      }))
+      .query(async ({ input }) => {
+        const [pages, total] = await Promise.all([
+          getPagesByDocumentIdPaginated(input.documentId, input.offset, input.limit),
+          getDocumentPageCount(input.documentId),
+        ]);
+        if (pages.length === 0) return { pages: [], total };
+        const pageIds = pages.map(p => p.id);
+        const ocrs = await getOcrResultsByPageIds(pageIds);
+        const ocrMap = new Map(ocrs.map(r => [r.pageId, r]));
+        return {
+          total,
+          pages: pages.map(page => ({
+            ...page,
+            ocr: ocrMap.get(page.id) ?? null,
+          })),
+        };
       }),
 
     /** Add a page to a document (admin only — used by pipeline) */

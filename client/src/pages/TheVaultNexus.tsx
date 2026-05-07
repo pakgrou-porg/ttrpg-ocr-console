@@ -604,7 +604,7 @@ export default function TheVaultNexus() {
                 <Select value={editForm.role} onValueChange={v => ef("role", v)}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {typesData?.roles.map(r => (
+                    {roles.map(r => (
                       <SelectItem key={r.id} value={r.id}>{r.label}</SelectItem>
                     ))}
                   </SelectContent>
@@ -617,7 +617,7 @@ export default function TheVaultNexus() {
               <Select value={editForm.syncMode} onValueChange={v => ef("syncMode", v)}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {typesData?.syncModes.map(m => (
+                  {syncModes.map(m => (
                     <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>
                   ))}
                 </SelectContent>

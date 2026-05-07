@@ -9,7 +9,7 @@ import {
   createDocumentPage, updateDocumentPage,
   createOcrResult, createHitlItem,
 } from "../db";
-import { invokeStage, parseJsonResponse, UserContentPart } from "./invoke";
+import { invokeStage, parseJsonResponse, UserContentPart, InvokeOptions } from "./invoke";
 import { downloadDriveFile, getDriveFileName, deleteLocalFile } from "./drive";
 
 const execFileAsync = promisify(execFile);
@@ -17,75 +17,107 @@ const execFileAsync = promisify(execFile);
 const WORKSPACE = process.env.PIPELINE_WORKSPACE ?? "/app/workspace";
 
 // ── Fallback system prompts (used when no DB prompt is configured for a stage) ─
+// All prompts enforce: no reasoning, no CoT, no preamble/postamble, JSON only.
+
+const STRICT_RULES = `
+STRICT OUTPUT RULES — any violation corrupts the pipeline:
+• Output ONLY the JSON object. Nothing before {. Nothing after }.
+• DO NOT reason, think, analyse, or explain.
+• DO NOT produce chain-of-thought, bullet points, or markdown.
+• DO NOT add preamble ("Here is…", "I will…", "Let me…") or postamble.
+• If a field value cannot be determined, use null — never omit the field.`;
 
 const PROMPT_DOCUMENT_INTELLIGENCE = `You are a document metadata extractor for TTRPG (tabletop role-playing game) publications.
 Examine the provided page images and extract document metadata.
+${STRICT_RULES}
 
-YOUR RESPONSE MUST BE A SINGLE JSON OBJECT — nothing before {, nothing after }.
-No markdown, no explanation, no code fences, no trailing text.
-
-Fill in each field with actual values from the document. Example of the required output:
-{
-  "canonical_title": "Dragon Magazine Issue 416",
-  "publisher": "Wizards of the Coast",
-  "document_type": "magazine",
-  "document_summary": "Monthly D&D magazine featuring adventures, articles, and rules expansions.",
-  "game_system": "D&D 4e"
-}
+Required output schema (fill every field with real values from the document):
+{"canonical_title":"…","publisher":"…","document_type":"…","document_summary":"…","game_system":"…"}
 
 document_type must be one of: rulebook, sourcebook, adventure, supplement, setting, magazine, other
-Use null for publisher or game_system if not identifiable.`;
+Use null for publisher or game_system if not identifiable from the pages.`;
 
-const PROMPT_LAYOUT_ANALYSIS = `You are a document layout classifier for TTRPG publications. Examine the page image.
+const PROMPT_LAYOUT_ANALYSIS = `You are a document layout classifier for TTRPG publications.
+Examine the page image and classify its layout.
+${STRICT_RULES}
 
-YOUR RESPONSE MUST BE A SINGLE JSON OBJECT — nothing before {, nothing after }.
-No markdown, no explanation, no code fences, no trailing text.
-
-Fill in each field with the actual values you observe. Example of the required output:
-{
-  "layout_type": "body_text",
-  "columns": 2,
-  "has_table": false,
-  "has_image_or_art": true,
-  "has_list": false
-}
+Required output schema (fill every field with real values from the page):
+{"layout_type":"…","columns":1,"has_table":false,"has_image_or_art":false,"has_list":false}
 
 layout_type must be one of: cover, title_page, toc, chapter_header, body_text, stat_block, table, illustration_full, illustration_with_text, index, appendix, mixed`;
 
-const PROMPT_BBOX_DETECTION = `You are a document content-region detector for TTRPG publications. Identify distinct content regions in the page image.
+const PROMPT_BBOX_DETECTION = `You are a document content-region detector for TTRPG publications.
+Identify distinct content regions in the page image.
+${STRICT_RULES}
 
-YOUR RESPONSE MUST BE A SINGLE JSON OBJECT — nothing before {, nothing after }.
-No markdown, no explanation, no code fences, no trailing text.
-
-Fill in each region with actual values you observe. Example of the required output:
-{
-  "regions": [
-    { "type": "heading", "label": "Chapter title: Ravenloft", "position": "top" },
-    { "type": "image", "label": "Full-colour cover illustration", "position": "middle" },
-    { "type": "paragraph", "label": "Cover description text", "position": "bottom" }
-  ]
-}
+Required output schema (list every visible region):
+{"regions":[{"type":"…","label":"…","position":"…"}]}
 
 type must be one of: heading, subheading, paragraph, table, list, image, stat_block, sidebar, caption, header, footer, page_number
 position must be one of: top, upper_left, upper_right, middle, lower_left, lower_right, bottom, full_page`;
 
-const PROMPT_OCR_EXTRACTION = `You are an OCR text extraction system for TTRPG document pages. Extract ALL readable text from the page image in reading order.
+const PROMPT_OCR_EXTRACTION = `You are an OCR text extraction system for TTRPG document pages.
+Extract ALL readable text from the page image in reading order.
+${STRICT_RULES}
 
-YOUR RESPONSE MUST BE A SINGLE JSON OBJECT — nothing before {, nothing after }.
-No markdown, no explanation, no code fences, no trailing text.
+Required output schema (include every readable text block):
+{"confidence":91,"content_blocks":[{"type":"…","text":"…","sequence":1}],"page_summary":"…"}
 
-Fill in each field with actual content from the page. Example of the required output:
-{
-  "confidence": 91,
-  "content_blocks": [
-    { "type": "heading", "text": "Strahd and Van Richten", "sequence": 1 },
-    { "type": "paragraph", "text": "By Sterling Hershey. Rudolph van Richten is the D&D game's most esteemed vampire hunter...", "sequence": 2 }
-  ],
-  "page_summary": "Table of contents listing articles about Ravenloft, vampires, and dark powers."
-}
-
-confidence is an integer 0-100 reflecting your certainty in the accuracy of the extracted text.
+confidence is an integer 0–100 reflecting extraction accuracy.
 type must be one of: heading, subheading, paragraph, list_item, table_row, caption, stat_line, page_number, sidebar`;
+
+// ── Few-shot anchors — text-only examples showing direct input→output mapping ─
+// Using the same user wording as the real calls so the model sees the pattern.
+
+const FEW_SHOT_DOC_INTEL: InvokeOptions["fewShotExamples"] = [
+  {
+    user: "Extract the document metadata from these pages. Reply with ONLY a JSON object — start with { and end with }.",
+    assistant: '{"canonical_title":"Oriental Adventures","publisher":"TSR Inc.","document_type":"rulebook","document_summary":"Advanced Dungeons & Dragons sourcebook covering Far Eastern campaign settings, new character classes, and monsters.","game_system":"AD&D 1e"}',
+  },
+  {
+    user: "Extract the document metadata from these pages. Reply with ONLY a JSON object — start with { and end with }.",
+    assistant: '{"canonical_title":"Dragon Magazine Issue 200","publisher":"TSR Inc.","document_type":"magazine","document_summary":"Special anniversary issue covering D&D history, classic modules, and new rules options.","game_system":"AD&D 2e"}',
+  },
+];
+
+const FEW_SHOT_LAYOUT: InvokeOptions["fewShotExamples"] = [
+  {
+    user: "Classify the layout type and structure of this page. Reply with ONLY a JSON object — start with { and end with }.",
+    assistant: '{"layout_type":"chapter_header","columns":1,"has_table":false,"has_image_or_art":true,"has_list":false}',
+  },
+  {
+    user: "Classify the layout type and structure of this page. Reply with ONLY a JSON object — start with { and end with }.",
+    assistant: '{"layout_type":"body_text","columns":2,"has_table":true,"has_image_or_art":false,"has_list":true}',
+  },
+];
+
+const FEW_SHOT_BBOX: InvokeOptions["fewShotExamples"] = [
+  {
+    user: "Identify all distinct content regions on this page. Reply with ONLY a JSON object — start with { and end with }.",
+    assistant: '{"regions":[{"type":"heading","label":"Chapter 3: Weapons","position":"top"},{"type":"table","label":"Weapon damage table","position":"middle"},{"type":"caption","label":"Table 3-1 footnote","position":"bottom"}]}',
+  },
+  {
+    user: "Identify all distinct content regions on this page. Reply with ONLY a JSON object — start with { and end with }.",
+    assistant: '{"regions":[{"type":"image","label":"Full-page illustration: dungeon battle scene","position":"full_page"},{"type":"caption","label":"Illustration credit text","position":"bottom"}]}',
+  },
+];
+
+const FEW_SHOT_OCR: InvokeOptions["fewShotExamples"] = [
+  {
+    user: "Extract all readable text from this page in reading order. Reply with ONLY a JSON object — start with { and end with }.",
+    assistant: '{"confidence":91,"content_blocks":[{"type":"heading","text":"Special Thanks to","sequence":1},{"type":"paragraph","text":"Whenever a project of this size is put together, there are many people who give their time and extra effort to see it through.","sequence":2},{"type":"list_item","text":"To Jon Pickens, who produced many obscure reference books.","sequence":3}],"page_summary":"Acknowledgements page crediting contributors to the book."}',
+  },
+  {
+    user: "Extract all readable text from this page in reading order. Reply with ONLY a JSON object — start with { and end with }.",
+    assistant: '{"confidence":88,"content_blocks":[{"type":"heading","text":"Troll","sequence":1},{"type":"stat_line","text":"Large Giant, chaotic evil","sequence":2},{"type":"stat_line","text":"Armor Class 15 (natural armor)","sequence":3},{"type":"stat_line","text":"Hit Points 84 (8d10+40)","sequence":4},{"type":"paragraph","text":"Regeneration. The troll regains 10 hit points at the start of its turn.","sequence":5}],"page_summary":"Troll monster stat block with regeneration ability."}',
+  },
+];
+
+// ── Shared invoke options for all OCR stages ─────────────────────────────────
+const JSON_INVOKE_OPTS: Partial<InvokeOptions> = {
+  prefillJson: true,
+  overrideBody: { temperature: 0, top_p: 0.95 },
+};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -206,7 +238,8 @@ async function _runJob(jobId: number): Promise<void> {
       for (const f of sampleFiles) sampleContent.push(await imageContent(f));
       sampleContent.push({ type: "text", text: "Extract the document metadata from these pages. Reply with ONLY a JSON object — start with { and end with }." });
 
-      const result = await invokeStage("document_intelligence", sampleContent, undefined, PROMPT_DOCUMENT_INTELLIGENCE);
+      const result = await invokeStage("document_intelligence", sampleContent, undefined, PROMPT_DOCUMENT_INTELLIGENCE,
+        { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_DOC_INTEL });
       const meta = parseJsonResponse(result.content);
 
       await updateDocument(documentId, {
@@ -242,7 +275,8 @@ async function _runJob(jobId: number): Promise<void> {
     // layout_analysis
     try {
       const layoutContent: UserContentPart[] = [imgPart, { type: "text", text: "Classify the layout type and structure of this page. Reply with ONLY a JSON object — start with { and end with }." }];
-      const r = await invokeStage("layout_analysis", layoutContent, undefined, PROMPT_LAYOUT_ANALYSIS);
+      const r = await invokeStage("layout_analysis", layoutContent, undefined, PROMPT_LAYOUT_ANALYSIS,
+        { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_LAYOUT });
       const data = parseJsonResponse(r.content);
       await updateDocumentPage(pageId, { layoutType: (data.layout_type as string) || undefined });
     } catch (err: any) {
@@ -256,7 +290,8 @@ async function _runJob(jobId: number): Promise<void> {
     try {
       await updateIngestionJobStatus(jobId, { currentStage: "bbox_detection" });
       const bboxContent: UserContentPart[] = [imgPart, { type: "text", text: "Identify all distinct content regions on this page. Reply with ONLY a JSON object — start with { and end with }." }];
-      const r = await invokeStage("bbox_detection", bboxContent, undefined, PROMPT_BBOX_DETECTION);
+      const r = await invokeStage("bbox_detection", bboxContent, undefined, PROMPT_BBOX_DETECTION,
+        { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_BBOX });
       const data = parseJsonResponse(r.content);
       regions = Array.isArray(data.regions) ? data.regions : [];
       await updateDocumentPage(pageId, { contentRegions: regions });
@@ -274,7 +309,8 @@ async function _runJob(jobId: number): Promise<void> {
         ? `Content regions already detected: ${JSON.stringify(regions.slice(0, 5))}`
         : undefined;
       const ocrContent: UserContentPart[] = [imgPart, { type: "text", text: "Extract all readable text from this page in reading order. Reply with ONLY a JSON object — start with { and end with }." }];
-      const r = await invokeStage("ocr_extraction", ocrContent, regionContext, PROMPT_OCR_EXTRACTION);
+      const r = await invokeStage("ocr_extraction", ocrContent, regionContext, PROMPT_OCR_EXTRACTION,
+        { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_OCR });
       const data = parseJsonResponse(r.content);
       ocrConfidence = typeof data.confidence === "number" ? data.confidence : 0;
 
