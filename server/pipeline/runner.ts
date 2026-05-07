@@ -64,7 +64,11 @@ Required output schema (include every readable text block):
 {"confidence":91,"content_blocks":[{"type":"…","text":"…","sequence":1}],"page_summary":"…"}
 
 confidence is an integer 0–100 reflecting extraction accuracy.
-type must be one of: heading, subheading, paragraph, list_item, table_row, caption, stat_line, page_number, sidebar`;
+type must be one of: heading, subheading, paragraph, list_item, table, caption, stat_line, page_number, sidebar
+
+IMPORTANT — tables MUST use this schema (never flatten a table into a text string):
+{"type":"table","caption":"optional title","headers":["Col1","Col2","Col3"],"rows":[["r1c1","r1c2","r1c3"],["r2c1","r2c2","r2c3"]],"sequence":N}
+If a column value is blank or not applicable use "" (empty string). Preserve ALL columns and ALL rows exactly as they appear.`;
 
 // ── Few-shot anchors — text-only examples showing direct input→output mapping ─
 // Using the same user wording as the real calls so the model sees the pattern.
@@ -109,7 +113,7 @@ const FEW_SHOT_OCR: InvokeOptions["fewShotExamples"] = [
   },
   {
     user: "Extract all readable text from this page in reading order. Reply with ONLY a JSON object — start with { and end with }.",
-    assistant: '{"confidence":88,"content_blocks":[{"type":"heading","text":"Troll","sequence":1},{"type":"stat_line","text":"Large Giant, chaotic evil","sequence":2},{"type":"stat_line","text":"Armor Class 15 (natural armor)","sequence":3},{"type":"stat_line","text":"Hit Points 84 (8d10+40)","sequence":4},{"type":"paragraph","text":"Regeneration. The troll regains 10 hit points at the start of its turn.","sequence":5}],"page_summary":"Troll monster stat block with regeneration ability."}',
+    assistant: '{"confidence":90,"content_blocks":[{"type":"heading","text":"Intelligence & Spell Knowledge","sequence":1},{"type":"paragraph","text":"The table below shows a wizard\'s chance to know each listed spell and the min/max spells per level based on Intelligence score.","sequence":2},{"type":"table","caption":"Chance to Know Each Listed Spell","headers":["Intelligence","Chance to Know Spell","Min Spells/Level","Max Spells/Level"],"rows":[["9","35%","6",""],["10","45%","7",""],["11","45%","7",""],["12","45%","7",""],["13","55%","9",""],["14","55%","9",""],["15","65%","11",""],["16","65%","11",""],["17","75%","14",""],["18","85%","18",""],["19","95%","All",""],["20","96%","All",""],["21","97%","All",""],["22","98%","All",""],["23","99%","All",""],["24","100%","All",""],["25","100%","All",""]],"sequence":3}],"page_summary":"Intelligence-based spell knowledge table for wizard characters showing chance to know spells and spells per level."}',
   },
 ];
 
@@ -325,7 +329,17 @@ async function _runJob(jobId: number): Promise<void> {
         pageId,
         structuredData: data,
         rawText: Array.isArray(data.content_blocks)
-          ? (data.content_blocks as any[]).map((b: any) => b.text ?? "").filter(Boolean).join("\n\n")
+          ? (data.content_blocks as any[]).map((b: any) => {
+              if (b.type === "table") {
+                const caption = b.caption ? `[Table: ${b.caption}]\n` : "[Table]\n";
+                const headers = Array.isArray(b.headers) ? b.headers.join("\t") + "\n" : "";
+                const rows = Array.isArray(b.rows)
+                  ? (b.rows as any[][]).map((r: any[]) => r.join("\t")).join("\n")
+                  : "";
+                return caption + headers + rows;
+              }
+              return b.text ?? "";
+            }).filter(Boolean).join("\n\n")
           : JSON.stringify(data),
         confidence: ocrConfidence,
         status: "pass1_complete",
