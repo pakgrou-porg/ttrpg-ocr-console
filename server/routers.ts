@@ -1281,14 +1281,15 @@ export const appRouter = router({
         return { success: true };
       }),
 
-    /** Get available connection types as a flat array */
+    /** Get available connection types */
     types: adminProcedure.query(() => {
       const labels: Record<string, string> = {
         supabase_local: "Supabase Local",
         supabase_cloud: "Supabase Cloud",
         postgres_docker: "PostgreSQL (Docker)",
       };
-      return SUPABASE_CONNECTION_TYPES.map(t => ({ id: t, label: labels[t] ?? t }));
+      const connectionTypes = SUPABASE_CONNECTION_TYPES.map(t => ({ id: t, label: labels[t] ?? t }));
+      return { connectionTypes };
     }),
   }),
 

@@ -82,7 +82,8 @@ export default function TheVaultNexus() {
   const [editForm, setEditForm] = useState(defaultForm);
 
   const { data: instances, isLoading, refetch } = trpc.connections.list.useQuery();
-  const { data: connectionTypes } = trpc.connections.types.useQuery();
+  const { data: typesData } = trpc.connections.types.useQuery();
+  const connectionTypes = typesData?.connectionTypes;
   const roles = [{ id: "primary", label: "Primary" }, { id: "secondary", label: "Secondary" }];
   const syncModes = [
     { id: "primary_only", label: "Primary Only" },
