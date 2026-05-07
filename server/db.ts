@@ -729,6 +729,17 @@ export async function clearIngestionJobsByStatus(statuses: string[]) {
   await db.delete(ingestionJobs).where(inArray(ingestionJobs.status, statuses));
 }
 
+export async function clearHitlItems(statuses: string[]) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const { inArray } = await import("drizzle-orm");
+  if (statuses.length === 0) {
+    await db.delete(hitlQueue);
+  } else {
+    await db.delete(hitlQueue).where(inArray(hitlQueue.status, statuses));
+  }
+}
+
 export async function purgeJobPages(jobId: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -1133,19 +1144,21 @@ export async function updateOcrResult(id: number, updates: Partial<InsertOcrResu
 
 const PRIORITY_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
 
-export async function getAllHitlItems(options?: { status?: string; priority?: string; limit?: number; orderByPriority?: boolean }) {
+export async function getAllHitlItems(options?: { status?: string; priority?: string; limit?: number; offset?: number; orderByPriority?: boolean }) {
   const db = await getDb();
   if (!db) return [];
   const conditions = [];
   if (options?.status) conditions.push(eq(hitlQueue.status, options.status as any));
   if (options?.priority) conditions.push(eq(hitlQueue.priority, options.priority as any));
 
+  const pageLimit = options?.limit ?? 100;
+  const pageOffset = options?.offset ?? 0;
   const query = db.select().from(hitlQueue);
   let results: any[];
   if (conditions.length > 0) {
-    results = await query.where(and(...conditions)).orderBy(asc(hitlQueue.createdAt)).limit(options?.limit ?? 100);
+    results = await query.where(and(...conditions)).orderBy(asc(hitlQueue.createdAt)).limit(pageLimit).offset(pageOffset);
   } else {
-    results = await query.orderBy(desc(hitlQueue.createdAt)).limit(options?.limit ?? 100);
+    results = await query.orderBy(desc(hitlQueue.createdAt)).limit(pageLimit).offset(pageOffset);
   }
   if (options?.orderByPriority) {
     results = results.sort((a, b) => {

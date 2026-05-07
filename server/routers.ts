@@ -13,7 +13,7 @@ import {
   getUserPermissions, setUserPermission, deleteUserPermission, getAllPermissionsForAllUsers,
   createInvitation, getAllInvitations, revokeInvitation,
   getAllSystemConfig, getSystemConfigByCategory, upsertSystemConfig, deleteSystemConfig,
-  getAllIngestionJobs, getActiveIngestionJobs, getIngestionJobById, createIngestionJob, updateIngestionJobStatus, getIngestionJobStats, deleteIngestionJob, clearIngestionJobsByStatus, cancelIngestionJobChain, purgeJobPages,
+  getAllIngestionJobs, getActiveIngestionJobs, getIngestionJobById, createIngestionJob, updateIngestionJobStatus, getIngestionJobStats, deleteIngestionJob, clearIngestionJobsByStatus, cancelIngestionJobChain, purgeJobPages, clearHitlItems,
   recordTelemetryEvent, getTelemetryEvents, getTelemetrySummary,
   pingDatabase,
   getAllLlmProviders, getLlmProviderById, createLlmProvider, updateLlmProvider, deleteLlmProvider,
@@ -1480,13 +1480,15 @@ export const appRouter = router({
       .input(z.object({
         status: z.enum(HITL_STATUSES).optional(),
         priority: z.enum(HITL_PRIORITIES).optional(),
-        limit: z.number().int().min(1).max(500).optional(),
+        limit: z.number().int().min(1).max(2000).optional(),
+        offset: z.number().int().min(0).optional(),
       }).optional())
       .query(async ({ input }) => {
         const items = await getAllHitlItems({
           status: input?.status,
           priority: input?.priority,
           limit: input?.limit,
+          offset: input?.offset,
         });
         // Enrich with page, OCR, and document info
         const enriched = await Promise.all(items.map(async (item) => {
@@ -1626,6 +1628,16 @@ export const appRouter = router({
           resolvedBy: ctx.user.id,
           resolvedAt: new Date(),
         });
+        return { success: true };
+      }),
+
+    /** Clear (delete) HITL items by status — useful during test cycles */
+    clear: adminProcedure
+      .input(z.object({
+        statuses: z.array(z.enum(HITL_STATUSES)).optional(),
+      }))
+      .mutation(async ({ input }) => {
+        await clearHitlItems(input.statuses ?? []);
         return { success: true };
       }),
 

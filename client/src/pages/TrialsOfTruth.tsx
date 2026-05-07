@@ -5,6 +5,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   CheckCircle2, XCircle, ArrowUpCircle, ChevronDown, ChevronRight,
   Loader2, ClipboardList, FileText, Layout, BoxSelect, ListTree, Braces, BookOpen,
+  Trash2, ChevronLeft,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useToast } from "@/hooks/use-toast";
@@ -390,18 +391,36 @@ function HitlCard({ item, onResolved }: { item: any; onResolved: () => void }) {
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
+const PAGE_SIZE = 25;
+
 export default function TrialsOfTruth() {
   const { toast } = useToast();
   const [statusFilter, setStatusFilter] = useState<"queued" | "resolved" | "escalated" | "skipped">("queued");
-  const { data: items, isLoading, refetch } = trpc.hitl.list.useQuery({ status: statusFilter, limit: 50 });
-  const { data: stats } = trpc.hitl.stats.useQuery();
+  const [page, setPage] = useState(0);
+
+  const { data: items, isLoading, refetch } = trpc.hitl.list.useQuery({
+    status: statusFilter,
+    limit: PAGE_SIZE,
+    offset: page * PAGE_SIZE,
+  });
+  const { data: stats, refetch: refetchStats } = trpc.hitl.stats.useQuery();
+
+  const onAction = () => { refetch(); refetchStats(); };
 
   const bulkApproveMut = trpc.hitl.bulkResolve.useMutation({
-    onSuccess: (r) => { toast({ title: `Approved ${r.count} items` }); refetch(); },
+    onSuccess: (r) => { toast({ title: `Approved ${r.count} items` }); onAction(); },
+    onError: (e) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+  const clearMut = trpc.hitl.clear.useMutation({
+    onSuccess: () => { toast({ title: "HITL items cleared" }); setPage(0); onAction(); },
     onError: (e) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
   const queuedIds = (items ?? []).filter((i: any) => i.status === "queued").map((i: any) => i.id);
+  const totalForStatus: number = stats?.[statusFilter] ?? 0;
+  const totalPages = Math.ceil(totalForStatus / PAGE_SIZE);
+
+  const switchFilter = (s: typeof statusFilter) => { setStatusFilter(s); setPage(0); };
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -419,15 +438,16 @@ export default function TrialsOfTruth() {
       {/* Stats */}
       {stats && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          {[
-            { label: "Awaiting Review", value: stats.queued,    color: "text-yellow-400" },
-            { label: "Resolved",        value: stats.resolved,  color: "text-green-400"  },
-            { label: "Escalated",       value: stats.escalated, color: "text-red-400"    },
-            { label: "Skipped",         value: stats.skipped,   color: "text-muted-foreground" },
-          ].map(({ label, value, color }) => (
-            <Card key={label} className="bg-card/50 backdrop-blur-sm border-border/50">
+          {([
+            { key: "queued",    label: "Awaiting Review", color: "text-yellow-400" },
+            { key: "resolved",  label: "Resolved",        color: "text-green-400"  },
+            { key: "escalated", label: "Escalated",       color: "text-red-400"    },
+            { key: "skipped",   label: "Skipped",         color: "text-muted-foreground" },
+          ] as const).map(({ key, label, color }) => (
+            <Card key={key} className="bg-card/50 backdrop-blur-sm border-border/50 cursor-pointer hover:border-border/80 transition-colors"
+              onClick={() => switchFilter(key)}>
               <CardContent className="pt-4 pb-3">
-                <p className={`text-3xl font-bold ${color}`}>{value}</p>
+                <p className={`text-3xl font-bold ${color}`}>{(stats as any)[key] ?? 0}</p>
                 <p className="text-xs text-muted-foreground mt-1">{label}</p>
               </CardContent>
             </Card>
@@ -437,27 +457,46 @@ export default function TrialsOfTruth() {
 
       {/* Filter + bulk actions */}
       <div className="flex items-center justify-between gap-4 flex-wrap">
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           {(["queued", "resolved", "escalated", "skipped"] as const).map(s => (
-            <button key={s} onClick={() => setStatusFilter(s)}
+            <button key={s} onClick={() => switchFilter(s)}
               className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
                 statusFilter === s ? "bg-primary text-primary-foreground" : "bg-muted/30 text-muted-foreground hover:text-foreground"
               }`}>
               {s.charAt(0).toUpperCase() + s.slice(1)}
+              {stats && <span className="ml-1.5 opacity-60 text-xs">({(stats as any)[s] ?? 0})</span>}
             </button>
           ))}
         </div>
-        {statusFilter === "queued" && queuedIds.length > 0 && (
-          <Button
-            variant="outline" size="sm"
-            className="gap-2 text-green-500 border-green-500/30 hover:bg-green-500/10"
-            onClick={() => { if (confirm(`Approve all ${queuedIds.length} queued items as-is?`)) bulkApproveMut.mutate({ ids: queuedIds }); }}
-            disabled={bulkApproveMut.isPending}
-          >
-            {bulkApproveMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-            Approve All ({queuedIds.length})
+
+        <div className="flex items-center gap-2 flex-wrap">
+          {statusFilter === "queued" && queuedIds.length > 0 && (
+            <Button variant="outline" size="sm"
+              className="gap-2 text-green-500 border-green-500/30 hover:bg-green-500/10"
+              onClick={() => { if (confirm(`Approve all ${queuedIds.length} queued items on this page as-is?`)) bulkApproveMut.mutate({ ids: queuedIds }); }}
+              disabled={bulkApproveMut.isPending}>
+              {bulkApproveMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+              Approve Page ({queuedIds.length})
+            </Button>
+          )}
+          <Button variant="outline" size="sm"
+            className="gap-2 text-red-400 border-red-500/30 hover:bg-red-500/10"
+            onClick={() => {
+              const label = statusFilter === "queued" ? "ALL queued" : `all ${statusFilter}`;
+              if (confirm(`Delete ${label} HITL items? This cannot be undone.`))
+                clearMut.mutate({ statuses: [statusFilter] });
+            }}
+            disabled={clearMut.isPending}>
+            <Trash2 className="w-4 h-4" />
+            Clear {statusFilter.charAt(0).toUpperCase() + statusFilter.slice(1)}
           </Button>
-        )}
+          <Button variant="outline" size="sm"
+            className="gap-2 text-muted-foreground border-border/30 hover:bg-red-500/10 hover:text-red-400 hover:border-red-500/30"
+            onClick={() => { if (confirm("Delete ALL HITL items across all statuses? This cannot be undone.")) clearMut.mutate({ statuses: [] }); }}
+            disabled={clearMut.isPending}>
+            <Trash2 className="w-4 h-4" /> Clear All
+          </Button>
+        </div>
       </div>
 
       {/* Items */}
@@ -471,11 +510,30 @@ export default function TrialsOfTruth() {
           <p>No {statusFilter} items in the queue.</p>
         </div>
       ) : (
-        <div className="space-y-3">
-          {items?.map((item: any) => (
-            <HitlCard key={item.id} item={item} onResolved={() => refetch()} />
-          ))}
-        </div>
+        <>
+          <div className="space-y-3">
+            {items?.map((item: any) => (
+              <HitlCard key={item.id} item={item} onResolved={onAction} />
+            ))}
+          </div>
+
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-center gap-3 pt-2">
+              <Button variant="outline" size="sm" className="gap-1.5"
+                onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0}>
+                <ChevronLeft className="w-4 h-4" /> Prev
+              </Button>
+              <span className="text-sm text-muted-foreground">
+                Page {page + 1} of {totalPages} ({totalForStatus} total)
+              </span>
+              <Button variant="outline" size="sm" className="gap-1.5"
+                onClick={() => setPage(p => p + 1)} disabled={(items?.length ?? 0) < PAGE_SIZE}>
+                Next <ChevronDown className="w-4 h-4 rotate-[-90deg]" />
+              </Button>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
