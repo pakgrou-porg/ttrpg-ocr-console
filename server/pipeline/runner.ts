@@ -303,6 +303,8 @@ async function _runJob(jobId: number): Promise<void> {
     const pageId = pageIds[i];
     const pagePath = pageFiles[i];
     const stagesFailed: string[] = [];
+    let ocrConfidence = 0;
+    let ocrResultId: number | null = null;
 
     await updateIngestionJobStatus(jobId, { currentStage: "layout_analysis", processedPages });
 
@@ -341,8 +343,6 @@ async function _runJob(jobId: number): Promise<void> {
     }
 
     // ocr_extraction
-    let ocrConfidence = 0;
-    let ocrResultId: number | null = null;
     try {
       await updateIngestionJobStatus(jobId, { currentStage: "ocr_extraction" });
       const regionContext = regions.length > 0
