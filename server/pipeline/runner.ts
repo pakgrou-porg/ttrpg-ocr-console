@@ -75,12 +75,13 @@ async function _runJob(jobId: number): Promise<void> {
     console.log(`[Pipeline] Job ${jobId}: downloaded "${fileName}" from Google Drive`);
   }
 
-  const documentId = await createDocument({
+  const createdDoc = await createDocument({
     filename: basename(sourceFile),
     gameSystem: job.gameSystem ?? undefined,
     status: "phase1_non_ocr",
     ingestionJobId: jobId,
   });
+  const documentId = createdDoc.id;
 
   // ── Stage: pdf_to_png ─────────────────────────────────────────────────────
   await updateIngestionJobStatus(jobId, { currentStage: "pdf_to_png" });
