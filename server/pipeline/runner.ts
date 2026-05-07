@@ -81,9 +81,11 @@ async function _runJob(jobId: number): Promise<void> {
 
   // ── Stage: pdf_to_png ─────────────────────────────────────────────────────
   await updateIngestionJobStatus(jobId, { currentStage: "pdf_to_png" });
+  console.log(`[Pipeline] Job ${jobId}: converting PDF to PNG (first ${MAX_PAGES} pages)…`);
 
-  let pageFiles = await convertToPages(sourceFile, pagesDir);
+  let pageFiles = await convertToPages(sourceFile, pagesDir, MAX_PAGES);
   if (pageFiles.length === 0) throw new Error("No pages produced from source file");
+  console.log(`[Pipeline] Job ${jobId}: converted ${pageFiles.length} pages`);
 
   // Delete the Drive temp download now that pages are extracted
   if (tempDownloadPath) await deleteLocalFile(tempDownloadPath);
@@ -242,13 +244,19 @@ async function _runJob(jobId: number): Promise<void> {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-async function convertToPages(sourceFile: string, pagesDir: string): Promise<string[]> {
+async function convertToPages(sourceFile: string, pagesDir: string, maxPages = MAX_PAGES): Promise<string[]> {
   if (/\.(png|jpe?g|webp|tiff?)$/i.test(sourceFile)) {
     return [sourceFile];
   }
   if (/\.pdf$/i.test(sourceFile)) {
     const outputPrefix = join(pagesDir, "page");
-    await execFileAsync("pdftoppm", ["-png", "-r", "150", sourceFile, outputPrefix]);
+    // -l limits conversion to first maxPages pages — avoids processing a 200-page PDF
+    // when we only need 10. Timeout: 3 minutes for large PDFs.
+    await execFileAsync(
+      "pdftoppm",
+      ["-png", "-r", "150", "-l", String(maxPages), sourceFile, outputPrefix],
+      { timeout: 180_000 },
+    );
     const files = await readdir(pagesDir);
     return files
       .filter(f => f.endsWith(".png"))
