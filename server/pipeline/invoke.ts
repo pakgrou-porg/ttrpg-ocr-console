@@ -53,35 +53,12 @@ export interface InvokeOptions {
   overrideBody?: Record<string, unknown>;
 }
 
-export async function invokeStage(
-  stage: string,
-  userContent: UserContentPart[],
-  extraSystemContext?: string,
-  fallbackSystemPrompt?: string,
+async function buildProviderCall(
+  provider: any,
+  messages: any[],
+  inscription: { temperature?: number | null; maxTokens?: number | null; llmSettings?: unknown },
   options?: InvokeOptions,
-): Promise<StageInvokeResult> {
-  const inscription = await getStageInscriptionByStage(stage);
-  if (!inscription) throw new Error(`[CONFIG] No stage inscription configured for "${stage}". Add an inscription in Conclave → Stage Inscriptions.`);
-  if (!inscription.isActive) throw new Error(`Stage ${stage} inscription is inactive`);
-
-  const providerId = inscription.primaryProviderId;
-  if (!providerId) throw new Error(`[CONFIG] No provider assigned to stage "${stage}". Assign a provider in Conclave → Stage Inscriptions.`);
-
-  const provider = await getLlmProviderById(providerId);
-  if (!provider) throw new Error(`Provider ${providerId} not found`);
-
-  let systemPrompt = "";
-  if (inscription.promptName) {
-    const prompt = await getSystemPromptByName(inscription.promptName);
-    if (prompt?.content) systemPrompt = prompt.content;
-  }
-  if (!systemPrompt && fallbackSystemPrompt) {
-    systemPrompt = fallbackSystemPrompt;
-  }
-  if (extraSystemContext) {
-    systemPrompt = systemPrompt ? `${systemPrompt}\n\n${extraSystemContext}` : extraSystemContext;
-  }
-
+): Promise<{ url: string; headers: Record<string, string>; body: Record<string, unknown> }> {
   const host = provider.baseUrl.replace(/\/$/, "");
   const portStr = provider.port ? `:${provider.port}` : "";
   const prefix = (provider.apiPrefix ?? "/v1").replace(/\/$/, "");
@@ -101,24 +78,6 @@ export async function invokeStage(
     }
   }
 
-  const messages: any[] = [];
-  if (systemPrompt.trim()) messages.push({ role: "system", content: systemPrompt });
-
-  // Few-shot examples before the real request
-  if (options?.fewShotExamples) {
-    for (const ex of options.fewShotExamples) {
-      messages.push({ role: "user",      content: ex.user });
-      messages.push({ role: "assistant", content: ex.assistant });
-    }
-  }
-
-  messages.push({ role: "user", content: userContent });
-
-  // Assistant pre-fill forces the model to start with { immediately
-  if (options?.prefillJson) {
-    messages.push({ role: "assistant", content: "{" });
-  }
-
   const body: Record<string, unknown> = {
     messages,
     temperature: inscription.temperature ?? provider.defaultTemperature ?? 0.2,
@@ -128,7 +87,20 @@ export async function invokeStage(
   if (inscription.llmSettings) Object.assign(body, inscription.llmSettings);
   if (options?.overrideBody)   Object.assign(body, options.overrideBody);
 
-  const res = await fetchWithRetry(url, {
+  return { url, headers, body };
+}
+
+async function dispatchToProvider(
+  stage: string,
+  provider: any,
+  messages: any[],
+  inscription: { temperature?: number | null; maxTokens?: number | null; llmSettings?: unknown },
+  options?: InvokeOptions,
+  withRetry = true,
+): Promise<StageInvokeResult> {
+  const { url, headers, body } = await buildProviderCall(provider, messages, inscription, options);
+  const fetchFn = withRetry ? fetchWithRetry : fetch;
+  const res = await fetchFn(url, {
     method: "POST",
     headers,
     body: JSON.stringify(body),
@@ -146,7 +118,6 @@ export async function invokeStage(
     ? rawContent
     : (rawContent as any[]).filter((p: any) => p.type === "text").map((p: any) => p.text).join("");
 
-  // When pre-filling with "{", the API returns the completion without the prefix
   if (options?.prefillJson && !content.trimStart().startsWith("{")) {
     content = "{" + content;
   }
@@ -155,8 +126,76 @@ export async function invokeStage(
     content,
     model: data.model ?? provider.defaultModelId ?? "",
     tokensUsed: data.usage?.total_tokens ?? 0,
-    providerId,
+    providerId: provider.id,
   };
+}
+
+export async function invokeStage(
+  stage: string,
+  userContent: UserContentPart[],
+  extraSystemContext?: string,
+  fallbackSystemPrompt?: string,
+  options?: InvokeOptions,
+): Promise<StageInvokeResult> {
+  const inscription = await getStageInscriptionByStage(stage);
+  if (!inscription) throw new Error(`[CONFIG] No stage inscription configured for "${stage}". Add an inscription in Conclave → Stage Inscriptions.`);
+  if (!inscription.isActive) throw new Error(`Stage ${stage} inscription is inactive`);
+
+  const providerId = inscription.primaryProviderId;
+  if (!providerId) throw new Error(`[CONFIG] No provider assigned to stage "${stage}". Assign a provider in Conclave → Stage Inscriptions.`);
+
+  const primary = await getLlmProviderById(providerId);
+  if (!primary) throw new Error(`Provider ${providerId} not found`);
+
+  let systemPrompt = "";
+  if (inscription.promptName) {
+    const prompt = await getSystemPromptByName(inscription.promptName);
+    if (prompt?.content) systemPrompt = prompt.content;
+  }
+  if (!systemPrompt && fallbackSystemPrompt) {
+    systemPrompt = fallbackSystemPrompt;
+  }
+  if (extraSystemContext) {
+    systemPrompt = systemPrompt ? `${systemPrompt}\n\n${extraSystemContext}` : extraSystemContext;
+  }
+
+  const messages: any[] = [];
+  if (systemPrompt.trim()) messages.push({ role: "system", content: systemPrompt });
+  if (options?.fewShotExamples) {
+    for (const ex of options.fewShotExamples) {
+      messages.push({ role: "user",      content: ex.user });
+      messages.push({ role: "assistant", content: ex.assistant });
+    }
+  }
+  messages.push({ role: "user", content: userContent });
+  if (options?.prefillJson) {
+    messages.push({ role: "assistant", content: "{" });
+  }
+
+  // ── Primary attempt (with full retry loop) ───────────────────────────────
+  try {
+    return await dispatchToProvider(stage, primary, messages, inscription, options, true);
+  } catch (primaryErr: any) {
+    const fallbackProviderId = (inscription as any).fallbackProviderId as number | null | undefined;
+    if (!fallbackProviderId) throw primaryErr; // no fallback configured — propagate original error
+
+    console.warn(`[invoke] ${stage} primary provider failed (${primaryErr?.message?.slice(0, 120)}), trying fallback provider…`);
+
+    const fallback = await getLlmProviderById(fallbackProviderId);
+    if (!fallback) throw primaryErr; // fallback provider record missing — propagate original error
+
+    // ── Fallback attempt (single shot, no retry loop) ────────────────────
+    try {
+      const result = await dispatchToProvider(stage, fallback, messages, inscription, options, false);
+      console.log(`[invoke] ${stage} fallback provider succeeded (model: ${result.model})`);
+      return result;
+    } catch (fallbackErr: any) {
+      // Both failed — throw a combined error so the caller sees the full picture
+      throw new Error(
+        `[${stage}] Both providers failed. Primary: ${primaryErr?.message?.slice(0, 200)}. Fallback: ${fallbackErr?.message?.slice(0, 200)}`
+      );
+    }
+  }
 }
 
 export function parseJsonResponse(content: string): Record<string, unknown> {
