@@ -1585,10 +1585,14 @@ export const appRouter = router({
         priority: z.enum(HITL_PRIORITIES).default("medium"),
       }))
       .mutation(async ({ input }) => {
+        // Prevent duplicate: if any open item already exists for this page, return it
+        const existing = await getHitlItemsByPageId(input.pageId);
+        const open = existing.find(i => i.status === "queued" || i.status === "in_progress" || i.status === "escalated");
+        if (open) return { success: true, id: open.id, alreadyQueued: true };
+
         const item = await createHitlItem(input);
-        // Also mark the page as flagged
         await updateDocumentPage(input.pageId, { isFlagged: true });
-        return { success: true, id: item.id };
+        return { success: true, id: item.id, alreadyQueued: false };
       }),
 
     /** Assign a HITL item to a reviewer */
