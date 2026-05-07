@@ -114,9 +114,15 @@ const FEW_SHOT_OCR: InvokeOptions["fewShotExamples"] = [
 ];
 
 // ── Shared invoke options for all OCR stages ─────────────────────────────────
+// response_format forces JSON-constrained sampling at the vLLM token level —
+// the model cannot physically emit non-JSON tokens regardless of its tendencies.
 const JSON_INVOKE_OPTS: Partial<InvokeOptions> = {
   prefillJson: true,
-  overrideBody: { temperature: 0, top_p: 0.95 },
+  overrideBody: {
+    temperature: 0,
+    top_p: 0.95,
+    response_format: { type: "json_object" },
+  },
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
