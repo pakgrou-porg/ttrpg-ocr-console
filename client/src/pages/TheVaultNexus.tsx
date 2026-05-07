@@ -82,7 +82,13 @@ export default function TheVaultNexus() {
   const [editForm, setEditForm] = useState(defaultForm);
 
   const { data: instances, isLoading, refetch } = trpc.connections.list.useQuery();
-  const { data: typesMeta } = trpc.connections.types.useQuery();
+  const { data: connectionTypes } = trpc.connections.types.useQuery();
+  const roles = [{ id: "primary", label: "Primary" }, { id: "secondary", label: "Secondary" }];
+  const syncModes = [
+    { id: "primary_only", label: "Primary Only" },
+    { id: "mirror",       label: "Mirror (Both)" },
+    { id: "failover",     label: "Failover" },
+  ];
 
   const createMutation = trpc.connections.create.useMutation({
     onSuccess: () => { toast.success("Supabase instance registered."); refetch(); setIsCreateOpen(false); setForm(defaultForm); },
@@ -233,7 +239,7 @@ export default function TheVaultNexus() {
                   }}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      {typesMeta?.connectionTypes.map(t => (
+                      {connectionTypes?.map(t => (
                         <SelectItem key={t.id} value={t.id}>{t.label}</SelectItem>
                       ))}
                     </SelectContent>
@@ -244,7 +250,7 @@ export default function TheVaultNexus() {
                   <Select value={form.role} onValueChange={v => f("role", v)}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      {typesMeta?.roles.map(r => (
+                      {roles.map(r => (
                         <SelectItem key={r.id} value={r.id}>{r.label}</SelectItem>
                       ))}
                     </SelectContent>
@@ -258,7 +264,7 @@ export default function TheVaultNexus() {
                 <Select value={form.syncMode} onValueChange={v => f("syncMode", v)}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {typesMeta?.syncModes.map(m => (
+                    {syncModes.map(m => (
                       <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>
                     ))}
                   </SelectContent>

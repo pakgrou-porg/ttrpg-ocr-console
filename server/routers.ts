@@ -13,7 +13,7 @@ import {
   getUserPermissions, setUserPermission, deleteUserPermission, getAllPermissionsForAllUsers,
   createInvitation, getAllInvitations, revokeInvitation,
   getAllSystemConfig, getSystemConfigByCategory, upsertSystemConfig, deleteSystemConfig,
-  getAllIngestionJobs, getActiveIngestionJobs, getIngestionJobById, createIngestionJob, updateIngestionJobStatus, getIngestionJobStats,
+  getAllIngestionJobs, getActiveIngestionJobs, getIngestionJobById, createIngestionJob, updateIngestionJobStatus, getIngestionJobStats, deleteIngestionJob, clearIngestionJobsByStatus,
   recordTelemetryEvent, getTelemetryEvents, getTelemetrySummary,
   pingDatabase,
   getAllLlmProviders, getLlmProviderById, createLlmProvider, updateLlmProvider, deleteLlmProvider,
@@ -23,8 +23,10 @@ import {
   getPagesByDocumentId, getPageById, getPageByPhash, createDocumentPage, updateDocumentPage,
   getOcrResultByPageId, getOcrResultById, createOcrResult, updateOcrResult,
   getHitlItemById, getHitlItemsByPageId, getAllHitlItems, createHitlItem, updateHitlItem, getHitlStats,
+  getAllGameSystems, createGameSystem, updateGameSystem, deleteGameSystem,
 } from "./db";
 import { encryptSecret, decryptSecret, storeSecretHint, renderMaskedSecret } from "./crypto";
+import { startJob } from "./pipeline/runner";
 import { ENV } from "./_core/env";
 import { FEATURE_AREAS, PROVIDER_TYPES, PIPELINE_STAGES, SUPABASE_CONNECTION_TYPES, SUPABASE_ROLES, SUPABASE_SYNC_MODES, DOCUMENT_STATUSES, OCR_RESULT_STATUSES, HITL_PRIORITIES, HITL_STATUSES } from "../drizzle/schema";
 
@@ -265,20 +267,43 @@ export const appRouter = router({
       return getIngestionJobStats();
     }),
 
-    /** Create a new ingestion job */
+    /** Create a new ingestion job and start the pipeline */
     create: adminProcedure
       .input(z.object({
         sourceFile: z.string().max(512),
         gameSystem: z.string().max(128).optional(),
-        totalPages: z.number().int().min(0).default(0),
+        storageProvider: z.enum(["local", "google_drive"]).default("local"),
+        driveFileId: z.string().max(512).optional(),
+        pageOffset: z.number().int().min(0).default(0),
+        blockSize: z.number().int().min(1).max(50).default(10),
       }))
       .mutation(async ({ input }) => {
         const id = await createIngestionJob({
           sourceFile: input.sourceFile,
           gameSystem: input.gameSystem,
-          totalPages: input.totalPages,
-        });
+          storageProvider: input.storageProvider,
+          driveFileId: input.driveFileId,
+          pageOffset: input.pageOffset,
+          blockSize: input.blockSize,
+        } as any);
+        startJob(id);
         return { success: true, id };
+      }),
+
+    /** Delete a single job by ID */
+    delete: adminProcedure
+      .input(z.object({ id: z.number().int() }))
+      .mutation(async ({ input }) => {
+        await deleteIngestionJob(input.id);
+        return { success: true };
+      }),
+
+    /** Clear all jobs with the given statuses */
+    clear: adminProcedure
+      .input(z.object({ statuses: z.array(z.string()).min(1) }))
+      .mutation(async ({ input }) => {
+        await clearIngestionJobsByStatus(input.statuses);
+        return { success: true };
       }),
 
     /** Update job status (used by pipeline workers) */
@@ -1256,21 +1281,15 @@ export const appRouter = router({
         return { success: true };
       }),
 
-    /** Get available types, roles, and sync modes */
-    types: adminProcedure.query(() => ({
-      connectionTypes: SUPABASE_CONNECTION_TYPES.map(t => ({
-        id: t,
-        label: t === "supabase_local" ? "Supabase Local" : "Supabase Cloud",
-      })),
-      roles: SUPABASE_ROLES.map(r => ({
-        id: r,
-        label: r.charAt(0).toUpperCase() + r.slice(1),
-      })),
-      syncModes: SUPABASE_SYNC_MODES.map(m => ({
-        id: m,
-        label: { primary_only: "Primary Only", mirror: "Mirror (Both)", failover: "Failover" }[m] ?? m,
-      })),
-    })),
+    /** Get available connection types as a flat array */
+    types: adminProcedure.query(() => {
+      const labels: Record<string, string> = {
+        supabase_local: "Supabase Local",
+        supabase_cloud: "Supabase Cloud",
+        postgres_docker: "PostgreSQL (Docker)",
+      };
+      return SUPABASE_CONNECTION_TYPES.map(t => ({ id: t, label: labels[t] ?? t }));
+    }),
   }),
 
   // ─── Library (Documents & Pages — Enter the Arkanum) ─────────────────────
@@ -1843,6 +1862,69 @@ export const appRouter = router({
           flaggedCount: flaggedPages.filter(Boolean).length,
           percentComplete: pages.length > 0 ? Math.round((ocrCompleteCount / pages.length) * 100) : 0,
         };
+      }),
+  }),
+
+  // ─── Google Drive ─────────────────────────────────────────────────────────────
+  google: router({
+    status: protectedProcedure.query(async () => {
+      const { isGoogleConnected } = await import("./pipeline/drive");
+      const connected = await isGoogleConnected();
+      return { connected, clientId: ENV.googleClientId || null };
+    }),
+
+    getAccessToken: adminProcedure.query(async () => {
+      const { getGoogleAccessToken } = await import("./pipeline/drive");
+      try {
+        const accessToken = await getGoogleAccessToken();
+        return { accessToken };
+      } catch {
+        return { accessToken: null };
+      }
+    }),
+
+    disconnect: adminProcedure.mutation(async () => {
+      const { clearGoogleTokens } = await import("./pipeline/drive");
+      await clearGoogleTokens();
+      return { success: true };
+    }),
+  }),
+
+  // ─── Game Systems ─────────────────────────────────────────────────────────────
+  gameSystems: router({
+    list: protectedProcedure.query(() => getAllGameSystems(true)),
+
+    listAll: adminProcedure.query(() => getAllGameSystems(false)),
+
+    create: adminProcedure
+      .input(z.object({
+        name: z.string().min(1).max(128),
+        abbreviation: z.string().max(32).optional(),
+        sortOrder: z.number().int().default(0),
+      }))
+      .mutation(async ({ input }) => {
+        return createGameSystem({ ...input, isActive: true });
+      }),
+
+    update: adminProcedure
+      .input(z.object({
+        id: z.number().int(),
+        name: z.string().min(1).max(128).optional(),
+        abbreviation: z.string().max(32).nullable().optional(),
+        sortOrder: z.number().int().optional(),
+        isActive: z.boolean().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const { id, ...updates } = input;
+        await updateGameSystem(id, updates as any);
+        return { success: true };
+      }),
+
+    delete: adminProcedure
+      .input(z.object({ id: z.number().int() }))
+      .mutation(async ({ input }) => {
+        await deleteGameSystem(input.id);
+        return { success: true };
       }),
   }),
 });

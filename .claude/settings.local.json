@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__mcp-registry__search_mcp_registry",
+      "mcp__supabase__list_organizations",
+      "mcp__supabase__list_projects",
+      "Bash(git add *)",
+      "Bash(git rm *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(gh pr create --title 'feat: migrate database backend from MySQL to Supabase/PostgreSQL' --body ' *)",
+      "PowerShell(gh run view 25400182024 --repo pakgrou-porg/ttrpg-ocr-console)",
+      "WebFetch(domain:github.com)",
+      "PowerShell($env:PATH = \"$env:APPDATA\\\\npm;$env:PATH\"; cd \"C:\\\\Users\\\\karlm\\\\git_repos\\\\ttrpg-ocr-console\"; pnpm install --no-frozen-lockfile 2>&1 | Select-Object -Last 15)",
+      "Bash(gh run *)",
+      "WebFetch(domain:api.github.com)",
+      "Bash(curl -s \"https://api.github.com/repos/pakgrou-porg/ttrpg-ocr-console/actions/runs?per_page=5\")",
+      "Bash(git tag *)",
+      "Bash(pnpm install *)",
+      "Bash(git commit *)",
+      "Bash(xargs grep *)",
+      "mcp__Claude_in_Chrome__tabs_context_mcp",
+      "mcp__Claude_in_Chrome__select_browser",
+      "mcp__Claude_in_Chrome__navigate",
+      "mcp__Claude_in_Chrome__computer",
+      "mcp__Claude_in_Chrome__get_page_text",
+      "mcp__Claude_in_Chrome__read_page",
+      "mcp__Claude_in_Chrome__find"
+    ]
+  }
+}

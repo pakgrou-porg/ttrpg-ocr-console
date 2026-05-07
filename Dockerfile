@@ -45,6 +45,9 @@ RUN pnpm build
 # ─── Stage 2: Production image ───────────────────────────────────────────────
 FROM node:22-alpine AS runner
 
+# poppler-utils provides pdftoppm, used by the pipeline to convert PDFs to PNGs
+RUN apk add --no-cache poppler-utils
+
 # Install the same pinned pnpm version
 RUN npm install -g pnpm@10.4.1
 
