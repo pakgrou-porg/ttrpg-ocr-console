@@ -130,6 +130,27 @@ const JSON_INVOKE_OPTS: Partial<InvokeOptions> = {
   },
 };
 
+// ── Concurrency limiter ───────────────────────────────────────────────────────
+// Shared across all concurrent jobs — at most 4 pages may be in the LLM-call
+// stages (layout → bbox → OCR) simultaneously to avoid overwhelming the local
+// inference server and triggering 5-minute timeouts.
+
+class Semaphore {
+  private slots: number;
+  private readonly queue: Array<() => void> = [];
+  constructor(max: number) { this.slots = max; }
+  acquire(): Promise<void> {
+    if (this.slots > 0) { this.slots--; return Promise.resolve(); }
+    return new Promise(resolve => this.queue.push(resolve));
+  }
+  release(): void {
+    const next = this.queue.shift();
+    if (next) { next(); } else { this.slots++; }
+  }
+}
+
+const PAGE_LLM_SEMAPHORE = new Semaphore(4);
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function isConfigError(err: any): boolean {
@@ -283,6 +304,10 @@ async function _runJob(jobId: number): Promise<void> {
 
     const imgPart = await imageContent(pagePath);
 
+    await PAGE_LLM_SEMAPHORE.acquire();
+    console.log(`[Pipeline] Job ${jobId}: page ${pageNum} acquired LLM slot`);
+    try {
+
     // layout_analysis
     try {
       const layoutContent: UserContentPart[] = [imgPart, { type: "text", text: "Classify the layout type and structure of this page. Reply with ONLY a JSON object — start with { and end with }." }];
@@ -370,6 +395,10 @@ async function _runJob(jobId: number): Promise<void> {
         flagCategory: stagesFailed.length > 0 ? "stage_failure" : "low_confidence",
         priority: stagesFailed.includes("ocr_extraction") || ocrConfidence < 50 ? "high" : "medium",
       });
+    }
+
+    } finally {
+      PAGE_LLM_SEMAPHORE.release();
     }
 
     confidences.push(ocrConfidence);
