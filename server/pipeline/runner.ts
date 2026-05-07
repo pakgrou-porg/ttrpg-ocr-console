@@ -121,6 +121,7 @@ const JSON_INVOKE_OPTS: Partial<InvokeOptions> = {
   overrideBody: {
     temperature: 0,
     top_p: 0.95,
+    max_tokens: 16384,          // dense pages can produce many content_blocks
     response_format: { type: "json_object" },
   },
 };

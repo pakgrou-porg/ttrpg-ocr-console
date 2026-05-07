@@ -174,6 +174,10 @@ export function parseJsonResponse(content: string): Record<string, unknown> {
     let depth = 0;
     let inStr = false;
     let esc = false;
+    // Track the position of the last '},\n' or '},' at depth==1 so we can
+    // recover when the response is truncated mid-array (max_tokens hit).
+    let lastDepth1Close = -1;
+
     for (let i = start; i < cleaned.length; i++) {
       const ch = cleaned[i];
       if (esc)              { esc = false; continue; }
@@ -181,9 +185,36 @@ export function parseJsonResponse(content: string): Record<string, unknown> {
       if (ch === '"')       { inStr = !inStr; continue; }
       if (inStr)            continue;
       if (ch === "{")       depth++;
-      if (ch === "}" && --depth === 0) {
-        try { return JSON.parse(cleaned.slice(start, i + 1)); } catch {}
-        break;
+      if (ch === "}") {
+        if (--depth === 0) {
+          try { return JSON.parse(cleaned.slice(start, i + 1)); } catch {}
+          break;
+        }
+        // Remember last safe close-of-array-item position (depth back to 1)
+        if (depth === 1) lastDepth1Close = i;
+      }
+    }
+
+    // ── Truncation recovery ──────────────────────────────────────────────────
+    // The response was cut off before JSON was complete (max_tokens hit).
+    // Try to close the structure at the last known-safe point so we can
+    // salvage whatever content blocks were fully generated.
+
+    // Strategy 1: close at the last depth-1 item boundary
+    if (lastDepth1Close > start) {
+      const suffixes = ["]}", "], \"page_summary\": \"(truncated)\"}"];
+      for (const suffix of suffixes) {
+        try { return JSON.parse(cleaned.slice(start, lastDepth1Close + 1) + suffix); } catch {}
+      }
+    }
+
+    // Strategy 2: brute-force trim from the end — try progressively shorter
+    // slices and see if appending closing chars makes it valid JSON
+    const closers = ["}", "}}", "}]}", "}]}\"}"];
+    for (let trim = 0; trim < Math.min(200, cleaned.length - start); trim++) {
+      const candidate = cleaned.slice(start, cleaned.length - trim);
+      for (const c of closers) {
+        try { return JSON.parse(candidate + c); } catch {}
       }
     }
   }
