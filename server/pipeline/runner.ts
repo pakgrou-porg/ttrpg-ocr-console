@@ -16,6 +16,71 @@ const execFileAsync = promisify(execFile);
 
 const WORKSPACE = process.env.PIPELINE_WORKSPACE ?? "/app/workspace";
 
+// ── Fallback system prompts (used when no DB prompt is configured for a stage) ─
+
+const PROMPT_DOCUMENT_INTELLIGENCE = `You are a document metadata extractor for TTRPG (tabletop role-playing game) publications.
+Examine the provided page images and extract document metadata.
+
+CRITICAL: Return ONLY a valid JSON object. No markdown, no explanation, no preamble, no code fences.
+Your response must start with { and end with }.
+
+Required JSON schema:
+{
+  "canonical_title": "string — official document title as it appears on the cover or title page",
+  "publisher": "string or null — publishing company name",
+  "document_type": "string — one of: rulebook, sourcebook, adventure, supplement, setting, magazine, other",
+  "document_summary": "string — 1-2 sentence description of what this document is",
+  "game_system": "string or null — e.g. D&D 5e, AD&D, Pathfinder 2e, Call of Cthulhu"
+}`;
+
+const PROMPT_LAYOUT_ANALYSIS = `You are a document layout classifier. Examine the page image and identify its layout type and structure.
+
+CRITICAL: Return ONLY a valid JSON object. No markdown, no explanation, no preamble, no code fences.
+Your response must start with { and end with }.
+
+Required JSON schema:
+{
+  "layout_type": "string — one of: cover, title_page, toc, chapter_header, body_text, stat_block, table, illustration_full, illustration_with_text, index, appendix, mixed",
+  "columns": number,
+  "has_table": boolean,
+  "has_image_or_art": boolean,
+  "has_list": boolean
+}`;
+
+const PROMPT_BBOX_DETECTION = `You are a document content-region detector. Identify the distinct content regions present in the page image.
+
+CRITICAL: Return ONLY a valid JSON object. No markdown, no explanation, no preamble, no code fences.
+Your response must start with { and end with }.
+
+Required JSON schema:
+{
+  "regions": [
+    {
+      "type": "string — one of: heading, subheading, paragraph, table, list, image, stat_block, sidebar, caption, header, footer, page_number",
+      "label": "string — brief description of this region's content",
+      "position": "string — one of: top, upper_left, upper_right, middle, lower_left, lower_right, bottom, full_page"
+    }
+  ]
+}`;
+
+const PROMPT_OCR_EXTRACTION = `You are an OCR text extraction system for TTRPG document pages. Extract ALL readable text from the page image in reading order.
+
+CRITICAL: Return ONLY a valid JSON object. No markdown, no explanation, no preamble, no code fences.
+Your response must start with { and end with }.
+
+Required JSON schema:
+{
+  "confidence": number (0-100, your confidence in the overall extraction accuracy),
+  "content_blocks": [
+    {
+      "type": "string — one of: heading, subheading, paragraph, list_item, table_row, caption, stat_line, page_number, sidebar",
+      "text": "string — the exact extracted text for this block",
+      "sequence": number
+    }
+  ],
+  "page_summary": "string — one sentence describing the main content of this page"
+}`;
+
 // ── Public entry point ────────────────────────────────────────────────────────
 
 export function startJob(jobId: number): void {
@@ -127,9 +192,9 @@ async function _runJob(jobId: number): Promise<void> {
     try {
       const sampleContent: UserContentPart[] = [];
       for (const f of sampleFiles) sampleContent.push(await imageContent(f));
-      sampleContent.push({ type: "text", text: "Analyze these document pages and extract the metadata." });
+      sampleContent.push({ type: "text", text: "Extract the document metadata from these pages as JSON." });
 
-      const result = await invokeStage("document_intelligence", sampleContent);
+      const result = await invokeStage("document_intelligence", sampleContent, undefined, PROMPT_DOCUMENT_INTELLIGENCE);
       const meta = parseJsonResponse(result.content);
 
       await updateDocument(documentId, {
@@ -161,11 +226,11 @@ async function _runJob(jobId: number): Promise<void> {
     await updateIngestionJobStatus(jobId, { currentStage: "layout_analysis", processedPages });
 
     const imgPart = await imageContent(pagePath);
-    const pageContent: UserContentPart[] = [imgPart, { type: "text", text: "Analyze this page." }];
 
     // layout_analysis
     try {
-      const r = await invokeStage("layout_analysis", pageContent);
+      const layoutContent: UserContentPart[] = [imgPart, { type: "text", text: "Classify the layout type and structure of this page as JSON." }];
+      const r = await invokeStage("layout_analysis", layoutContent, undefined, PROMPT_LAYOUT_ANALYSIS);
       const data = parseJsonResponse(r.content);
       await updateDocumentPage(pageId, { layoutType: (data.layout_type as string) || undefined });
     } catch (err: any) {
@@ -177,12 +242,13 @@ async function _runJob(jobId: number): Promise<void> {
     let regions: any[] = [];
     try {
       await updateIngestionJobStatus(jobId, { currentStage: "bbox_detection" });
-      const r = await invokeStage("bbox_detection", pageContent);
+      const bboxContent: UserContentPart[] = [imgPart, { type: "text", text: "Identify all distinct content regions on this page as JSON." }];
+      const r = await invokeStage("bbox_detection", bboxContent, undefined, PROMPT_BBOX_DETECTION);
       const data = parseJsonResponse(r.content);
       regions = Array.isArray(data.regions) ? data.regions : [];
       await updateDocumentPage(pageId, { contentRegions: regions });
     } catch (err: any) {
-      stagesFailed.push("bbox_detection");
+      if (!err.message?.includes("No provider assigned")) stagesFailed.push("bbox_detection");
       console.warn(`[Pipeline] Job ${jobId} p${pageNum} bbox_detection: ${err.message}`);
     }
 
@@ -192,16 +258,19 @@ async function _runJob(jobId: number): Promise<void> {
     try {
       await updateIngestionJobStatus(jobId, { currentStage: "ocr_extraction" });
       const regionContext = regions.length > 0
-        ? `Content regions: ${JSON.stringify(regions.slice(0, 5))}`
+        ? `Content regions already detected: ${JSON.stringify(regions.slice(0, 5))}`
         : undefined;
-      const r = await invokeStage("ocr_extraction", pageContent, regionContext);
+      const ocrContent: UserContentPart[] = [imgPart, { type: "text", text: "Extract all readable text from this page as JSON." }];
+      const r = await invokeStage("ocr_extraction", ocrContent, regionContext, PROMPT_OCR_EXTRACTION);
       const data = parseJsonResponse(r.content);
       ocrConfidence = typeof data.confidence === "number" ? data.confidence : 0;
 
       const ocrResult = await createOcrResult({
         pageId,
         structuredData: data,
-        rawText: JSON.stringify(data.content_blocks ?? data),
+        rawText: Array.isArray(data.content_blocks)
+          ? (data.content_blocks as any[]).map((b: any) => b.text ?? "").filter(Boolean).join("\n\n")
+          : JSON.stringify(data),
         confidence: ocrConfidence,
         status: "pass1_complete",
         pass1Model: r.model,

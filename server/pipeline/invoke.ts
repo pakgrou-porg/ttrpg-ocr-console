@@ -48,6 +48,7 @@ export async function invokeStage(
   stage: string,
   userContent: UserContentPart[],
   extraSystemContext?: string,
+  fallbackSystemPrompt?: string,
 ): Promise<StageInvokeResult> {
   const inscription = await getStageInscriptionByStage(stage);
   if (!inscription) throw new Error(`No inscription configured for stage: ${stage}`);
@@ -63,6 +64,9 @@ export async function invokeStage(
   if (inscription.promptName) {
     const prompt = await getSystemPromptByName(inscription.promptName);
     if (prompt?.content) systemPrompt = prompt.content;
+  }
+  if (!systemPrompt && fallbackSystemPrompt) {
+    systemPrompt = fallbackSystemPrompt;
   }
   if (extraSystemContext) {
     systemPrompt = systemPrompt ? `${systemPrompt}\n\n${extraSystemContext}` : extraSystemContext;
