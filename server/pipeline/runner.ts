@@ -140,14 +140,20 @@ const JSON_INVOKE_OPTS: Partial<InvokeOptions> = {
 
 class Semaphore {
   private slots: number;
-  private readonly queue: Array<() => void> = [];
+  private readonly priority: Array<() => void> = [];
+  private readonly normal: Array<() => void> = [];
   constructor(max: number) { this.slots = max; }
   acquire(): Promise<void> {
     if (this.slots > 0) { this.slots--; return Promise.resolve(); }
-    return new Promise(resolve => this.queue.push(resolve));
+    return new Promise(resolve => this.normal.push(resolve));
+  }
+  /** Retries use this — they are served before newly queued pages. */
+  acquirePriority(): Promise<void> {
+    if (this.slots > 0) { this.slots--; return Promise.resolve(); }
+    return new Promise(resolve => this.priority.push(resolve));
   }
   release(): void {
-    const next = this.queue.shift();
+    const next = this.priority.shift() ?? this.normal.shift();
     if (next) { next(); } else { this.slots++; }
   }
 }
@@ -494,7 +500,7 @@ export async function retryPageStages(
   const stagesFailed: string[] = [];
   let ocrConfidence = 0;
 
-  await PAGE_LLM_SEMAPHORE.acquire();
+  await PAGE_LLM_SEMAPHORE.acquirePriority();
   console.log(`[Pipeline] Page ${pageId} retry: acquired LLM slot (stages: ${stages.join(", ")})`);
   try {
     // layout_analysis

@@ -1676,6 +1676,37 @@ export const appRouter = router({
         return { success: true };
       }),
 
+    /** Save a correction for a single tab without resolving the HITL item */
+    saveCorrection: protectedProcedure
+      .input(z.object({
+        pageId: z.number().int(),
+        field: z.enum(["text", "layout", "regions", "structure", "json"]),
+        value: z.string(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const ocr = await getOcrResultByPageId(input.pageId);
+        if (!ocr) throw new TRPCError({ code: "NOT_FOUND", message: "No OCR result found for this page." });
+        if (input.field === "text") {
+          await updateOcrResult(ocr.id, {
+            correctedText: input.value || null,
+            correctedBy: ctx.user.id,
+            correctedAt: new Date(),
+          });
+        } else {
+          const existing = (ocr.correctedStructuredData as Record<string, unknown>) ?? {};
+          const key = `${input.field}_correction`;
+          const updated = input.value
+            ? { ...existing, [key]: input.value }
+            : Object.fromEntries(Object.entries(existing).filter(([k]) => k !== key));
+          await updateOcrResult(ocr.id, {
+            correctedStructuredData: updated,
+            correctedBy: ctx.user.id,
+            correctedAt: new Date(),
+          });
+        }
+        return { success: true };
+      }),
+
     /** Re-run one or more pipeline stages for a page, with surrounding-page context */
     retryPage: protectedProcedure
       .input(z.object({

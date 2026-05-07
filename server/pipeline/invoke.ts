@@ -185,8 +185,12 @@ export async function invokeStage(
     if (!fallback) throw primaryErr; // fallback provider record missing — propagate original error
 
     // ── Fallback attempt (single shot, no retry loop) ────────────────────
+    // Strip response_format — not all models support json_object mode
+    const fallbackOptions: InvokeOptions | undefined = options?.overrideBody
+      ? { ...options, overrideBody: { ...options.overrideBody, response_format: undefined } }
+      : options;
     try {
-      const result = await dispatchToProvider(stage, fallback, messages, inscription, options, false);
+      const result = await dispatchToProvider(stage, fallback, messages, inscription, fallbackOptions, false);
       console.log(`[invoke] ${stage} fallback provider succeeded (model: ${result.model})`);
       return result;
     } catch (fallbackErr: any) {

@@ -82,10 +82,25 @@ function JsonViewer({ value }: { value: unknown }) {
   );
 }
 
-function CorrectionField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+function CorrectionField({ label, value, onChange, onSave, isSaving }: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  onSave?: () => void;
+  isSaving?: boolean;
+}) {
   return (
     <div className="space-y-1 mt-3">
-      <p className="text-xs text-muted-foreground">{label} <span className="opacity-60">(leave blank to accept as-is)</span></p>
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-muted-foreground">{label} <span className="opacity-60">(leave blank to clear)</span></p>
+        {onSave && (
+          <button onClick={onSave} disabled={isSaving}
+            className="flex items-center gap-1 text-xs px-2 py-0.5 rounded border border-border/40 text-muted-foreground hover:text-foreground hover:border-border transition-colors disabled:opacity-50">
+            {isSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle2 className="w-3 h-3" />}
+            Save section
+          </button>
+        )}
+      </div>
       <Textarea value={value} onChange={e => onChange(e.target.value)}
         placeholder="Enter correction here…"
         className="text-xs font-mono h-24 bg-background/50 resize-y" />
@@ -93,7 +108,9 @@ function CorrectionField({ label, value, onChange }: { label: string; value: str
   );
 }
 
-function TextTab({ item, correction, onCorrect }: { item: any; correction: string; onCorrect: (v: string) => void }) {
+type TabProps = { item: any; correction: string; onCorrect: (v: string) => void; onSave: () => void; isSaving: boolean };
+
+function TextTab({ item, correction, onCorrect, onSave, isSaving }: TabProps) {
   const sd = item.ocr?.structuredData as any;
   const blocks: any[] = Array.isArray(sd?.content_blocks) ? sd.content_blocks : [];
   const displayText = item.ocr?.rawText
@@ -102,12 +119,12 @@ function TextTab({ item, correction, onCorrect }: { item: any; correction: strin
   return (
     <div>
       <JsonViewer value={displayText ?? "No OCR text extracted"} />
-      <CorrectionField label="Corrected text" value={correction} onChange={onCorrect} />
+      <CorrectionField label="Corrected text" value={correction} onChange={onCorrect} onSave={onSave} isSaving={isSaving} />
     </div>
   );
 }
 
-function LayoutTab({ item, correction, onCorrect }: { item: any; correction: string; onCorrect: (v: string) => void }) {
+function LayoutTab({ item, correction, onCorrect, onSave, isSaving }: TabProps) {
   const sd = item.ocr?.structuredData as any;
   const layoutType = item.page?.layoutType ?? sd?.layout_type;
   const layoutMeta = sd?.layout ?? sd?.layout_metadata ?? sd?.page_layout;
@@ -126,16 +143,13 @@ function LayoutTab({ item, correction, onCorrect }: { item: any; correction: str
           <JsonViewer value={layoutMeta} />
         </div>
       )}
-      <CorrectionField
-        label="Layout correction (JSON or plain description)"
-        value={correction}
-        onChange={onCorrect}
-      />
+      <CorrectionField label="Layout correction (JSON or plain description)"
+        value={correction} onChange={onCorrect} onSave={onSave} isSaving={isSaving} />
     </div>
   );
 }
 
-function RegionsTab({ item, correction, onCorrect }: { item: any; correction: string; onCorrect: (v: string) => void }) {
+function RegionsTab({ item, correction, onCorrect, onSave, isSaving }: TabProps) {
   const sd = item.ocr?.structuredData as any;
   const regions = item.page?.contentRegions ?? sd?.regions ?? sd?.bounding_boxes ?? sd?.content_regions;
 
@@ -151,16 +165,13 @@ function RegionsTab({ item, correction, onCorrect }: { item: any; correction: st
       ) : (
         <p className="text-xs text-muted-foreground italic">No bounding box / region data available for this page.</p>
       )}
-      <CorrectionField
-        label="Region correction (JSON array)"
-        value={correction}
-        onChange={onCorrect}
-      />
+      <CorrectionField label="Region correction (JSON array)"
+        value={correction} onChange={onCorrect} onSave={onSave} isSaving={isSaving} />
     </div>
   );
 }
 
-function StructureTab({ item, correction, onCorrect }: { item: any; correction: string; onCorrect: (v: string) => void }) {
+function StructureTab({ item, correction, onCorrect, onSave, isSaving }: TabProps) {
   const sd = item.ocr?.structuredData as any;
   const fields: [string, unknown][] = [
     ["Chapter", sd?.chapter ?? sd?.chapter_title],
@@ -187,26 +198,20 @@ function StructureTab({ item, correction, onCorrect }: { item: any; correction: 
           ))}
         </div>
       )}
-      <CorrectionField
-        label="Structure correction (JSON with chapter/section/subsection keys)"
-        value={correction}
-        onChange={onCorrect}
-      />
+      <CorrectionField label="Structure correction (JSON with chapter/section/subsection keys)"
+        value={correction} onChange={onCorrect} onSave={onSave} isSaving={isSaving} />
     </div>
   );
 }
 
-function JsonTab({ item, correction, onCorrect }: { item: any; correction: string; onCorrect: (v: string) => void }) {
+function JsonTab({ item, correction, onCorrect, onSave, isSaving }: TabProps) {
   const sd = item.ocr?.structuredData;
   return (
     <div>
       <p className="text-xs text-muted-foreground mb-2">Full structured output from OCR extraction</p>
       <JsonViewer value={sd ?? "No structured data"} />
-      <CorrectionField
-        label="Full JSON correction (paste complete corrected JSON)"
-        value={correction}
-        onChange={onCorrect}
-      />
+      <CorrectionField label="Full JSON correction (paste complete corrected JSON)"
+        value={correction} onChange={onCorrect} onSave={onSave} isSaving={isSaving} />
     </div>
   );
 }
@@ -294,6 +299,14 @@ function HitlCard({ item, onResolved, isSelected, onToggle }: {
       hitlId: item.id,
       stages: [...retryStages],
     });
+  };
+
+  const saveCorrectionMut = trpc.hitl.saveCorrection.useMutation({
+    onSuccess: () => toast({ title: "Section saved" }),
+    onError: (e) => toast({ title: "Save failed", description: e.message, variant: "destructive" }),
+  });
+  const saveSection = (field: "text" | "layout" | "regions" | "structure" | "json") => () => {
+    saveCorrectionMut.mutate({ pageId: item.page?.id ?? item.pageId, field, value: corrections[field] });
   };
 
   const isPending = resolveMut.isPending || skipMut.isPending || escalateMut.isPending || retryMut.isPending;
@@ -428,11 +441,11 @@ function HitlCard({ item, onResolved, isSelected, onToggle }: {
 
               {/* Tab content */}
               <div className="flex-1 overflow-auto">
-                {activeTab === "text"      && <TextTab      item={item} correction={corrections.text}      onCorrect={setCorrection("text")} />}
-                {activeTab === "layout"    && <LayoutTab    item={item} correction={corrections.layout}    onCorrect={setCorrection("layout")} />}
-                {activeTab === "regions"   && <RegionsTab   item={item} correction={corrections.regions}   onCorrect={setCorrection("regions")} />}
-                {activeTab === "structure" && <StructureTab item={item} correction={corrections.structure} onCorrect={setCorrection("structure")} />}
-                {activeTab === "json"      && <JsonTab      item={item} correction={corrections.json}      onCorrect={setCorrection("json")} />}
+                {activeTab === "text"      && <TextTab      item={item} correction={corrections.text}      onCorrect={setCorrection("text")}      onSave={saveSection("text")}      isSaving={saveCorrectionMut.isPending} />}
+                {activeTab === "layout"    && <LayoutTab    item={item} correction={corrections.layout}    onCorrect={setCorrection("layout")}    onSave={saveSection("layout")}    isSaving={saveCorrectionMut.isPending} />}
+                {activeTab === "regions"   && <RegionsTab   item={item} correction={corrections.regions}   onCorrect={setCorrection("regions")}   onSave={saveSection("regions")}   isSaving={saveCorrectionMut.isPending} />}
+                {activeTab === "structure" && <StructureTab item={item} correction={corrections.structure} onCorrect={setCorrection("structure")} onSave={saveSection("structure")} isSaving={saveCorrectionMut.isPending} />}
+                {activeTab === "json"      && <JsonTab      item={item} correction={corrections.json}      onCorrect={setCorrection("json")}      onSave={saveSection("json")}      isSaving={saveCorrectionMut.isPending} />}
                 {activeTab === "document"  && <DocumentTab  item={item} />}
               </div>
             </div>
