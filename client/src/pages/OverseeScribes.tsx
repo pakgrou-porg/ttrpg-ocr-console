@@ -133,7 +133,14 @@ function PageCard({ page, jobId, onFlagged }: { page: any; jobId: number; onFlag
     <div className="border border-border/40 rounded-lg overflow-hidden bg-card/30">
       {/* Header */}
       <div className="flex items-center gap-3 px-4 py-2 bg-muted/20 border-b border-border/40">
-        <span className="font-mono text-sm font-medium">Page {page.pageNumber}</span>
+        <span className="font-mono text-sm font-medium">
+          PDF p.{page.pageNumber}
+          {page.printedPageLabel && (
+            <span className="ml-1 text-muted-foreground">
+              / Doc p.{page.printedPageLabel}
+            </span>
+          )}
+        </span>
         <ConfidenceBadge value={page.ocrConfidence} />
         {page.layoutType && (
           <Badge variant="outline" className="text-xs text-muted-foreground">{page.layoutType}</Badge>

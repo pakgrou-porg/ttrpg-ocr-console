@@ -483,6 +483,8 @@ export const documentPages = pgTable("document_pages", {
   isFlagged: boolean("is_flagged").default(false).notNull(),
   ocrCompleted: boolean("ocr_completed").default(false).notNull(),
   ocrConfidence: integer("ocr_confidence"),
+  /** Page label as printed on the page (e.g. "i", "42") — differs from the sequential PDF pageNumber */
+  printedPageLabel: varchar("printed_page_label", { length: 32 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (t) => ({

@@ -166,6 +166,30 @@ function isConfigError(err: any): boolean {
   return typeof err?.message === "string" && err.message.startsWith("[CONFIG]");
 }
 
+/** Extract the printed page label (e.g. "i", "42") from OCR content blocks. */
+function extractPrintedPageLabel(data: Record<string, unknown>): string | null {
+  if (!Array.isArray(data.content_blocks)) return null;
+  const block = (data.content_blocks as any[]).find((b: any) => b.type === "page_number");
+  const label = block?.text?.trim() ?? null;
+  return label || null;
+}
+
+/** Build the rawText string from OCR content blocks (tables rendered as TSV). */
+function buildRawText(data: Record<string, unknown>): string {
+  if (!Array.isArray(data.content_blocks)) return JSON.stringify(data);
+  return (data.content_blocks as any[]).map((b: any) => {
+    if (b.type === "table") {
+      const caption = b.caption ? `[Table: ${b.caption}]\n` : "[Table]\n";
+      const headers = Array.isArray(b.headers) ? b.headers.join("\t") + "\n" : "";
+      const rows = Array.isArray(b.rows)
+        ? (b.rows as any[][]).map((r: any[]) => r.join("\t")).join("\n")
+        : "";
+      return caption + headers + rows;
+    }
+    return b.text ?? "";
+  }).filter(Boolean).join("\n\n");
+}
+
 const HITL_CONFIDENCE_THRESHOLD = 80;
 
 // ── Public entry point ────────────────────────────────────────────────────────
@@ -363,19 +387,7 @@ async function _runJob(jobId: number): Promise<void> {
       const ocrResult = await createOcrResult({
         pageId,
         structuredData: data,
-        rawText: Array.isArray(data.content_blocks)
-          ? (data.content_blocks as any[]).map((b: any) => {
-              if (b.type === "table") {
-                const caption = b.caption ? `[Table: ${b.caption}]\n` : "[Table]\n";
-                const headers = Array.isArray(b.headers) ? b.headers.join("\t") + "\n" : "";
-                const rows = Array.isArray(b.rows)
-                  ? (b.rows as any[][]).map((r: any[]) => r.join("\t")).join("\n")
-                  : "";
-                return caption + headers + rows;
-              }
-              return b.text ?? "";
-            }).filter(Boolean).join("\n\n")
-          : JSON.stringify(data),
+        rawText: buildRawText(data),
         confidence: ocrConfidence,
         status: "pass1_complete",
         pass1Model: r.model,
@@ -383,7 +395,11 @@ async function _runJob(jobId: number): Promise<void> {
       });
       ocrResultId = ocrResult.id;
 
-      await updateDocumentPage(pageId, { ocrCompleted: true, ocrConfidence });
+      const printedPageLabel = extractPrintedPageLabel(data);
+      await updateDocumentPage(pageId, {
+        ocrCompleted: true, ocrConfidence,
+        printedPageLabel: printedPageLabel ?? "[unnumbered]",
+      });
     } catch (err: any) {
       if (isConfigError(err)) throw err; // fatal — halt job
       stagesFailed.push("ocr_extraction");
@@ -548,19 +564,8 @@ export async function retryPageStages(
         const data = parseJsonResponse(r.content);
         ocrConfidence = typeof data.confidence === "number" ? data.confidence : 0;
 
-        const rawText = Array.isArray(data.content_blocks)
-          ? (data.content_blocks as any[]).map((b: any) => {
-              if (b.type === "table") {
-                const caption = b.caption ? `[Table: ${b.caption}]\n` : "[Table]\n";
-                const headers = Array.isArray(b.headers) ? b.headers.join("\t") + "\n" : "";
-                const rows = Array.isArray(b.rows)
-                  ? (b.rows as any[][]).map((r: any[]) => r.join("\t")).join("\n")
-                  : "";
-                return caption + headers + rows;
-              }
-              return b.text ?? "";
-            }).filter(Boolean).join("\n\n")
-          : JSON.stringify(data);
+        const rawText = buildRawText(data);
+        const printedPageLabel = extractPrintedPageLabel(data);
 
         const existing = await getOcrResultByPageId(pageId);
         if (existing) {
@@ -577,7 +582,10 @@ export async function retryPageStages(
             auditLog: [{ timestamp: new Date().toISOString(), action: "retry", model: r.model }],
           });
         }
-        await updateDocumentPage(pageId, { ocrCompleted: true, ocrConfidence });
+        await updateDocumentPage(pageId, {
+          ocrCompleted: true, ocrConfidence,
+          printedPageLabel: printedPageLabel ?? "[unnumbered]",
+        });
       } catch (err: any) {
         if (isConfigError(err)) throw err;
         stagesFailed.push("ocr_extraction");

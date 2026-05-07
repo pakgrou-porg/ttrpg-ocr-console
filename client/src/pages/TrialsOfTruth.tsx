@@ -226,7 +226,12 @@ function DocumentTab({ item }: { item: any }) {
       {item.page?.pageNumber && (
         <div>
           <p className="text-xs text-muted-foreground mb-1">Page</p>
-          <p className="text-sm font-mono">{item.page.pageNumber}</p>
+          <p className="text-sm font-mono">
+            PDF p.{item.page.pageNumber}
+            {item.page.printedPageLabel && (
+              <span className="ml-2 text-muted-foreground">/ Doc p.{item.page.printedPageLabel}</span>
+            )}
+          </p>
         </div>
       )}
       <p className="text-xs text-muted-foreground italic">
@@ -358,7 +363,11 @@ function HitlCard({ item, onResolved, isSelected, onToggle }: {
               {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
             </button>
             <CardTitle className="text-base truncate">
-              Page {item.page?.pageNumber ?? "?"} — {item.reason}
+              PDF p.{item.page?.pageNumber ?? "?"}
+              {item.page?.printedPageLabel && (
+                <span className="text-muted-foreground font-normal"> / Doc p.{item.page.printedPageLabel}</span>
+              )}
+              {" — "}{item.reason}
             </CardTitle>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
