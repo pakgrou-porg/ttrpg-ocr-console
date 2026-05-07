@@ -7,7 +7,10 @@ import {
   createIngestionJob,
   createDocument, updateDocument,
   createDocumentPage, updateDocumentPage,
-  createOcrResult, createHitlItem,
+  createOcrResult, updateOcrResult, createHitlItem, updateHitlItem,
+  getPageById, getDocumentById,
+  getOcrResultByPageId,
+  getPageByDocumentAndNumber,
 } from "../db";
 import { invokeStage, parseJsonResponse, UserContentPart, InvokeOptions } from "./invoke";
 import { downloadDriveFile, getDriveFileName, deleteLocalFile } from "./drive";
@@ -157,6 +160,8 @@ function isConfigError(err: any): boolean {
   return typeof err?.message === "string" && err.message.startsWith("[CONFIG]");
 }
 
+const HITL_CONFIDENCE_THRESHOLD = 80;
+
 // ── Public entry point ────────────────────────────────────────────────────────
 
 export function startJob(jobId: number): void {
@@ -290,7 +295,6 @@ async function _runJob(jobId: number): Promise<void> {
   }
 
   // ── Per-page stages ───────────────────────────────────────────────────────
-  const HITL_CONFIDENCE_THRESHOLD = 80;
   const confidences: number[] = [];
   let processedPages = 0;
 
@@ -451,6 +455,152 @@ async function _runJob(jobId: number): Promise<void> {
     } as any);
     startJob(nextJobId);
   }
+}
+
+// ── Page retry (called from HITL UI) ─────────────────────────────────────────
+
+export type RetryStage = "layout_analysis" | "bbox_detection" | "ocr_extraction";
+
+export async function retryPageStages(
+  pageId: number,
+  stages: RetryStage[],
+  hitlId?: number,
+): Promise<{ confidence: number; stagesFailed: string[] }> {
+  const page = await getPageById(pageId);
+  if (!page) throw new Error(`Page ${pageId} not found`);
+  if (!page.rawPngUrl) throw new Error(`Page ${pageId} has no image on disk`);
+
+  const [doc, prevPage, nextPage] = await Promise.all([
+    getDocumentById(page.documentId),
+    getPageByDocumentAndNumber(page.documentId, page.pageNumber - 1),
+    getPageByDocumentAndNumber(page.documentId, page.pageNumber + 1),
+  ]);
+  const [prevOcr, nextOcr] = await Promise.all([
+    prevPage ? getOcrResultByPageId(prevPage.id) : Promise.resolve(null),
+    nextPage ? getOcrResultByPageId(nextPage.id) : Promise.resolve(null),
+  ]);
+
+  // Build surrounding-context string for the LLM
+  const ctxParts: string[] = [];
+  if (doc?.title || doc?.gameSystem)
+    ctxParts.push(`Document: ${doc.title ?? doc.filename} (${doc.gameSystem ?? "unknown game system"})`);
+  if (prevOcr?.rawText)
+    ctxParts.push(`Previous page ends with:\n${prevOcr.rawText.slice(-600).trim()}`);
+  if (nextOcr?.rawText)
+    ctxParts.push(`Next page begins with:\n${nextOcr.rawText.slice(0, 200).trim()}`);
+  const surroundingContext = ctxParts.length > 0 ? ctxParts.join("\n\n") : undefined;
+
+  const imgPart = await imageContent(page.rawPngUrl);
+  const stagesFailed: string[] = [];
+  let ocrConfidence = 0;
+
+  await PAGE_LLM_SEMAPHORE.acquire();
+  console.log(`[Pipeline] Page ${pageId} retry: acquired LLM slot (stages: ${stages.join(", ")})`);
+  try {
+    // layout_analysis
+    if (stages.includes("layout_analysis")) {
+      try {
+        const content: UserContentPart[] = [imgPart, { type: "text", text: "Classify the layout type and structure of this page. Reply with ONLY a JSON object — start with { and end with }." }];
+        const r = await invokeStage("layout_analysis", content, surroundingContext, PROMPT_LAYOUT_ANALYSIS,
+          { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_LAYOUT });
+        const data = parseJsonResponse(r.content);
+        await updateDocumentPage(pageId, { layoutType: (data.layout_type as string) || undefined });
+      } catch (err: any) {
+        if (isConfigError(err)) throw err;
+        stagesFailed.push("layout_analysis");
+        console.warn(`[Pipeline] Page ${pageId} retry layout_analysis: ${err.message}`);
+      }
+    }
+
+    // bbox_detection — use existing regions if not re-running
+    let regions: any[] = stages.includes("bbox_detection") ? [] : ((page.contentRegions as any[]) ?? []);
+    if (stages.includes("bbox_detection")) {
+      try {
+        const content: UserContentPart[] = [imgPart, { type: "text", text: "Identify all distinct content regions on this page. Reply with ONLY a JSON object — start with { and end with }." }];
+        const r = await invokeStage("bbox_detection", content, surroundingContext, PROMPT_BBOX_DETECTION,
+          { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_BBOX });
+        const data = parseJsonResponse(r.content);
+        regions = Array.isArray(data.regions) ? data.regions : [];
+        await updateDocumentPage(pageId, { contentRegions: regions });
+      } catch (err: any) {
+        if (isConfigError(err)) throw err;
+        stagesFailed.push("bbox_detection");
+        console.warn(`[Pipeline] Page ${pageId} retry bbox_detection: ${err.message}`);
+      }
+    }
+
+    // ocr_extraction
+    if (stages.includes("ocr_extraction")) {
+      try {
+        const regionCtx = regions.length > 0
+          ? `Content regions already detected: ${JSON.stringify(regions.slice(0, 5))}`
+          : undefined;
+        const fullContext = [surroundingContext, regionCtx].filter(Boolean).join("\n\n") || undefined;
+        const content: UserContentPart[] = [imgPart, { type: "text", text: "Extract all readable text from this page in reading order. Reply with ONLY a JSON object — start with { and end with }." }];
+        const r = await invokeStage("ocr_extraction", content, fullContext, PROMPT_OCR_EXTRACTION,
+          { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_OCR });
+        const data = parseJsonResponse(r.content);
+        ocrConfidence = typeof data.confidence === "number" ? data.confidence : 0;
+
+        const rawText = Array.isArray(data.content_blocks)
+          ? (data.content_blocks as any[]).map((b: any) => {
+              if (b.type === "table") {
+                const caption = b.caption ? `[Table: ${b.caption}]\n` : "[Table]\n";
+                const headers = Array.isArray(b.headers) ? b.headers.join("\t") + "\n" : "";
+                const rows = Array.isArray(b.rows)
+                  ? (b.rows as any[][]).map((r: any[]) => r.join("\t")).join("\n")
+                  : "";
+                return caption + headers + rows;
+              }
+              return b.text ?? "";
+            }).filter(Boolean).join("\n\n")
+          : JSON.stringify(data);
+
+        const existing = await getOcrResultByPageId(pageId);
+        if (existing) {
+          await updateOcrResult(existing.id, {
+            structuredData: data, rawText, confidence: ocrConfidence,
+            status: "pass1_complete", pass1Model: r.model,
+            auditLog: [...((existing.auditLog as any[]) ?? []),
+              { timestamp: new Date().toISOString(), action: "retry", model: r.model }],
+          });
+        } else {
+          await createOcrResult({
+            pageId, structuredData: data, rawText, confidence: ocrConfidence,
+            status: "pass1_complete", pass1Model: r.model,
+            auditLog: [{ timestamp: new Date().toISOString(), action: "retry", model: r.model }],
+          });
+        }
+        await updateDocumentPage(pageId, { ocrCompleted: true, ocrConfidence });
+      } catch (err: any) {
+        if (isConfigError(err)) throw err;
+        stagesFailed.push("ocr_extraction");
+        console.warn(`[Pipeline] Page ${pageId} retry ocr_extraction: ${err.message}`);
+      }
+    }
+  } finally {
+    PAGE_LLM_SEMAPHORE.release();
+  }
+
+  // Auto-resolve the HITL item if retry passed; otherwise update notes
+  if (hitlId != null) {
+    const passed = stagesFailed.length === 0 && ocrConfidence >= HITL_CONFIDENCE_THRESHOLD;
+    if (passed) {
+      await updateHitlItem(hitlId, {
+        status: "resolved",
+        resolutionNotes: `Auto-resolved by retry — confidence ${ocrConfidence}%`,
+        resolvedAt: new Date(),
+      });
+    } else {
+      const parts = ["Retry attempted"];
+      if (stagesFailed.length > 0) parts.push(`failed: ${stagesFailed.join(", ")}`);
+      if (ocrConfidence < HITL_CONFIDENCE_THRESHOLD) parts.push(`confidence ${ocrConfidence}%`);
+      await updateHitlItem(hitlId, { resolutionNotes: parts.join(" — ") });
+    }
+  }
+
+  console.log(`[Pipeline] Page ${pageId} retry done (confidence: ${ocrConfidence}, failed: ${stagesFailed.join(", ") || "none"})`);
+  return { confidence: ocrConfidence, stagesFailed };
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

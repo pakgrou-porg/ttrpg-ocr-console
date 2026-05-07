@@ -28,7 +28,7 @@ import {
   getAllGameSystems, createGameSystem, updateGameSystem, deleteGameSystem,
 } from "./db";
 import { encryptSecret, decryptSecret, storeSecretHint, renderMaskedSecret } from "./crypto";
-import { startJob } from "./pipeline/runner";
+import { startJob, retryPageStages, RetryStage } from "./pipeline/runner";
 import { ENV } from "./_core/env";
 import { FEATURE_AREAS, PROVIDER_TYPES, PIPELINE_STAGES, SUPABASE_CONNECTION_TYPES, SUPABASE_ROLES, SUPABASE_SYNC_MODES, DOCUMENT_STATUSES, OCR_RESULT_STATUSES, HITL_PRIORITIES, HITL_STATUSES } from "../drizzle/schema";
 
@@ -1670,6 +1670,24 @@ export const appRouter = router({
           resolvedAt: new Date(),
         });
         return { success: true };
+      }),
+
+    /** Re-run one or more pipeline stages for a page, with surrounding-page context */
+    retryPage: protectedProcedure
+      .input(z.object({
+        pageId: z.number().int(),
+        hitlId: z.number().int().optional(),
+        stages: z.array(z.enum(["layout_analysis", "bbox_detection", "ocr_extraction"] as const))
+          .min(1)
+          .default(["layout_analysis", "bbox_detection", "ocr_extraction"]),
+      }))
+      .mutation(async ({ input }) => {
+        const result = await retryPageStages(
+          input.pageId,
+          input.stages as RetryStage[],
+          input.hitlId,
+        );
+        return { success: true, ...result };
       }),
 
     /** Clear (delete) HITL items by status — useful during test cycles */

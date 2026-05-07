@@ -1117,6 +1117,15 @@ export async function getPageById(id: number) {
   return result.length > 0 ? result[0] : undefined;
 }
 
+export async function getPageByDocumentAndNumber(documentId: number, pageNumber: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(documentPages)
+    .where(and(eq(documentPages.documentId, documentId), eq(documentPages.pageNumber, pageNumber)))
+    .limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
 export async function getPageByPhash(phash: string) {
   const db = await getDb();
   if (!db) return undefined;

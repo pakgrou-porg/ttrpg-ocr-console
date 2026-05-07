@@ -5,7 +5,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   CheckCircle2, XCircle, ArrowUpCircle, ChevronDown, ChevronRight,
   Loader2, ClipboardList, FileText, Layout, BoxSelect, ListTree, Braces, BookOpen,
-  Trash2, ChevronLeft, Download,
+  Trash2, ChevronLeft, Download, RefreshCw,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useToast } from "@/hooks/use-toast";
@@ -270,7 +270,33 @@ function HitlCard({ item, onResolved, isSelected, onToggle }: {
     onError: (e) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
-  const isPending = resolveMut.isPending || skipMut.isPending || escalateMut.isPending;
+  type RetryStageId = "layout_analysis" | "bbox_detection" | "ocr_extraction";
+  const ALL_RETRY_STAGES: RetryStageId[] = ["layout_analysis", "bbox_detection", "ocr_extraction"];
+  const [retryStages, setRetryStages] = useState<Set<RetryStageId>>(new Set(ALL_RETRY_STAGES));
+  const retryMut = trpc.hitl.retryPage.useMutation({
+    onSuccess: (r) => {
+      const msg = r.stagesFailed.length > 0
+        ? `Retry done — ${r.stagesFailed.join(", ")} failed. Confidence: ${r.confidence}%`
+        : `Retry succeeded — confidence ${r.confidence}%`;
+      toast({ title: "Retry complete", description: msg });
+      onResolved();
+    },
+    onError: (e) => toast({ title: "Retry failed", description: e.message, variant: "destructive" }),
+  });
+
+  const toggleRetryStage = (s: RetryStageId) =>
+    setRetryStages(prev => { const n = new Set(prev); n.has(s) ? n.delete(s) : n.add(s); return n; });
+
+  const runRetry = () => {
+    if (retryStages.size === 0) return;
+    retryMut.mutate({
+      pageId: item.page?.id ?? item.pageId,
+      hitlId: item.id,
+      stages: [...retryStages],
+    });
+  };
+
+  const isPending = resolveMut.isPending || skipMut.isPending || escalateMut.isPending || retryMut.isPending;
 
   const setCorrection = (tab: TabId) => (v: string) =>
     setCorrections(c => ({ ...c, [tab]: v }));
@@ -423,6 +449,31 @@ function HitlCard({ item, onResolved, isSelected, onToggle }: {
                 className="text-xs h-14 bg-background/50"
               />
             </div>
+            {/* Retry section */}
+            <div className="flex items-center gap-3 py-2 border-t border-border/30 flex-wrap">
+              <span className="text-xs text-muted-foreground font-medium flex-shrink-0">Retry stages:</span>
+              {(["layout_analysis", "bbox_detection", "ocr_extraction"] as const).map(s => {
+                const label = s === "layout_analysis" ? "Layout" : s === "bbox_detection" ? "Regions" : "OCR";
+                const active = retryStages.has(s);
+                return (
+                  <button key={s} onClick={() => toggleRetryStage(s)} disabled={isPending}
+                    className={`px-2.5 py-1 rounded text-xs font-medium border transition-colors ${
+                      active
+                        ? "bg-primary/10 border-primary/40 text-primary"
+                        : "bg-transparent border-border/40 text-muted-foreground hover:text-foreground"
+                    }`}>
+                    {label}
+                  </button>
+                );
+              })}
+              <Button size="sm" variant="outline" className="gap-1.5 ml-auto"
+                onClick={runRetry} disabled={isPending || retryStages.size === 0}>
+                {retryMut.isPending
+                  ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Retrying…</>
+                  : <><RefreshCw className="w-3.5 h-3.5" /> Retry</>}
+              </Button>
+            </div>
+
             <div className="flex items-center justify-between">
               {hasCorrections ? (
                 <p className="text-xs text-orange-400">
