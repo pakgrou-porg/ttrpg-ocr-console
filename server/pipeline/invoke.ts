@@ -51,11 +51,11 @@ export async function invokeStage(
   fallbackSystemPrompt?: string,
 ): Promise<StageInvokeResult> {
   const inscription = await getStageInscriptionByStage(stage);
-  if (!inscription) throw new Error(`No inscription configured for stage: ${stage}`);
+  if (!inscription) throw new Error(`[CONFIG] No stage inscription configured for "${stage}". Add an inscription in Conclave → Stage Inscriptions.`);
   if (!inscription.isActive) throw new Error(`Stage ${stage} inscription is inactive`);
 
   const providerId = inscription.primaryProviderId;
-  if (!providerId) throw new Error(`No provider assigned to stage: ${stage}`);
+  if (!providerId) throw new Error(`[CONFIG] No provider assigned to stage "${stage}". Assign a provider in Conclave → Stage Inscriptions.`);
 
   const provider = await getLlmProviderById(providerId);
   if (!provider) throw new Error(`Provider ${providerId} not found`);
@@ -134,11 +134,29 @@ export function parseJsonResponse(content: string): Record<string, unknown> {
     .replace(/^```(?:json)?\s*/m, "")
     .replace(/\s*```\s*$/m, "")
     .trim();
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    const match = cleaned.match(/\{[\s\S]*\}/);
-    if (match) return JSON.parse(match[0]);
-    throw new Error(`Could not parse JSON from LLM response: ${cleaned.slice(0, 200)}`);
+
+  // Fast path: the whole string is valid JSON
+  try { return JSON.parse(cleaned); } catch {}
+
+  // Brace-count to find the first complete JSON object, ignoring trailing text
+  const start = cleaned.indexOf("{");
+  if (start !== -1) {
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    for (let i = start; i < cleaned.length; i++) {
+      const ch = cleaned[i];
+      if (esc)              { esc = false; continue; }
+      if (ch === "\\" && inStr) { esc = true;  continue; }
+      if (ch === '"')       { inStr = !inStr; continue; }
+      if (inStr)            continue;
+      if (ch === "{")       depth++;
+      if (ch === "}" && --depth === 0) {
+        try { return JSON.parse(cleaned.slice(start, i + 1)); } catch {}
+        break;
+      }
+    }
   }
+
+  throw new Error(`Could not parse JSON from LLM response: ${cleaned.slice(0, 200)}`);
 }
