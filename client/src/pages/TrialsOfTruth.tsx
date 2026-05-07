@@ -5,9 +5,53 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   CheckCircle2, XCircle, ArrowUpCircle, ChevronDown, ChevronRight,
   Loader2, ClipboardList, FileText, Layout, BoxSelect, ListTree, Braces, BookOpen,
+  Download,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useToast } from "@/hooks/use-toast";
+
+// ── Download helpers ──────────────────────────────────────────────────────────
+
+function triggerJsonDownload(filename: string, data: unknown) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function formatExportRecord(item: any) {
+  const imageUrl = item.page?.rawPngUrl
+    ? `/api/pipeline/pages/${item.page.rawPngUrl.replace(/.*\/workspace\//, "")}`
+    : null;
+  return {
+    hitl_id: item.id,
+    hitl_status: item.status,
+    hitl_reason: item.reason,
+    document: {
+      title: item.documentTitle ?? "Unknown",
+      publisher: null,
+      type: null,
+      game_system: null,
+    },
+    page: {
+      number: item.page?.pageNumber ?? null,
+      image_url: imageUrl,
+      layout_type: item.page?.layoutType ?? null,
+      ocr_confidence: item.ocr?.confidence ?? null,
+      model: item.ocr?.pass1Model ?? null,
+      extracted_at: item.ocr?.createdAt ?? null,
+    },
+    regions: item.page?.contentRegions ?? [],
+    ocr_output: item.ocr?.structuredData ?? null,
+    raw_text: item.ocr?.rawText ?? null,
+    human_corrections: (item.ocr?.correctedStructuredData || item.ocr?.correctedText)
+      ? { corrected_text: item.ocr?.correctedText ?? null, corrected_data: item.ocr?.correctedStructuredData ?? null }
+      : null,
+  };
+}
 
 type HitlAction = "resolved" | "skipped" | "escalated";
 type TabId = "text" | "layout" | "regions" | "structure" | "json" | "document";
@@ -199,7 +243,12 @@ const TABS: { id: TabId; label: string; icon: React.ElementType }[] = [
   { id: "document",  label: "Document",  icon: BookOpen  },
 ];
 
-function HitlCard({ item, onResolved }: { item: any; onResolved: () => void }) {
+function HitlCard({ item, onResolved, isSelected, onToggle }: {
+  item: any;
+  onResolved: () => void;
+  isSelected: boolean;
+  onToggle: () => void;
+}) {
   const { toast } = useToast();
   const [expanded, setExpanded] = useState(false);
   const [activeTab, setActiveTab] = useState<TabId>("text");
@@ -259,6 +308,13 @@ function HitlCard({ item, onResolved }: { item: any; onResolved: () => void }) {
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-3 min-w-0">
+            <input
+              type="checkbox"
+              checked={isSelected}
+              onChange={onToggle}
+              onClick={e => e.stopPropagation()}
+              className="flex-shrink-0 accent-primary cursor-pointer w-4 h-4"
+            />
             <button onClick={() => setExpanded(!expanded)} className="text-muted-foreground hover:text-foreground flex-shrink-0">
               {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
             </button>
@@ -271,6 +327,16 @@ function HitlCard({ item, onResolved }: { item: any; onResolved: () => void }) {
             {item.ocr?.confidence != null && (
               <span className="text-xs text-muted-foreground font-mono">conf: {item.ocr.confidence}%</span>
             )}
+            <button
+              title="Download this page's OCR data"
+              onClick={() => triggerJsonDownload(
+                `ocr-p${item.page?.pageNumber ?? item.id}.json`,
+                formatExportRecord(item),
+              )}
+              className="text-muted-foreground hover:text-foreground p-1 rounded hover:bg-muted/30 flex-shrink-0"
+            >
+              <Download className="w-3.5 h-3.5" />
+            </button>
             {item.status === "queued" && !expanded && (
               <div className="flex items-center gap-1 ml-2">
                 <Button size="sm" variant="ghost" className="h-7 text-xs px-2 text-yellow-500 hover:bg-yellow-500/10"
@@ -393,8 +459,10 @@ function HitlCard({ item, onResolved }: { item: any; onResolved: () => void }) {
 export default function TrialsOfTruth() {
   const { toast } = useToast();
   const [statusFilter, setStatusFilter] = useState<"queued" | "resolved" | "escalated" | "skipped">("queued");
+  const [selected, setSelected] = useState<Set<number>>(new Set());
   const { data: items, isLoading, refetch } = trpc.hitl.list.useQuery({ status: statusFilter, limit: 50 });
   const { data: stats } = trpc.hitl.stats.useQuery();
+  const utils = trpc.useUtils();
 
   const bulkApproveMut = trpc.hitl.bulkResolve.useMutation({
     onSuccess: (r) => { toast({ title: `Approved ${r.count} items` }); refetch(); },
@@ -402,6 +470,30 @@ export default function TrialsOfTruth() {
   });
 
   const queuedIds = (items ?? []).filter((i: any) => i.status === "queued").map((i: any) => i.id);
+
+  const toggleSelect = (id: number) =>
+    setSelected(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
+  const toggleSelectAll = () =>
+    setSelected(prev => prev.size === (items?.length ?? 0) ? new Set() : new Set(items?.map((i: any) => i.id) ?? []));
+
+  const [isExporting, setIsExporting] = useState(false);
+
+  const downloadSelected = () => {
+    const toExport = (items ?? []).filter((i: any) => selected.has(i.id));
+    triggerJsonDownload(`ocr-export-selected-${Date.now()}.json`, toExport.map(formatExportRecord));
+  };
+
+  const downloadAll = async () => {
+    setIsExporting(true);
+    try {
+      const data = await utils.hitl.exportOcr.fetch({ status: statusFilter });
+      triggerJsonDownload(`ocr-export-${statusFilter}-${Date.now()}.json`, data);
+    } catch (e: any) {
+      toast({ title: "Export failed", description: e.message, variant: "destructive" });
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -436,27 +528,58 @@ export default function TrialsOfTruth() {
       )}
 
       {/* Filter + bulk actions */}
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <div className="flex gap-2">
-          {(["queued", "resolved", "escalated", "skipped"] as const).map(s => (
-            <button key={s} onClick={() => setStatusFilter(s)}
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                statusFilter === s ? "bg-primary text-primary-foreground" : "bg-muted/30 text-muted-foreground hover:text-foreground"
-              }`}>
-              {s.charAt(0).toUpperCase() + s.slice(1)}
-            </button>
-          ))}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div className="flex gap-2">
+            {(["queued", "resolved", "escalated", "skipped"] as const).map(s => (
+              <button key={s} onClick={() => { setStatusFilter(s); setSelected(new Set()); }}
+                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                  statusFilter === s ? "bg-primary text-primary-foreground" : "bg-muted/30 text-muted-foreground hover:text-foreground"
+                }`}>
+                {s.charAt(0).toUpperCase() + s.slice(1)}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            {statusFilter === "queued" && queuedIds.length > 0 && (
+              <Button
+                variant="outline" size="sm"
+                className="gap-2 text-green-500 border-green-500/30 hover:bg-green-500/10"
+                onClick={() => { if (confirm(`Approve all ${queuedIds.length} queued items as-is?`)) bulkApproveMut.mutate({ ids: queuedIds }); }}
+                disabled={bulkApproveMut.isPending}
+              >
+                {bulkApproveMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                Approve All ({queuedIds.length})
+              </Button>
+            )}
+          </div>
         </div>
-        {statusFilter === "queued" && queuedIds.length > 0 && (
-          <Button
-            variant="outline" size="sm"
-            className="gap-2 text-green-500 border-green-500/30 hover:bg-green-500/10"
-            onClick={() => { if (confirm(`Approve all ${queuedIds.length} queued items as-is?`)) bulkApproveMut.mutate({ ids: queuedIds }); }}
-            disabled={bulkApproveMut.isPending}
-          >
-            {bulkApproveMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-            Approve All ({queuedIds.length})
-          </Button>
+
+        {/* Selection + download bar */}
+        {(items?.length ?? 0) > 0 && (
+          <div className="flex items-center gap-3 flex-wrap text-sm">
+            <label className="flex items-center gap-2 text-muted-foreground cursor-pointer select-none">
+              <input type="checkbox"
+                checked={selected.size > 0 && selected.size === (items?.length ?? 0)}
+                ref={el => { if (el) el.indeterminate = selected.size > 0 && selected.size < (items?.length ?? 0); }}
+                onChange={toggleSelectAll}
+                className="accent-primary w-4 h-4"
+              />
+              {selected.size === 0 ? "Select all" : `${selected.size} selected`}
+            </label>
+            {selected.size > 0 && (
+              <Button variant="outline" size="sm" className="gap-1.5 h-7 text-xs"
+                onClick={downloadSelected}>
+                <Download className="w-3.5 h-3.5" />
+                Download Selected ({selected.size})
+              </Button>
+            )}
+            <Button variant="outline" size="sm" className="gap-1.5 h-7 text-xs ml-auto"
+              onClick={downloadAll} disabled={isExporting}>
+              {isExporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+              Download All {statusFilter.charAt(0).toUpperCase() + statusFilter.slice(1)}
+            </Button>
+          </div>
         )}
       </div>
 
@@ -473,7 +596,13 @@ export default function TrialsOfTruth() {
       ) : (
         <div className="space-y-3">
           {items?.map((item: any) => (
-            <HitlCard key={item.id} item={item} onResolved={() => refetch()} />
+            <HitlCard
+              key={item.id}
+              item={item}
+              onResolved={() => refetch()}
+              isSelected={selected.has(item.id)}
+              onToggle={() => toggleSelect(item.id)}
+            />
           ))}
         </div>
       )}

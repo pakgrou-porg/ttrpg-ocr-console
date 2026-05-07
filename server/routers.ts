@@ -23,7 +23,7 @@ import {
   getPagesByDocumentId, getPageById, getPageByPhash, createDocumentPage, updateDocumentPage,
   getPagesByIds, getDocumentsByIds, getOcrResultsByPageIds,
   getOcrResultByPageId, getOcrResultById, createOcrResult, updateOcrResult,
-  getHitlItemById, getHitlItemsByPageId, getAllHitlItems, createHitlItem, updateHitlItem, getHitlStats,
+  getHitlItemById, getHitlItemsByIds, getHitlItemsByPageId, getAllHitlItems, createHitlItem, updateHitlItem, getHitlStats,
   getAllGameSystems, createGameSystem, updateGameSystem, deleteGameSystem,
 } from "./db";
 import { encryptSecret, decryptSecret, storeSecretHint, renderMaskedSecret } from "./crypto";
@@ -1634,6 +1634,69 @@ export const appRouter = router({
           orderByPriority: true,
         });
         return inProgress[0] ?? null;
+      }),
+
+    /** Export OCR results as structured records for model fine-tuning.
+     *  Pass specific `ids` for selected items, or `status` to bulk-export
+     *  an entire status bucket (up to 10 000 records). */
+    exportOcr: protectedProcedure
+      .input(z.object({
+        ids: z.array(z.number().int()).optional(),
+        status: z.enum(HITL_STATUSES).optional(),
+      }).optional())
+      .query(async ({ input }) => {
+        const items = input?.ids?.length
+          ? await getHitlItemsByIds(input.ids)
+          : await getAllHitlItems({ status: input?.status, limit: 10_000 });
+
+        if (items.length === 0) return [];
+
+        const pageIds = [...new Set(items.map(i => i.pageId))];
+        const pages = await getPagesByIds(pageIds);
+        const pageMap = new Map(pages.map(p => [p.id, p]));
+
+        const documentIds = [...new Set(pages.map(p => p.documentId))];
+        const docs = await getDocumentsByIds(documentIds);
+        const docMap = new Map(docs.map(d => [d.id, d]));
+
+        const ocrByPage = await getOcrResultsByPageIds(pageIds);
+        const ocrMap = new Map(ocrByPage.map(r => [r.pageId, r]));
+
+        return items.map(item => {
+          const page = pageMap.get(item.pageId) ?? null;
+          const doc = page ? docMap.get(page.documentId) ?? null : null;
+          const ocr = page ? ocrMap.get(page.id) ?? null : null;
+          const imageUrl = page?.rawPngUrl
+            ? `/api/pipeline/pages/${page.rawPngUrl.replace(/.*\/workspace\//, "")}`
+            : null;
+
+          return {
+            hitl_id: item.id,
+            hitl_status: item.status,
+            hitl_reason: item.reason,
+            document: {
+              title: doc?.title ?? doc?.filename ?? "Unknown",
+              publisher: doc?.publisher ?? null,
+              type: doc?.documentType ?? null,
+              game_system: doc?.gameSystem ?? null,
+              summary: doc?.documentSummary ?? null,
+            },
+            page: {
+              number: page?.pageNumber ?? null,
+              image_url: imageUrl,
+              layout_type: page?.layoutType ?? null,
+              ocr_confidence: ocr?.confidence ?? null,
+              model: ocr?.pass1Model ?? null,
+              extracted_at: ocr?.createdAt ?? null,
+            },
+            regions: page?.contentRegions ?? [],
+            ocr_output: ocr?.structuredData ?? null,
+            raw_text: ocr?.rawText ?? null,
+            human_corrections: (ocr?.correctedStructuredData || ocr?.correctedText)
+              ? { corrected_text: ocr?.correctedText ?? null, corrected_data: ocr?.correctedStructuredData ?? null }
+              : null,
+          };
+        });
       }),
   }),
 

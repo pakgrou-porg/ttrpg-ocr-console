@@ -1132,6 +1132,13 @@ export async function getHitlItemById(id: number) {
   return result.length > 0 ? result[0] : undefined;
 }
 
+export async function getHitlItemsByIds(ids: number[]) {
+  const db = await getDb();
+  if (!db || ids.length === 0) return [];
+  const { inArray } = await import("drizzle-orm");
+  return db.select().from(hitlQueue).where(inArray(hitlQueue.id, ids));
+}
+
 export async function getHitlItemsByPageId(pageId: number) {
   const db = await getDb();
   if (!db) return [];
