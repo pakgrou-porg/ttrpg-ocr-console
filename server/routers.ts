@@ -1441,6 +1441,9 @@ export const appRouter = router({
           total,
           pages: pages.map(page => ({
             ...page,
+            rawPngUrl: page.rawPngUrl
+              ? `/api/pipeline/pages/${page.rawPngUrl.replace(/.*\/workspace\//, "")}`
+              : null,
             ocr: ocrMap.get(page.id) ?? null,
           })),
         };
