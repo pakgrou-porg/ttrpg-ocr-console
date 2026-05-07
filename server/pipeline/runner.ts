@@ -148,6 +148,7 @@ async function _runJob(jobId: number): Promise<void> {
   }
 
   // ── Per-page stages ───────────────────────────────────────────────────────
+  const HITL_CONFIDENCE_THRESHOLD = 80;
   const confidences: number[] = [];
   let processedPages = 0;
 
@@ -155,6 +156,7 @@ async function _runJob(jobId: number): Promise<void> {
     const pageNum = pageOffset + i + 1;
     const pageId = pageIds[i];
     const pagePath = pageFiles[i];
+    const stagesFailed: string[] = [];
 
     await updateIngestionJobStatus(jobId, { currentStage: "layout_analysis", processedPages });
 
@@ -167,6 +169,7 @@ async function _runJob(jobId: number): Promise<void> {
       const data = parseJsonResponse(r.content);
       await updateDocumentPage(pageId, { layoutType: (data.layout_type as string) || undefined });
     } catch (err: any) {
+      stagesFailed.push("layout_analysis");
       console.warn(`[Pipeline] Job ${jobId} p${pageNum} layout_analysis: ${err.message}`);
     }
 
@@ -179,6 +182,7 @@ async function _runJob(jobId: number): Promise<void> {
       regions = Array.isArray(data.regions) ? data.regions : [];
       await updateDocumentPage(pageId, { contentRegions: regions });
     } catch (err: any) {
+      stagesFailed.push("bbox_detection");
       console.warn(`[Pipeline] Job ${jobId} p${pageNum} bbox_detection: ${err.message}`);
     }
 
@@ -207,19 +211,26 @@ async function _runJob(jobId: number): Promise<void> {
 
       await updateDocumentPage(pageId, { ocrCompleted: true, ocrConfidence });
     } catch (err: any) {
+      stagesFailed.push("ocr_extraction");
       console.warn(`[Pipeline] Job ${jobId} p${pageNum} ocr_extraction: ${err.message}`);
       const ocrResult = await createOcrResult({ pageId, status: "failed", confidence: 0 });
       ocrResultId = ocrResult.id;
     }
 
-    // Queue every page for HITL review
-    await createHitlItem({
-      pageId,
-      ocrResultId: ocrResultId ?? undefined,
-      reason: `Page ${pageNum} of ${totalDocPages} — initial HITL review`,
-      flagCategory: "manual_flag",
-      priority: "medium",
-    });
+    // Queue for HITL review: always if a stage failed or confidence is below threshold
+    const needsHitl = stagesFailed.length > 0 || ocrConfidence < HITL_CONFIDENCE_THRESHOLD;
+    if (needsHitl) {
+      const reasonParts: string[] = [`Page ${pageNum} of ${totalDocPages}`];
+      if (stagesFailed.length > 0) reasonParts.push(`failed stages: ${stagesFailed.join(", ")}`);
+      if (ocrConfidence < HITL_CONFIDENCE_THRESHOLD) reasonParts.push(`low confidence: ${ocrConfidence}%`);
+      await createHitlItem({
+        pageId,
+        ocrResultId: ocrResultId ?? undefined,
+        reason: reasonParts.join(" — "),
+        flagCategory: stagesFailed.length > 0 ? "stage_failure" : "low_confidence",
+        priority: stagesFailed.includes("ocr_extraction") || ocrConfidence < 50 ? "high" : "medium",
+      });
+    }
 
     confidences.push(ocrConfidence);
     processedPages++;

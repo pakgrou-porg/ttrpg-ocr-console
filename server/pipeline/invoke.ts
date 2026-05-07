@@ -1,6 +1,30 @@
 import { getLlmProviderById, getStageInscriptionByStage, getSystemPromptByName } from "../db";
 import { decryptSecret } from "../crypto";
 
+const RETRYABLE_STATUS = new Set([429, 502, 503, 504]);
+const RETRY_DELAYS_MS = [1_000, 2_000, 4_000];
+
+async function fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < RETRY_DELAYS_MS.length + 1; attempt++) {
+    try {
+      const res = await fetch(url, init);
+      if (res.ok || !RETRYABLE_STATUS.has(res.status)) return res;
+      const errText = await res.text().catch(() => "");
+      lastError = new Error(`HTTP ${res.status}: ${errText.slice(0, 200)}`);
+      console.warn(`[invoke] attempt ${attempt + 1} got ${res.status}, retrying…`);
+    } catch (err: any) {
+      if (err?.name === "AbortError") throw err; // don't retry timeouts
+      lastError = err;
+      console.warn(`[invoke] attempt ${attempt + 1} network error: ${err?.message}`);
+    }
+    if (attempt < RETRY_DELAYS_MS.length) {
+      await new Promise(r => setTimeout(r, RETRY_DELAYS_MS[attempt]));
+    }
+  }
+  throw lastError;
+}
+
 export interface StageContent {
   type: "text";
   text: string;
@@ -64,7 +88,7 @@ export async function invokeStage(
   }
 
   const messages: any[] = [];
-  if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
+  if (systemPrompt.trim()) messages.push({ role: "system", content: systemPrompt });
   messages.push({ role: "user", content: userContent });
 
   const body: Record<string, unknown> = {
@@ -75,7 +99,7 @@ export async function invokeStage(
   if (provider.defaultModelId) body.model = provider.defaultModelId;
   if (inscription.llmSettings) Object.assign(body, inscription.llmSettings);
 
-  const res = await fetch(url, {
+  const res = await fetchWithRetry(url, {
     method: "POST",
     headers,
     body: JSON.stringify(body),
@@ -84,7 +108,7 @@ export async function invokeStage(
 
   if (!res.ok) {
     const errText = await res.text().catch(() => "");
-    throw new Error(`Provider ${provider.name} HTTP ${res.status}: ${errText.slice(0, 300)}`);
+    throw new Error(`[${stage}] Provider ${provider.name} HTTP ${res.status}: ${errText.slice(0, 1000)}`);
   }
 
   const data = await res.json() as any;
