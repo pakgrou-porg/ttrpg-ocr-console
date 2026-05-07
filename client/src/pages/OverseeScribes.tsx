@@ -248,11 +248,17 @@ export default function OverseeScribes() {
                     const progress = job.totalPages > 0 ? Math.round((job.processedPages / job.totalPages) * 100) : 0;
                     const progressColor = job.status === "completed" ? "bg-green-500" : job.status === "failed" ? "bg-red-500" : "bg-blue-500";
                     const isExpanded = expandedJobId === job.id;
+                    const pageOffset = job.pageOffset ?? 0;
+                    const blockSize = job.blockSize ?? 10;
+                    const blockLabel = `pp. ${pageOffset + 1}–${pageOffset + blockSize}`;
                     return (
                       <>
                         <tr key={job.id} className="hover:bg-muted/20 transition-colors">
                           <td className="px-4 py-3 font-mono">JOB-{job.id}</td>
-                          <td className="px-4 py-3 font-medium max-w-[200px] truncate" title={job.sourceFile}>{job.sourceFile}</td>
+                          <td className="px-4 py-3 max-w-[220px]">
+                            <div className="font-medium truncate" title={job.sourceFile}>{job.sourceFile}</div>
+                            <div className="text-xs text-muted-foreground">{blockLabel}</div>
+                          </td>
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-2">
                               <div className="w-full bg-muted rounded-full h-2 max-w-[100px]">

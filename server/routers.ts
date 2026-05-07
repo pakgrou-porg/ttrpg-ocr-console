@@ -272,17 +272,19 @@ export const appRouter = router({
       .input(z.object({
         sourceFile: z.string().max(512),
         gameSystem: z.string().max(128).optional(),
-        totalPages: z.number().int().min(0).default(0),
         storageProvider: z.enum(["local", "google_drive"]).default("local"),
         driveFileId: z.string().max(512).optional(),
+        pageOffset: z.number().int().min(0).default(0),
+        blockSize: z.number().int().min(1).max(50).default(10),
       }))
       .mutation(async ({ input }) => {
         const id = await createIngestionJob({
           sourceFile: input.sourceFile,
           gameSystem: input.gameSystem,
-          totalPages: input.totalPages,
           storageProvider: input.storageProvider,
           driveFileId: input.driveFileId,
+          pageOffset: input.pageOffset,
+          blockSize: input.blockSize,
         } as any);
         startJob(id);
         return { success: true, id };

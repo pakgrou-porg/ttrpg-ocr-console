@@ -29,6 +29,7 @@ export default function SummoningRituals() {
   const [localPath, setLocalPath] = useState("");
   const [driveFiles, setDriveFiles] = useState<DriveFile[]>([]);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [blockSize, setBlockSize] = useState(10);
   const [lastJobIds, setLastJobIds] = useState<number[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -56,6 +57,7 @@ export default function SummoningRituals() {
             gameSystem: effectiveGameSystem,
             storageProvider: "google_drive",
             driveFileId: f.id,
+            blockSize,
           });
           ids.push(data.id);
         } catch {
@@ -65,7 +67,7 @@ export default function SummoningRituals() {
       if (ids.length) {
         setLastJobIds(ids);
         setDriveFiles([]);
-        toast({ title: "Ritual begun", description: `${ids.length} job(s) started — up to 10 pages each.` });
+        toast({ title: "Ritual begun", description: `${ids.length} job(s) started — ${blockSize} pages per block, auto-continuing until complete.` });
       }
     } else if (inputMode === "upload") {
       if (!uploadFile) {
@@ -86,7 +88,7 @@ export default function SummoningRituals() {
         setLastJobIds([data.jobId]);
         setUploadFile(null);
         if (fileInputRef.current) fileInputRef.current.value = "";
-        toast({ title: "Ritual begun", description: `Job #${data.jobId} is now processing up to 10 pages.` });
+        toast({ title: "Ritual begun", description: `Job #${data.jobId} is processing ${blockSize} pages per block, auto-continuing until complete.` });
       } catch (err: any) {
         toast({ title: "Upload failed", description: err.message, variant: "destructive" });
       } finally {
@@ -98,10 +100,10 @@ export default function SummoningRituals() {
         toast({ title: "Path required", description: "Provide a local file path.", variant: "destructive" });
         return;
       }
-      const data = await createJob.mutateAsync({ sourceFile: trimmed, gameSystem: effectiveGameSystem, storageProvider: "local" });
+      const data = await createJob.mutateAsync({ sourceFile: trimmed, gameSystem: effectiveGameSystem, storageProvider: "local", blockSize });
       setLastJobIds([data.id]);
       setLocalPath("");
-      toast({ title: "Ritual begun", description: `Job #${data.id} is now processing up to 10 pages.` });
+      toast({ title: "Ritual begun", description: `Job #${data.id} is processing ${blockSize} pages per block, auto-continuing until complete.` });
     }
   };
 
@@ -181,16 +183,29 @@ export default function SummoningRituals() {
               ))}
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="game-system">Game System</Label>
-              <select
-                id="game-system"
-                value={effectiveGameSystem}
-                onChange={e => setGameSystem(e.target.value)}
-                className="w-full h-10 px-3 rounded-md border border-input bg-background/50 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-              >
-                {gameSystems.map(s => <option key={s}>{s}</option>)}
-              </select>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="game-system">Game System</Label>
+                <select
+                  id="game-system"
+                  value={effectiveGameSystem}
+                  onChange={e => setGameSystem(e.target.value)}
+                  className="w-full h-10 px-3 rounded-md border border-input bg-background/50 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                >
+                  {gameSystems.map(s => <option key={s}>{s}</option>)}
+                </select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="block-size">Pages per Block</Label>
+                <select
+                  id="block-size"
+                  value={blockSize}
+                  onChange={e => setBlockSize(Number(e.target.value))}
+                  className="w-full h-10 px-3 rounded-md border border-input bg-background/50 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                >
+                  {[1, 2, 5, 10].map(n => <option key={n} value={n}>{n} page{n > 1 ? "s" : ""}</option>)}
+                </select>
+              </div>
             </div>
 
             {/* Input-mode-specific controls */}
