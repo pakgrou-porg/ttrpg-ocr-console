@@ -1067,6 +1067,27 @@ export async function getOcrResultById(id: number) {
   return result.length > 0 ? result[0] : undefined;
 }
 
+export async function getPagesByIds(ids: number[]) {
+  const db = await getDb();
+  if (!db || ids.length === 0) return [];
+  const { inArray } = await import("drizzle-orm");
+  return db.select().from(documentPages).where(inArray(documentPages.id, ids));
+}
+
+export async function getDocumentsByIds(ids: number[]) {
+  const db = await getDb();
+  if (!db || ids.length === 0) return [];
+  const { inArray } = await import("drizzle-orm");
+  return db.select().from(documents).where(inArray(documents.id, ids));
+}
+
+export async function getOcrResultsByPageIds(pageIds: number[]) {
+  const db = await getDb();
+  if (!db || pageIds.length === 0) return [];
+  const { inArray } = await import("drizzle-orm");
+  return db.select().from(ocrResults).where(inArray(ocrResults.pageId, pageIds));
+}
+
 export async function createOcrResult(ocrResult: InsertOcrResult & Record<string, unknown>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -1083,32 +1104,25 @@ export async function updateOcrResult(id: number, updates: Partial<InsertOcrResu
 
 // ─── HITL Queue ───────────────────────────────────────────────────────────────
 
-const PRIORITY_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+const priorityRank = sql`CASE ${hitlQueue.priority} WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 99 END`;
 
-export async function getAllHitlItems(options?: { status?: string; priority?: string; limit?: number; orderByPriority?: boolean }) {
+export async function getAllHitlItems(options?: { status?: string; priority?: string; limit?: number; offset?: number; orderByPriority?: boolean }) {
   const db = await getDb();
   if (!db) return [];
   const conditions = [];
   if (options?.status) conditions.push(eq(hitlQueue.status, options.status as any));
   if (options?.priority) conditions.push(eq(hitlQueue.priority, options.priority as any));
 
-  const query = db.select().from(hitlQueue);
-  let results: any[];
-  if (conditions.length > 0) {
-    results = await query.where(and(...conditions)).orderBy(asc(hitlQueue.createdAt)).limit(options?.limit ?? 100);
-  } else {
-    results = await query.orderBy(desc(hitlQueue.createdAt)).limit(options?.limit ?? 100);
-  }
-  if (options?.orderByPriority) {
-    results = results.sort((a, b) => {
-      const pa = PRIORITY_ORDER[a.priority] ?? 99;
-      const pb = PRIORITY_ORDER[b.priority] ?? 99;
-      if (pa !== pb) return pa - pb;
-      return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-    });
-    if (options.limit) results = results.slice(0, options.limit);
-  }
-  return results;
+  const order = options?.orderByPriority
+    ? [asc(priorityRank), asc(hitlQueue.createdAt)]
+    : [desc(hitlQueue.createdAt)];
+
+  const baseQuery = db.select().from(hitlQueue);
+  const filtered = conditions.length > 0 ? baseQuery.where(and(...conditions)) : baseQuery;
+  return filtered
+    .orderBy(...order)
+    .limit(options?.limit ?? 100)
+    .offset(options?.offset ?? 0);
 }
 
 export async function getHitlItemById(id: number) {

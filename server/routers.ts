@@ -21,6 +21,7 @@ import {
   getAllSupabaseInstances, getSupabaseInstanceById, createSupabaseInstance, updateSupabaseInstance, deleteSupabaseInstance, setActiveSupabaseInstance, testSupabaseInstanceConnection,
   getDocumentById, getAllDocuments, createDocument, updateDocument, deleteDocument, searchDocuments,
   getPagesByDocumentId, getPageById, getPageByPhash, createDocumentPage, updateDocumentPage,
+  getPagesByIds, getDocumentsByIds, getOcrResultsByPageIds,
   getOcrResultByPageId, getOcrResultById, createOcrResult, updateOcrResult,
   getHitlItemById, getHitlItemsByPageId, getAllHitlItems, createHitlItem, updateHitlItem, getHitlStats,
   getAllGameSystems, createGameSystem, updateGameSystem, deleteGameSystem,
@@ -1458,33 +1459,42 @@ export const appRouter = router({
       .input(z.object({
         status: z.enum(HITL_STATUSES).optional(),
         priority: z.enum(HITL_PRIORITIES).optional(),
-        limit: z.number().int().min(1).max(500).optional(),
+        limit: z.number().int().min(1).max(2000).optional(),
+        offset: z.number().int().min(0).optional(),
       }).optional())
       .query(async ({ input }) => {
         const items = await getAllHitlItems({
           status: input?.status,
           priority: input?.priority,
-          limit: input?.limit,
+          limit: input?.limit ?? 50,
+          offset: input?.offset ?? 0,
         });
-        // Enrich with page and document info
-        const enriched = await Promise.all(items.map(async (item) => {
-          const page = await getPageById(item.pageId);
-          let documentTitle = "Unknown";
-          let documentId: number | null = null;
-          if (page) {
-            const doc = await getDocumentById(page.documentId);
-            documentTitle = doc?.title ?? doc?.filename ?? "Unknown";
-            documentId = page.documentId;
-          }
+        if (items.length === 0) return [];
+
+        // Batch-fetch pages, documents, and OCR results in 3 queries
+        const pageIds = [...new Set(items.map(i => i.pageId))];
+        const pages = await getPagesByIds(pageIds);
+        const pageMap = new Map(pages.map(p => [p.id, p]));
+
+        const documentIds = [...new Set(pages.map(p => p.documentId))];
+        const docs = await getDocumentsByIds(documentIds);
+        const docMap = new Map(docs.map(d => [d.id, d]));
+
+        const ocrByPage = await getOcrResultsByPageIds(pageIds);
+        const ocrMap = new Map(ocrByPage.map(r => [r.pageId, r]));
+
+        return items.map(item => {
+          const page = pageMap.get(item.pageId) ?? null;
+          const doc = page ? docMap.get(page.documentId) ?? null : null;
+          const ocr = page ? ocrMap.get(page.id) ?? null : null;
           return {
             ...item,
-            pageNumber: page?.pageNumber ?? null,
-            thumbnailUrl: page?.thumbnailUrl ?? null,
-            documentTitle,
-            documentId,
+            page: page ?? null,
+            ocr: ocr ?? null,
+            documentTitle: doc?.title ?? doc?.filename ?? "Unknown",
+            documentId: page?.documentId ?? null,
           };
-        }));
-        return enriched;
+        });
       }),
 
     /** Get a single HITL item with full context (page, OCR, document) */
