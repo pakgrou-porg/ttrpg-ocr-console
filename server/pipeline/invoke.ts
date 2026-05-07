@@ -70,7 +70,7 @@ export async function invokeStage(
   const body: Record<string, unknown> = {
     messages,
     temperature: inscription.temperature ?? provider.defaultTemperature ?? 0.2,
-    max_tokens: inscription.maxTokens ?? provider.maxTokens ?? 4096,
+    max_tokens: inscription.maxTokens ?? 4096,
   };
   if (provider.defaultModelId) body.model = provider.defaultModelId;
   if (inscription.llmSettings) Object.assign(body, inscription.llmSettings);

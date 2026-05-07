@@ -2,130 +2,385 @@ import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
-import { CheckCircle2, XCircle, ArrowUpCircle, ChevronDown, ChevronRight, Loader2, ClipboardList } from "lucide-react";
+import {
+  CheckCircle2, XCircle, ArrowUpCircle, ChevronDown, ChevronRight,
+  Loader2, ClipboardList, FileText, Layout, BoxSelect, ListTree, Braces, BookOpen,
+} from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useToast } from "@/hooks/use-toast";
 
 type HitlAction = "resolved" | "skipped" | "escalated";
+type TabId = "text" | "layout" | "regions" | "structure" | "json" | "document";
 
 function StatusBadge({ status }: { status: string }) {
   const variants: Record<string, string> = {
-    queued: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
+    queued:      "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
     in_progress: "bg-blue-500/20 text-blue-400 border-blue-500/30",
-    resolved: "bg-green-500/20 text-green-400 border-green-500/30",
-    skipped: "bg-muted text-muted-foreground",
-    escalated: "bg-red-500/20 text-red-400 border-red-500/30",
+    resolved:    "bg-green-500/20 text-green-400 border-green-500/30",
+    skipped:     "bg-muted text-muted-foreground border-border/30",
+    escalated:   "bg-red-500/20 text-red-400 border-red-500/30",
   };
   return (
-    <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${variants[status] ?? "bg-muted text-muted-foreground"}`}>
+    <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${variants[status] ?? "bg-muted text-muted-foreground border-border/30"}`}>
       {status}
     </span>
   );
 }
 
+// ── Tab content helpers ───────────────────────────────────────────────────────
+
+function JsonViewer({ value }: { value: unknown }) {
+  if (value == null) return <span className="text-muted-foreground italic text-xs">—</span>;
+  return (
+    <pre className="text-xs bg-muted/20 border border-border/40 rounded p-3 overflow-auto max-h-64 whitespace-pre-wrap break-all">
+      {typeof value === "string" ? value : JSON.stringify(value, null, 2)}
+    </pre>
+  );
+}
+
+function CorrectionField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  return (
+    <div className="space-y-1 mt-3">
+      <p className="text-xs text-muted-foreground">{label} <span className="opacity-60">(leave blank to accept as-is)</span></p>
+      <Textarea value={value} onChange={e => onChange(e.target.value)}
+        placeholder="Enter correction here…"
+        className="text-xs font-mono h-24 bg-background/50 resize-y" />
+    </div>
+  );
+}
+
+function TextTab({ item, correction, onCorrect }: { item: any; correction: string; onCorrect: (v: string) => void }) {
+  const sd = item.ocr?.structuredData as any;
+  const blocks: any[] = Array.isArray(sd?.content_blocks) ? sd.content_blocks : [];
+  const displayText = item.ocr?.rawText
+    ?? (blocks.length > 0 ? blocks.map((b: any) => b.text ?? b.content ?? "").join("\n\n") : null);
+
+  return (
+    <div>
+      <JsonViewer value={displayText ?? "No OCR text extracted"} />
+      <CorrectionField label="Corrected text" value={correction} onChange={onCorrect} />
+    </div>
+  );
+}
+
+function LayoutTab({ item, correction, onCorrect }: { item: any; correction: string; onCorrect: (v: string) => void }) {
+  const sd = item.ocr?.structuredData as any;
+  const layoutType = item.page?.layoutType ?? sd?.layout_type;
+  const layoutMeta = sd?.layout ?? sd?.layout_metadata ?? sd?.page_layout;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex gap-3 items-center">
+        <span className="text-xs text-muted-foreground uppercase tracking-wide">Layout Type</span>
+        <span className="text-sm font-mono px-2 py-0.5 rounded bg-muted/30 border border-border/40">
+          {layoutType ?? "Unknown"}
+        </span>
+      </div>
+      {layoutMeta && (
+        <div>
+          <p className="text-xs text-muted-foreground mb-1">Layout metadata</p>
+          <JsonViewer value={layoutMeta} />
+        </div>
+      )}
+      <CorrectionField
+        label="Layout correction (JSON or plain description)"
+        value={correction}
+        onChange={onCorrect}
+      />
+    </div>
+  );
+}
+
+function RegionsTab({ item, correction, onCorrect }: { item: any; correction: string; onCorrect: (v: string) => void }) {
+  const sd = item.ocr?.structuredData as any;
+  const regions = item.page?.contentRegions ?? sd?.regions ?? sd?.bounding_boxes ?? sd?.content_regions;
+
+  return (
+    <div className="space-y-3">
+      {regions ? (
+        <>
+          <p className="text-xs text-muted-foreground">
+            {Array.isArray(regions) ? `${regions.length} region(s) detected` : "Region data"}
+          </p>
+          <JsonViewer value={regions} />
+        </>
+      ) : (
+        <p className="text-xs text-muted-foreground italic">No bounding box / region data available for this page.</p>
+      )}
+      <CorrectionField
+        label="Region correction (JSON array)"
+        value={correction}
+        onChange={onCorrect}
+      />
+    </div>
+  );
+}
+
+function StructureTab({ item, correction, onCorrect }: { item: any; correction: string; onCorrect: (v: string) => void }) {
+  const sd = item.ocr?.structuredData as any;
+  const fields: [string, unknown][] = [
+    ["Chapter", sd?.chapter ?? sd?.chapter_title],
+    ["Section", sd?.section ?? sd?.section_title],
+    ["Subsection", sd?.subsection ?? sd?.subsection_title],
+    ["Headings", sd?.headings ?? sd?.heading_hierarchy],
+    ["Document summary", sd?.document_summary],
+    ["Page summary", sd?.page_summary ?? sd?.summary],
+  ].filter(([, v]) => v != null);
+
+  return (
+    <div className="space-y-3">
+      {fields.length === 0 ? (
+        <p className="text-xs text-muted-foreground italic">
+          No structural metadata (chapter, section, headings) found in OCR output.
+        </p>
+      ) : (
+        <div className="space-y-3">
+          {fields.map(([label, value]) => (
+            <div key={label}>
+              <p className="text-xs text-muted-foreground mb-1">{label}</p>
+              <JsonViewer value={value} />
+            </div>
+          ))}
+        </div>
+      )}
+      <CorrectionField
+        label="Structure correction (JSON with chapter/section/subsection keys)"
+        value={correction}
+        onChange={onCorrect}
+      />
+    </div>
+  );
+}
+
+function JsonTab({ item, correction, onCorrect }: { item: any; correction: string; onCorrect: (v: string) => void }) {
+  const sd = item.ocr?.structuredData;
+  return (
+    <div>
+      <p className="text-xs text-muted-foreground mb-2">Full structured output from OCR extraction</p>
+      <JsonViewer value={sd ?? "No structured data"} />
+      <CorrectionField
+        label="Full JSON correction (paste complete corrected JSON)"
+        value={correction}
+        onChange={onCorrect}
+      />
+    </div>
+  );
+}
+
+function DocumentTab({ item }: { item: any }) {
+  return (
+    <div className="space-y-4">
+      <div>
+        <p className="text-xs text-muted-foreground mb-1">Document</p>
+        <p className="text-sm font-medium">{item.documentTitle ?? "Unknown"}</p>
+      </div>
+      {item.page?.pageNumber && (
+        <div>
+          <p className="text-xs text-muted-foreground mb-1">Page</p>
+          <p className="text-sm font-mono">{item.page.pageNumber}</p>
+        </div>
+      )}
+      <p className="text-xs text-muted-foreground italic">
+        Document-level metadata (title, summary, publisher) is set by the document_intelligence stage
+        and can be edited from the Archivist's Desk.
+      </p>
+    </div>
+  );
+}
+
+// ── Main HITL card ────────────────────────────────────────────────────────────
+
+const TABS: { id: TabId; label: string; icon: React.ElementType }[] = [
+  { id: "text",      label: "OCR Text",  icon: FileText  },
+  { id: "layout",    label: "Layout",    icon: Layout    },
+  { id: "regions",   label: "Regions",   icon: BoxSelect },
+  { id: "structure", label: "Structure", icon: ListTree  },
+  { id: "json",      label: "JSON",      icon: Braces    },
+  { id: "document",  label: "Document",  icon: BookOpen  },
+];
+
 function HitlCard({ item, onResolved }: { item: any; onResolved: () => void }) {
   const { toast } = useToast();
   const [expanded, setExpanded] = useState(false);
+  const [activeTab, setActiveTab] = useState<TabId>("text");
+  const [corrections, setCorrections] = useState<Record<TabId, string>>({
+    text: "", layout: "", regions: "", structure: "", json: "", document: "",
+  });
   const [notes, setNotes] = useState("");
-  const [correctedText, setCorrectedText] = useState("");
 
-  const resolveMut = trpc.hitl.resolve.useMutation({ onSuccess: () => { toast({ title: "Approved" }); onResolved(); }, onError: (e) => toast({ title: "Error", description: e.message, variant: "destructive" }) });
-  const skipMut = trpc.hitl.skip.useMutation({ onSuccess: () => { toast({ title: "Skipped" }); onResolved(); }, onError: (e) => toast({ title: "Error", description: e.message, variant: "destructive" }) });
-  const escalateMut = trpc.hitl.escalate.useMutation({ onSuccess: () => { toast({ title: "Escalated" }); onResolved(); }, onError: (e) => toast({ title: "Error", description: e.message, variant: "destructive" }) });
+  const resolveMut = trpc.hitl.resolve.useMutation({
+    onSuccess: () => { toast({ title: "Approved" }); onResolved(); },
+    onError: (e) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+  const skipMut = trpc.hitl.skip.useMutation({
+    onSuccess: () => { toast({ title: "Skipped" }); onResolved(); },
+    onError: (e) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+  const escalateMut = trpc.hitl.escalate.useMutation({
+    onSuccess: () => { toast({ title: "Escalated" }); onResolved(); },
+    onError: (e) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
 
   const isPending = resolveMut.isPending || skipMut.isPending || escalateMut.isPending;
 
-  const submit = (action: HitlAction) => {
-    const opts = { resolutionNotes: notes || undefined };
-    if (action === "resolved") resolveMut.mutate({ id: item.id, ...opts, correctedText: correctedText || undefined });
-    else if (action === "skipped") skipMut.mutate({ id: item.id, ...opts });
-    else escalateMut.mutate({ id: item.id, ...opts });
+  const setCorrection = (tab: TabId) => (v: string) =>
+    setCorrections(c => ({ ...c, [tab]: v }));
+
+  const buildCorrectedData = () => {
+    const entries = Object.entries(corrections).filter(([, v]) => v.trim());
+    if (entries.length === 0) return undefined;
+    return Object.fromEntries(entries.map(([k, v]) => [`${k}_correction`, v]));
   };
 
-  const rawText = item.ocr?.rawText ?? item.ocr?.structuredData ? JSON.stringify(item.ocr?.structuredData, null, 2) : null;
+  const submit = (action: HitlAction) => {
+    const opts = { resolutionNotes: notes || undefined };
+    if (action === "resolved") {
+      resolveMut.mutate({
+        id: item.id,
+        ...opts,
+        correctedText: corrections.text || undefined,
+        correctedStructuredData: buildCorrectedData(),
+      });
+    } else if (action === "skipped") {
+      skipMut.mutate({ id: item.id, ...opts });
+    } else {
+      escalateMut.mutate({ id: item.id, ...opts });
+    }
+  };
+
   const pageImagePath = item.page?.rawPngUrl
     ? `/api/pipeline/pages/${item.page.rawPngUrl.replace(/.*\/workspace\//, "")}`
     : null;
 
+  const hasCorrections = Object.values(corrections).some(v => v.trim());
+
   return (
     <Card className="bg-card/50 backdrop-blur-sm border-border/50">
       <CardHeader className="pb-3">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <button onClick={() => setExpanded(!expanded)} className="text-muted-foreground hover:text-foreground">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-3 min-w-0">
+            <button onClick={() => setExpanded(!expanded)} className="text-muted-foreground hover:text-foreground flex-shrink-0">
               {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
             </button>
-            <CardTitle className="text-base">
+            <CardTitle className="text-base truncate">
               Page {item.page?.pageNumber ?? "?"} — {item.reason}
             </CardTitle>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-shrink-0">
             <StatusBadge status={item.status} />
             {item.ocr?.confidence != null && (
-              <span className="text-xs text-muted-foreground">conf: {item.ocr.confidence}%</span>
+              <span className="text-xs text-muted-foreground font-mono">conf: {item.ocr.confidence}%</span>
+            )}
+            {item.status === "queued" && !expanded && (
+              <div className="flex items-center gap-1 ml-2">
+                <Button size="sm" variant="ghost" className="h-7 text-xs px-2 text-yellow-500 hover:bg-yellow-500/10"
+                  onClick={() => submit("escalated")} disabled={isPending}>
+                  <ArrowUpCircle className="w-3 h-3 mr-1" /> Escalate
+                </Button>
+                <Button size="sm" variant="ghost" className="h-7 text-xs px-2"
+                  onClick={() => submit("skipped")} disabled={isPending}>
+                  <XCircle className="w-3 h-3 mr-1" /> Skip
+                </Button>
+                <Button size="sm" className="h-7 text-xs px-2 bg-green-600 hover:bg-green-700 text-white"
+                  onClick={() => submit("resolved")} disabled={isPending}>
+                  {isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle2 className="w-3 h-3 mr-1" />}
+                  Approve
+                </Button>
+              </div>
             )}
           </div>
         </div>
       </CardHeader>
 
       {expanded && (
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Page image */}
+        <CardContent className="space-y-4 pt-0">
+          <div className="grid grid-cols-1 lg:grid-cols-[40%_1fr] gap-4">
+            {/* Left: page image */}
             <div>
-              <p className="text-xs text-muted-foreground mb-2 uppercase tracking-wide">Page Image</p>
+              <p className="text-xs text-muted-foreground uppercase tracking-wide mb-2">Page Image</p>
               {pageImagePath ? (
-                <img src={pageImagePath} alt={`Page ${item.page?.pageNumber}`} className="w-full rounded border border-border/50 object-contain max-h-[500px]" />
+                <img
+                  src={pageImagePath}
+                  alt={`Page ${item.page?.pageNumber}`}
+                  className="w-full rounded border border-border/50 object-contain max-h-[600px]"
+                />
               ) : (
-                <div className="h-40 flex items-center justify-center rounded border border-border/50 bg-muted/20 text-muted-foreground text-sm">
+                <div className="h-48 flex items-center justify-center rounded border border-dashed border-border/50 bg-muted/10 text-muted-foreground text-sm">
                   Image not available
                 </div>
               )}
             </div>
 
-            {/* OCR output */}
-            <div>
-              <p className="text-xs text-muted-foreground mb-2 uppercase tracking-wide">OCR Output</p>
-              <pre className="text-xs bg-muted/20 border border-border/50 rounded p-3 overflow-auto max-h-[300px] whitespace-pre-wrap">
-                {rawText ?? "No OCR data"}
-              </pre>
-              <div className="mt-3 space-y-1">
-                <p className="text-xs text-muted-foreground">Corrected text (optional — leave blank to accept as-is)</p>
-                <Textarea
-                  value={correctedText}
-                  onChange={e => setCorrectedText(e.target.value)}
-                  placeholder="Paste corrected text here if needed…"
-                  className="text-xs font-mono h-28 bg-background/50"
-                />
+            {/* Right: tabs */}
+            <div className="flex flex-col gap-3">
+              {/* Tab bar */}
+              <div className="flex gap-1 flex-wrap p-1 rounded-md bg-muted/20 border border-border/30">
+                {TABS.map(({ id, label, icon: Icon }) => (
+                  <button
+                    key={id}
+                    onClick={() => setActiveTab(id)}
+                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                      activeTab === id
+                        ? "bg-background shadow text-foreground"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    <Icon className="w-3 h-3" />
+                    {label}
+                    {corrections[id]?.trim() && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-orange-400 flex-shrink-0" title="Has correction" />
+                    )}
+                  </button>
+                ))}
+              </div>
+
+              {/* Tab content */}
+              <div className="flex-1 overflow-auto">
+                {activeTab === "text"      && <TextTab      item={item} correction={corrections.text}      onCorrect={setCorrection("text")} />}
+                {activeTab === "layout"    && <LayoutTab    item={item} correction={corrections.layout}    onCorrect={setCorrection("layout")} />}
+                {activeTab === "regions"   && <RegionsTab   item={item} correction={corrections.regions}   onCorrect={setCorrection("regions")} />}
+                {activeTab === "structure" && <StructureTab item={item} correction={corrections.structure} onCorrect={setCorrection("structure")} />}
+                {activeTab === "json"      && <JsonTab      item={item} correction={corrections.json}      onCorrect={setCorrection("json")} />}
+                {activeTab === "document"  && <DocumentTab  item={item} />}
               </div>
             </div>
           </div>
 
-          <div className="space-y-1">
-            <p className="text-xs text-muted-foreground">Review notes (optional)</p>
-            <Textarea
-              value={notes}
-              onChange={e => setNotes(e.target.value)}
-              placeholder="Add notes about this page…"
-              className="text-xs h-16 bg-background/50"
-            />
-          </div>
-
-          <div className="flex gap-2 justify-end">
-            <Button variant="outline" size="sm" className="gap-1.5 text-yellow-500 border-yellow-500/30 hover:bg-yellow-500/10"
-              onClick={() => submit("escalated")} disabled={isPending}>
-              <ArrowUpCircle className="w-4 h-4" /> Escalate
-            </Button>
-            <Button variant="outline" size="sm" className="gap-1.5"
-              onClick={() => submit("skipped")} disabled={isPending}>
-              <XCircle className="w-4 h-4" /> Skip
-            </Button>
-            <Button size="sm" className="gap-1.5 bg-green-600 hover:bg-green-700 text-white"
-              onClick={() => submit("resolved")} disabled={isPending}>
-              {resolveMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-              Approve
-            </Button>
+          {/* Notes + actions */}
+          <div className="border-t border-border/30 pt-4 space-y-3">
+            <div className="space-y-1">
+              <p className="text-xs text-muted-foreground">Review notes (optional)</p>
+              <Textarea
+                value={notes}
+                onChange={e => setNotes(e.target.value)}
+                placeholder="Add notes about this page…"
+                className="text-xs h-14 bg-background/50"
+              />
+            </div>
+            <div className="flex items-center justify-between">
+              {hasCorrections ? (
+                <p className="text-xs text-orange-400">
+                  {Object.values(corrections).filter(v => v.trim()).length} tab(s) with corrections — will be saved on Approve.
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">No corrections — Approve accepts OCR output as-is.</p>
+              )}
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" className="gap-1.5 text-yellow-500 border-yellow-500/30 hover:bg-yellow-500/10"
+                  onClick={() => submit("escalated")} disabled={isPending}>
+                  <ArrowUpCircle className="w-4 h-4" /> Escalate
+                </Button>
+                <Button variant="outline" size="sm" className="gap-1.5"
+                  onClick={() => submit("skipped")} disabled={isPending}>
+                  <XCircle className="w-4 h-4" /> Skip
+                </Button>
+                <Button size="sm" className="gap-1.5 bg-green-600 hover:bg-green-700 text-white"
+                  onClick={() => submit("resolved")} disabled={isPending}>
+                  {resolveMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                  Approve
+                </Button>
+              </div>
+            </div>
           </div>
         </CardContent>
       )}
@@ -133,10 +388,20 @@ function HitlCard({ item, onResolved }: { item: any; onResolved: () => void }) {
   );
 }
 
+// ── Page ──────────────────────────────────────────────────────────────────────
+
 export default function TrialsOfTruth() {
+  const { toast } = useToast();
   const [statusFilter, setStatusFilter] = useState<"queued" | "resolved" | "escalated" | "skipped">("queued");
   const { data: items, isLoading, refetch } = trpc.hitl.list.useQuery({ status: statusFilter, limit: 50 });
   const { data: stats } = trpc.hitl.stats.useQuery();
+
+  const bulkApproveMut = trpc.hitl.bulkResolve.useMutation({
+    onSuccess: (r) => { toast({ title: `Approved ${r.count} items` }); refetch(); },
+    onError: (e) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const queuedIds = (items ?? []).filter((i: any) => i.status === "queued").map((i: any) => i.id);
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -146,7 +411,8 @@ export default function TrialsOfTruth() {
           Trials of Truth
         </h1>
         <p className="text-lg text-muted-foreground max-w-3xl">
-          Review each processed page for accuracy. Approve, correct, skip, or escalate before knowledge enters the Arkanum.
+          Review each processed page. Approve, correct, skip, or escalate.
+          Each tab reveals a different aspect of the OCR output — correct only what needs fixing.
         </p>
       </div>
 
@@ -154,10 +420,10 @@ export default function TrialsOfTruth() {
       {stats && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
           {[
-            { label: "Awaiting Review", value: stats.queued, color: "text-yellow-400" },
-            { label: "Resolved", value: stats.resolved, color: "text-green-400" },
-            { label: "Escalated", value: stats.escalated, color: "text-red-400" },
-            { label: "Skipped", value: stats.skipped, color: "text-muted-foreground" },
+            { label: "Awaiting Review", value: stats.queued,    color: "text-yellow-400" },
+            { label: "Resolved",        value: stats.resolved,  color: "text-green-400"  },
+            { label: "Escalated",       value: stats.escalated, color: "text-red-400"    },
+            { label: "Skipped",         value: stats.skipped,   color: "text-muted-foreground" },
           ].map(({ label, value, color }) => (
             <Card key={label} className="bg-card/50 backdrop-blur-sm border-border/50">
               <CardContent className="pt-4 pb-3">
@@ -169,21 +435,36 @@ export default function TrialsOfTruth() {
         </div>
       )}
 
-      {/* Filter tabs */}
-      <div className="flex gap-2">
-        {(["queued", "resolved", "escalated", "skipped"] as const).map(s => (
-          <button key={s} onClick={() => setStatusFilter(s)}
-            className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-              statusFilter === s ? "bg-primary text-primary-foreground" : "bg-muted/30 text-muted-foreground hover:text-foreground"
-            }`}>
-            {s.charAt(0).toUpperCase() + s.slice(1)}
-          </button>
-        ))}
+      {/* Filter + bulk actions */}
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex gap-2">
+          {(["queued", "resolved", "escalated", "skipped"] as const).map(s => (
+            <button key={s} onClick={() => setStatusFilter(s)}
+              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                statusFilter === s ? "bg-primary text-primary-foreground" : "bg-muted/30 text-muted-foreground hover:text-foreground"
+              }`}>
+              {s.charAt(0).toUpperCase() + s.slice(1)}
+            </button>
+          ))}
+        </div>
+        {statusFilter === "queued" && queuedIds.length > 0 && (
+          <Button
+            variant="outline" size="sm"
+            className="gap-2 text-green-500 border-green-500/30 hover:bg-green-500/10"
+            onClick={() => { if (confirm(`Approve all ${queuedIds.length} queued items as-is?`)) bulkApproveMut.mutate({ ids: queuedIds }); }}
+            disabled={bulkApproveMut.isPending}
+          >
+            {bulkApproveMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+            Approve All ({queuedIds.length})
+          </Button>
+        )}
       </div>
 
       {/* Items */}
       {isLoading ? (
-        <div className="flex items-center gap-2 text-muted-foreground"><Loader2 className="w-4 h-4 animate-spin" /> Loading…</div>
+        <div className="flex items-center gap-2 text-muted-foreground">
+          <Loader2 className="w-4 h-4 animate-spin" /> Loading…
+        </div>
       ) : items?.length === 0 ? (
         <div className="text-center py-16 text-muted-foreground">
           <CheckCircle2 className="w-12 h-12 mx-auto mb-3 opacity-30" />
@@ -191,7 +472,7 @@ export default function TrialsOfTruth() {
         </div>
       ) : (
         <div className="space-y-3">
-          {items?.map(item => (
+          {items?.map((item: any) => (
             <HitlCard key={item.id} item={item} onResolved={() => refetch()} />
           ))}
         </div>

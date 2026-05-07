@@ -254,7 +254,11 @@ async function _runJob(jobId: number): Promise<void> {
   console.log(`[Pipeline] Job ${jobId}: ${processedPages} pages queued for HITL (avg confidence: ${avgConfidence})`);
 
   // ── Auto-chain next block ─────────────────────────────────────────────────
-  if (hasMore) {
+  // Re-fetch the job to check whether a cancel was requested while this block ran
+  const currentJob = await getIngestionJobById(jobId);
+  const wasCancelled = currentJob?.status === "failed" && currentJob?.errorMessage === "Cancelled by user";
+
+  if (hasMore && !wasCancelled) {
     console.log(`[Pipeline] Job ${jobId}: chaining next block starting at page ${nextOffset + 1}`);
     const nextJobId = await createIngestionJob({
       sourceFile: job.sourceFile,
