@@ -729,6 +729,33 @@ export async function clearIngestionJobsByStatus(statuses: string[]) {
   await db.delete(ingestionJobs).where(inArray(ingestionJobs.status, statuses));
 }
 
+export async function purgeJobPages(jobId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const { inArray } = await import("drizzle-orm");
+
+  const docs = await db.select({ id: documents.id })
+    .from(documents)
+    .where(eq(documents.ingestionJobId, jobId));
+
+  for (const doc of docs) {
+    const pages = await db.select({ id: documentPages.id })
+      .from(documentPages)
+      .where(eq(documentPages.documentId, doc.id));
+    const pageIds = pages.map(p => p.id);
+
+    if (pageIds.length > 0) {
+      await db.delete(hitlQueue).where(inArray(hitlQueue.pageId, pageIds));
+      await db.delete(ocrResults).where(inArray(ocrResults.pageId, pageIds));
+      await db.delete(documentPages).where(inArray(documentPages.id, pageIds));
+    }
+
+    await db.update(documents)
+      .set({ processedPages: 0, totalPages: 0, status: "phase1_non_ocr" })
+      .where(eq(documents.id, doc.id));
+  }
+}
+
 export async function cancelIngestionJobChain(sourceFile: string, driveFileId: string | null) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");

@@ -13,7 +13,7 @@ import {
   getUserPermissions, setUserPermission, deleteUserPermission, getAllPermissionsForAllUsers,
   createInvitation, getAllInvitations, revokeInvitation,
   getAllSystemConfig, getSystemConfigByCategory, upsertSystemConfig, deleteSystemConfig,
-  getAllIngestionJobs, getActiveIngestionJobs, getIngestionJobById, createIngestionJob, updateIngestionJobStatus, getIngestionJobStats, deleteIngestionJob, clearIngestionJobsByStatus, cancelIngestionJobChain,
+  getAllIngestionJobs, getActiveIngestionJobs, getIngestionJobById, createIngestionJob, updateIngestionJobStatus, getIngestionJobStats, deleteIngestionJob, clearIngestionJobsByStatus, cancelIngestionJobChain, purgeJobPages,
   recordTelemetryEvent, getTelemetryEvents, getTelemetrySummary,
   pingDatabase,
   getAllLlmProviders, getLlmProviderById, createLlmProvider, updateLlmProvider, deleteLlmProvider,
@@ -303,6 +303,14 @@ export const appRouter = router({
       .input(z.object({ statuses: z.array(z.string()).min(1) }))
       .mutation(async ({ input }) => {
         await clearIngestionJobsByStatus(input.statuses);
+        return { success: true };
+      }),
+
+    /** Delete all pages, OCR results, and HITL items for a job's document */
+    purgePages: adminProcedure
+      .input(z.object({ id: z.number().int() }))
+      .mutation(async ({ input }) => {
+        await purgeJobPages(input.id);
         return { success: true };
       }),
 
@@ -1619,6 +1627,20 @@ export const appRouter = router({
           resolvedAt: new Date(),
         });
         return { success: true };
+      }),
+
+    /** Bulk-approve a list of HITL items with no corrections */
+    bulkResolve: protectedProcedure
+      .input(z.object({ ids: z.array(z.number().int()).min(1) }))
+      .mutation(async ({ ctx, input }) => {
+        for (const id of input.ids) {
+          await updateHitlItem(id, {
+            status: "resolved",
+            resolvedBy: ctx.user.id,
+            resolvedAt: new Date(),
+          });
+        }
+        return { success: true, count: input.ids.length };
       }),
 
     /** Get the next unreviewed item (oldest critical/high/medium/low queued or in_progress) */
