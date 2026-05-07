@@ -13,7 +13,7 @@ import {
   getUserPermissions, setUserPermission, deleteUserPermission, getAllPermissionsForAllUsers,
   createInvitation, getAllInvitations, revokeInvitation,
   getAllSystemConfig, getSystemConfigByCategory, upsertSystemConfig, deleteSystemConfig,
-  getAllIngestionJobs, getActiveIngestionJobs, getIngestionJobById, createIngestionJob, updateIngestionJobStatus, getIngestionJobStats, deleteIngestionJob, clearIngestionJobsByStatus,
+  getAllIngestionJobs, getActiveIngestionJobs, getIngestionJobById, createIngestionJob, updateIngestionJobStatus, getIngestionJobStats, deleteIngestionJob, clearIngestionJobsByStatus, cancelIngestionJobChain,
   recordTelemetryEvent, getTelemetryEvents, getTelemetrySummary,
   pingDatabase,
   getAllLlmProviders, getLlmProviderById, createLlmProvider, updateLlmProvider, deleteLlmProvider,
@@ -303,6 +303,16 @@ export const appRouter = router({
       .input(z.object({ statuses: z.array(z.string()).min(1) }))
       .mutation(async ({ input }) => {
         await clearIngestionJobsByStatus(input.statuses);
+        return { success: true };
+      }),
+
+    /** Cancel a job and all pending follow-on blocks with the same sourceFile */
+    cancel: adminProcedure
+      .input(z.object({ id: z.number().int() }))
+      .mutation(async ({ input }) => {
+        const job = await getIngestionJobById(input.id);
+        if (!job) throw new TRPCError({ code: "NOT_FOUND", message: "Job not found." });
+        await cancelIngestionJobChain(job.sourceFile, (job as any).driveFileId ?? null);
         return { success: true };
       }),
 
@@ -1470,9 +1480,12 @@ export const appRouter = router({
           priority: input?.priority,
           limit: input?.limit,
         });
-        // Enrich with page and document info
+        // Enrich with page, OCR, and document info
         const enriched = await Promise.all(items.map(async (item) => {
           const page = await getPageById(item.pageId);
+          const ocrResult = item.ocrResultId
+            ? await getOcrResultById(item.ocrResultId)
+            : (page ? await getOcrResultByPageId(page.id) : null);
           let documentTitle = "Unknown";
           let documentId: number | null = null;
           if (page) {
@@ -1482,8 +1495,8 @@ export const appRouter = router({
           }
           return {
             ...item,
-            pageNumber: page?.pageNumber ?? null,
-            thumbnailUrl: page?.thumbnailUrl ?? null,
+            page: page ?? null,
+            ocr: ocrResult ?? null,
             documentTitle,
             documentId,
           };

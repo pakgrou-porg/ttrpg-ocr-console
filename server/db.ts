@@ -729,6 +729,27 @@ export async function clearIngestionJobsByStatus(statuses: string[]) {
   await db.delete(ingestionJobs).where(inArray(ingestionJobs.status, statuses));
 }
 
+export async function cancelIngestionJobChain(sourceFile: string, driveFileId: string | null) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  // Mark all queued/converting/processing jobs for this source as cancelled
+  const cancellable = ["queued", "converting", "pass1_ocr", "pass2_ocr", "enriching"];
+  const { inArray } = await import("drizzle-orm");
+  const matches = await db.select({ id: ingestionJobs.id })
+    .from(ingestionJobs)
+    .where(
+      and(
+        eq(ingestionJobs.sourceFile, sourceFile),
+        inArray(ingestionJobs.status, cancellable),
+      ),
+    );
+  for (const { id } of matches) {
+    await db.update(ingestionJobs)
+      .set({ status: "failed", errorMessage: "Cancelled by user", completedAt: new Date() })
+      .where(eq(ingestionJobs.id, id));
+  }
+}
+
 // ─── Telemetry Events ─────────────────────────────────────────────────────────
 
 export async function recordTelemetryEvent(event: InsertTelemetryEvent) {
