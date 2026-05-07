@@ -21,65 +21,77 @@ const WORKSPACE = process.env.PIPELINE_WORKSPACE ?? "/app/workspace";
 const PROMPT_DOCUMENT_INTELLIGENCE = `You are a document metadata extractor for TTRPG (tabletop role-playing game) publications.
 Examine the provided page images and extract document metadata.
 
-CRITICAL: Return ONLY a valid JSON object. No markdown, no explanation, no preamble, no code fences.
-Your response must start with { and end with }.
+YOUR RESPONSE MUST BE A SINGLE JSON OBJECT — nothing before {, nothing after }.
+No markdown, no explanation, no code fences, no trailing text.
 
-Required JSON schema:
+Fill in each field with actual values from the document. Example of the required output:
 {
-  "canonical_title": "string — official document title as it appears on the cover or title page",
-  "publisher": "string or null — publishing company name",
-  "document_type": "string — one of: rulebook, sourcebook, adventure, supplement, setting, magazine, other",
-  "document_summary": "string — 1-2 sentence description of what this document is",
-  "game_system": "string or null — e.g. D&D 5e, AD&D, Pathfinder 2e, Call of Cthulhu"
-}`;
+  "canonical_title": "Dragon Magazine Issue 416",
+  "publisher": "Wizards of the Coast",
+  "document_type": "magazine",
+  "document_summary": "Monthly D&D magazine featuring adventures, articles, and rules expansions.",
+  "game_system": "D&D 4e"
+}
 
-const PROMPT_LAYOUT_ANALYSIS = `You are a document layout classifier. Examine the page image and identify its layout type and structure.
+document_type must be one of: rulebook, sourcebook, adventure, supplement, setting, magazine, other
+Use null for publisher or game_system if not identifiable.`;
 
-CRITICAL: Return ONLY a valid JSON object. No markdown, no explanation, no preamble, no code fences.
-Your response must start with { and end with }.
+const PROMPT_LAYOUT_ANALYSIS = `You are a document layout classifier for TTRPG publications. Examine the page image.
 
-Required JSON schema:
+YOUR RESPONSE MUST BE A SINGLE JSON OBJECT — nothing before {, nothing after }.
+No markdown, no explanation, no code fences, no trailing text.
+
+Fill in each field with the actual values you observe. Example of the required output:
 {
-  "layout_type": "string — one of: cover, title_page, toc, chapter_header, body_text, stat_block, table, illustration_full, illustration_with_text, index, appendix, mixed",
-  "columns": number,
-  "has_table": boolean,
-  "has_image_or_art": boolean,
-  "has_list": boolean
-}`;
+  "layout_type": "body_text",
+  "columns": 2,
+  "has_table": false,
+  "has_image_or_art": true,
+  "has_list": false
+}
 
-const PROMPT_BBOX_DETECTION = `You are a document content-region detector. Identify the distinct content regions present in the page image.
+layout_type must be one of: cover, title_page, toc, chapter_header, body_text, stat_block, table, illustration_full, illustration_with_text, index, appendix, mixed`;
 
-CRITICAL: Return ONLY a valid JSON object. No markdown, no explanation, no preamble, no code fences.
-Your response must start with { and end with }.
+const PROMPT_BBOX_DETECTION = `You are a document content-region detector for TTRPG publications. Identify distinct content regions in the page image.
 
-Required JSON schema:
+YOUR RESPONSE MUST BE A SINGLE JSON OBJECT — nothing before {, nothing after }.
+No markdown, no explanation, no code fences, no trailing text.
+
+Fill in each region with actual values you observe. Example of the required output:
 {
   "regions": [
-    {
-      "type": "string — one of: heading, subheading, paragraph, table, list, image, stat_block, sidebar, caption, header, footer, page_number",
-      "label": "string — brief description of this region's content",
-      "position": "string — one of: top, upper_left, upper_right, middle, lower_left, lower_right, bottom, full_page"
-    }
+    { "type": "heading", "label": "Chapter title: Ravenloft", "position": "top" },
+    { "type": "image", "label": "Full-colour cover illustration", "position": "middle" },
+    { "type": "paragraph", "label": "Cover description text", "position": "bottom" }
   ]
-}`;
+}
+
+type must be one of: heading, subheading, paragraph, table, list, image, stat_block, sidebar, caption, header, footer, page_number
+position must be one of: top, upper_left, upper_right, middle, lower_left, lower_right, bottom, full_page`;
 
 const PROMPT_OCR_EXTRACTION = `You are an OCR text extraction system for TTRPG document pages. Extract ALL readable text from the page image in reading order.
 
-CRITICAL: Return ONLY a valid JSON object. No markdown, no explanation, no preamble, no code fences.
-Your response must start with { and end with }.
+YOUR RESPONSE MUST BE A SINGLE JSON OBJECT — nothing before {, nothing after }.
+No markdown, no explanation, no code fences, no trailing text.
 
-Required JSON schema:
+Fill in each field with actual content from the page. Example of the required output:
 {
-  "confidence": number (0-100, your confidence in the overall extraction accuracy),
+  "confidence": 91,
   "content_blocks": [
-    {
-      "type": "string — one of: heading, subheading, paragraph, list_item, table_row, caption, stat_line, page_number, sidebar",
-      "text": "string — the exact extracted text for this block",
-      "sequence": number
-    }
+    { "type": "heading", "text": "Strahd and Van Richten", "sequence": 1 },
+    { "type": "paragraph", "text": "By Sterling Hershey. Rudolph van Richten is the D&D game's most esteemed vampire hunter...", "sequence": 2 }
   ],
-  "page_summary": "string — one sentence describing the main content of this page"
-}`;
+  "page_summary": "Table of contents listing articles about Ravenloft, vampires, and dark powers."
+}
+
+confidence is an integer 0-100 reflecting your certainty in the accuracy of the extracted text.
+type must be one of: heading, subheading, paragraph, list_item, table_row, caption, stat_line, page_number, sidebar`;
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function isConfigError(err: any): boolean {
+  return typeof err?.message === "string" && err.message.startsWith("[CONFIG]");
+}
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
@@ -234,11 +246,12 @@ async function _runJob(jobId: number): Promise<void> {
       const data = parseJsonResponse(r.content);
       await updateDocumentPage(pageId, { layoutType: (data.layout_type as string) || undefined });
     } catch (err: any) {
+      if (isConfigError(err)) throw err; // fatal — halt job
       stagesFailed.push("layout_analysis");
       console.warn(`[Pipeline] Job ${jobId} p${pageNum} layout_analysis: ${err.message}`);
     }
 
-    // bbox_detection
+    // bbox_detection (optional — no provider is acceptable, any other config error is fatal)
     let regions: any[] = [];
     try {
       await updateIngestionJobStatus(jobId, { currentStage: "bbox_detection" });
@@ -248,7 +261,7 @@ async function _runJob(jobId: number): Promise<void> {
       regions = Array.isArray(data.regions) ? data.regions : [];
       await updateDocumentPage(pageId, { contentRegions: regions });
     } catch (err: any) {
-      if (!err.message?.includes("No provider assigned")) stagesFailed.push("bbox_detection");
+      if (isConfigError(err)) throw err; // fatal — halt job (bbox stage explicitly configured but broken)
       console.warn(`[Pipeline] Job ${jobId} p${pageNum} bbox_detection: ${err.message}`);
     }
 
@@ -280,6 +293,7 @@ async function _runJob(jobId: number): Promise<void> {
 
       await updateDocumentPage(pageId, { ocrCompleted: true, ocrConfidence });
     } catch (err: any) {
+      if (isConfigError(err)) throw err; // fatal — halt job
       stagesFailed.push("ocr_extraction");
       console.warn(`[Pipeline] Job ${jobId} p${pageNum} ocr_extraction: ${err.message}`);
       const ocrResult = await createOcrResult({ pageId, status: "failed", confidence: 0 });
