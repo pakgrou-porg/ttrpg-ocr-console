@@ -115,6 +115,10 @@ export default function OverseeScribes() {
     onSuccess: () => { refetch(); toast.success("Job chain cancelled."); },
     onError: (e) => toast.error(e.message),
   });
+  const purgeMut = trpc.jobs.purgePages.useMutation({
+    onSuccess: () => { refetch(); toast.success("Pages purged."); },
+    onError: (e) => toast.error(e.message),
+  });
 
   const statusColors: Record<string, { bg: string; text: string; dot?: boolean }> = {
     queued: { bg: "bg-muted/50", text: "text-muted-foreground" },
@@ -299,8 +303,17 @@ export default function OverseeScribes() {
                                   <Pause className="w-3.5 h-3.5" />
                                 </button>
                               )}
+                              <button
+                                onClick={() => { if (confirm(`Purge all pages for JOB-${job.id}? This deletes all page images, OCR results, and HITL items.`)) purgeMut.mutate({ id: job.id }); }}
+                                disabled={purgeMut.isPending}
+                                title="Purge all pages for this job"
+                                className="text-muted-foreground hover:text-yellow-400 transition-colors"
+                              >
+                                <RotateCcw className="w-3.5 h-3.5" />
+                              </button>
                               <button onClick={() => deleteMut.mutate({ id: job.id })} disabled={deleteMut.isPending}
-                                className="text-muted-foreground hover:text-destructive transition-colors">
+                                className="text-muted-foreground hover:text-destructive transition-colors"
+                                title="Delete job record">
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
                             </div>
