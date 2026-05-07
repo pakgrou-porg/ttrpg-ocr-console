@@ -69,6 +69,8 @@ Required output schema (include every readable text block):
 confidence is an integer 0–100 reflecting extraction accuracy.
 type must be one of: heading, subheading, paragraph, list_item, table, caption, stat_line, page_number, sidebar
 
+MULTI-COLUMN PAGES: Extract every column completely. Read left-to-right across columns, top-to-bottom within each column. Never stop mid-page — if context indicates N columns, produce content_blocks from all N columns.
+
 IMPORTANT — tables MUST use this schema (never flatten a table into a text string):
 {"type":"table","caption":"optional title","headers":["Col1","Col2","Col3"],"rows":[["r1c1","r1c2","r1c3"],["r2c1","r2c2","r2c3"]],"sequence":N}
 If a column value is blank or not applicable use "" (empty string). Preserve ALL columns and ALL rows exactly as they appear.`;
@@ -345,12 +347,13 @@ async function _runJob(jobId: number): Promise<void> {
     try {
 
     // layout_analysis
+    let layoutData: Record<string, unknown> = {};
     try {
       const layoutContent: UserContentPart[] = [imgPart, { type: "text", text: "Classify the layout type and structure of this page. Reply with ONLY a JSON object — start with { and end with }." }];
       const r = await invokeStage("layout_analysis", layoutContent, undefined, PROMPT_LAYOUT_ANALYSIS,
         { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_LAYOUT });
-      const data = parseJsonResponse(r.content);
-      await updateDocumentPage(pageId, { layoutType: (data.layout_type as string) || undefined });
+      layoutData = parseJsonResponse(r.content);
+      await updateDocumentPage(pageId, { layoutType: (layoutData.layout_type as string) || undefined });
     } catch (err: any) {
       if (isConfigError(err)) throw err; // fatal — halt job
       stagesFailed.push("layout_analysis");
@@ -375,9 +378,13 @@ async function _runJob(jobId: number): Promise<void> {
     // ocr_extraction
     try {
       await updateIngestionJobStatus(jobId, { currentStage: "ocr_extraction" });
-      const regionContext = regions.length > 0
-        ? `Content regions already detected: ${JSON.stringify(regions.slice(0, 5))}`
-        : undefined;
+      const columnCount = typeof layoutData.columns === "number" ? layoutData.columns : null;
+      const contextParts: string[] = [];
+      if (columnCount && columnCount > 1)
+        contextParts.push(`Layout analysis determined this page has ${columnCount} columns. Extract text from ALL columns in left-to-right, top-to-bottom reading order — do NOT stop after the first column.`);
+      if (regions.length > 0)
+        contextParts.push(`Content regions already detected: ${JSON.stringify(regions.slice(0, 5))}`);
+      const regionContext = contextParts.length > 0 ? contextParts.join("\n") : undefined;
       const ocrContent: UserContentPart[] = [imgPart, { type: "text", text: "Extract all readable text from this page in reading order. Reply with ONLY a JSON object — start with { and end with }." }];
       const r = await invokeStage("ocr_extraction", ocrContent, regionContext, PROMPT_OCR_EXTRACTION,
         { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_OCR });
