@@ -667,7 +667,7 @@ export async function deleteSystemConfig(key: string) {
 export async function getAllIngestionJobs() {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(ingestionJobs).orderBy(desc(ingestionJobs.createdAt)).limit(100);
+  return db.select().from(ingestionJobs).orderBy(asc(ingestionJobs.createdAt)).limit(100);
 }
 
 export async function getActiveIngestionJobs() {
@@ -678,7 +678,7 @@ export async function getActiveIngestionJobs() {
       ne(ingestionJobs.status, "completed"),
       ne(ingestionJobs.status, "failed")
     ))
-    .orderBy(desc(ingestionJobs.createdAt));
+    .orderBy(asc(ingestionJobs.createdAt));
 }
 
 export async function getIngestionJobById(id: number) {

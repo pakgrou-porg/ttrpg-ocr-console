@@ -93,14 +93,44 @@ function isConfigError(err: any): boolean {
   return typeof err?.message === "string" && err.message.startsWith("[CONFIG]");
 }
 
+// ── Global serialized job queue ───────────────────────────────────────────────
+// Jobs are processed one at a time. Chained blocks (same document) are inserted
+// at the front so a document's chain fully completes before the next document
+// starts.
+
+const JOB_QUEUE: number[] = [];
+let JOB_QUEUE_RUNNING = false;
+
+function enqueueJob(jobId: number, front: boolean = false): void {
+  if (front) {
+    JOB_QUEUE.unshift(jobId);
+  } else {
+    JOB_QUEUE.push(jobId);
+  }
+  if (!JOB_QUEUE_RUNNING) {
+    setImmediate(() => {
+      drainJobQueue().catch(err => console.error("[Pipeline] Queue drain error:", err));
+    });
+  }
+}
+
+async function drainJobQueue(): Promise<void> {
+  if (JOB_QUEUE_RUNNING) return;
+  JOB_QUEUE_RUNNING = true;
+  try {
+    while (JOB_QUEUE.length > 0) {
+      const jobId = JOB_QUEUE.shift()!;
+      await runJob(jobId);
+    }
+  } finally {
+    JOB_QUEUE_RUNNING = false;
+  }
+}
+
 // ── Public entry point ────────────────────────────────────────────────────────
 
 export function startJob(jobId: number): void {
-  setImmediate(() => {
-    runJob(jobId).catch(err => {
-      console.error(`[Pipeline] Job ${jobId} unhandled error:`, err);
-    });
-  });
+  enqueueJob(jobId, false);
 }
 
 // ── Internal runner ───────────────────────────────────────────────────────────
@@ -363,7 +393,7 @@ async function _runJob(jobId: number): Promise<void> {
       blockSize,
       status: "queued",
     } as any);
-    startJob(nextJobId);
+    enqueueJob(nextJobId, true); // front of queue — finish this document before any new one
   }
 }
 
