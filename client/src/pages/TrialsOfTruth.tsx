@@ -97,7 +97,7 @@ function TextTab({ item, correction, onCorrect }: { item: any; correction: strin
   const sd = item.ocr?.structuredData as any;
   const blocks: any[] = Array.isArray(sd?.content_blocks) ? sd.content_blocks : [];
   const displayText = item.ocr?.rawText
-    ?? (blocks.length > 0 ? blocks.map((b: any) => b.text ?? b.content ?? "").join("\n\n") : null);
+    || (blocks.length > 0 ? blocks.map((b: any) => b.text ?? b.content ?? "").join("\n\n") : null);
 
   return (
     <div>

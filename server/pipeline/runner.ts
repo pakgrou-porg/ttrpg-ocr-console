@@ -204,7 +204,7 @@ async function _runJob(jobId: number): Promise<void> {
     try {
       const sampleContent: UserContentPart[] = [];
       for (const f of sampleFiles) sampleContent.push(await imageContent(f));
-      sampleContent.push({ type: "text", text: "Extract the document metadata from these pages as JSON." });
+      sampleContent.push({ type: "text", text: "Extract the document metadata from these pages. Reply with ONLY a JSON object — start with { and end with }." });
 
       const result = await invokeStage("document_intelligence", sampleContent, undefined, PROMPT_DOCUMENT_INTELLIGENCE);
       const meta = parseJsonResponse(result.content);
@@ -241,7 +241,7 @@ async function _runJob(jobId: number): Promise<void> {
 
     // layout_analysis
     try {
-      const layoutContent: UserContentPart[] = [imgPart, { type: "text", text: "Classify the layout type and structure of this page as JSON." }];
+      const layoutContent: UserContentPart[] = [imgPart, { type: "text", text: "Classify the layout type and structure of this page. Reply with ONLY a JSON object — start with { and end with }." }];
       const r = await invokeStage("layout_analysis", layoutContent, undefined, PROMPT_LAYOUT_ANALYSIS);
       const data = parseJsonResponse(r.content);
       await updateDocumentPage(pageId, { layoutType: (data.layout_type as string) || undefined });
@@ -255,7 +255,7 @@ async function _runJob(jobId: number): Promise<void> {
     let regions: any[] = [];
     try {
       await updateIngestionJobStatus(jobId, { currentStage: "bbox_detection" });
-      const bboxContent: UserContentPart[] = [imgPart, { type: "text", text: "Identify all distinct content regions on this page as JSON." }];
+      const bboxContent: UserContentPart[] = [imgPart, { type: "text", text: "Identify all distinct content regions on this page. Reply with ONLY a JSON object — start with { and end with }." }];
       const r = await invokeStage("bbox_detection", bboxContent, undefined, PROMPT_BBOX_DETECTION);
       const data = parseJsonResponse(r.content);
       regions = Array.isArray(data.regions) ? data.regions : [];
@@ -273,7 +273,7 @@ async function _runJob(jobId: number): Promise<void> {
       const regionContext = regions.length > 0
         ? `Content regions already detected: ${JSON.stringify(regions.slice(0, 5))}`
         : undefined;
-      const ocrContent: UserContentPart[] = [imgPart, { type: "text", text: "Extract all readable text from this page as JSON." }];
+      const ocrContent: UserContentPart[] = [imgPart, { type: "text", text: "Extract all readable text from this page in reading order. Reply with ONLY a JSON object — start with { and end with }." }];
       const r = await invokeStage("ocr_extraction", ocrContent, regionContext, PROMPT_OCR_EXTRACTION);
       const data = parseJsonResponse(r.content);
       ocrConfidence = typeof data.confidence === "number" ? data.confidence : 0;

@@ -240,7 +240,7 @@ export default function TheVaultNexus() {
                   }}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      {connectionTypes?.map(t => (
+                      {typesData?.connectionTypes.map(t => (
                         <SelectItem key={t.id} value={t.id}>{t.label}</SelectItem>
                       ))}
                     </SelectContent>
@@ -593,7 +593,7 @@ export default function TheVaultNexus() {
                 <Select value={editForm.connectionType} onValueChange={v => ef("connectionType", v)}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {typesMeta?.connectionTypes.map(t => (
+                    {typesData?.connectionTypes.map(t => (
                       <SelectItem key={t.id} value={t.id}>{t.label}</SelectItem>
                     ))}
                   </SelectContent>
@@ -604,7 +604,7 @@ export default function TheVaultNexus() {
                 <Select value={editForm.role} onValueChange={v => ef("role", v)}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {typesMeta?.roles.map(r => (
+                    {typesData?.roles.map(r => (
                       <SelectItem key={r.id} value={r.id}>{r.label}</SelectItem>
                     ))}
                   </SelectContent>
@@ -617,7 +617,7 @@ export default function TheVaultNexus() {
               <Select value={editForm.syncMode} onValueChange={v => ef("syncMode", v)}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {typesMeta?.syncModes.map(m => (
+                  {typesData?.syncModes.map(m => (
                     <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>
                   ))}
                 </SelectContent>
