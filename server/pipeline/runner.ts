@@ -123,7 +123,7 @@ async function _runJob(jobId: number): Promise<void> {
       currentStage: "document_intelligence",
     });
 
-    const sampleFiles = pageFiles.slice(0, Math.min(5, pageFiles.length));
+    const sampleFiles = pageFiles.slice(0, Math.min(2, pageFiles.length));
     try {
       const sampleContent: UserContentPart[] = [];
       for (const f of sampleFiles) sampleContent.push(await imageContent(f));
@@ -298,7 +298,7 @@ async function convertToPages(
     const outputPrefix = join(pagesDir, "page");
     await execFileAsync(
       "pdftoppm",
-      ["-png", "-r", "150", "-f", String(firstPage), "-l", String(lastPage), sourceFile, outputPrefix],
+      ["-png", "-r", "96", "-f", String(firstPage), "-l", String(lastPage), sourceFile, outputPrefix],
       { timeout: 180_000 },
     );
     const files = await readdir(pagesDir);
