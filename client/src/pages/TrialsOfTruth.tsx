@@ -56,6 +56,15 @@ function formatExportRecord(item: any) {
 type HitlAction = "resolved" | "skipped" | "escalated";
 type TabId = "text" | "layout" | "regions" | "structure" | "json" | "document";
 
+// Empty JSON templates shown when a section has no source data.
+// Pre-populate the correction field so reviewers have a starting structure.
+const EMPTY_TEMPLATES: Partial<Record<TabId, string>> = {
+  layout:    JSON.stringify({ layout_type: "", columns: 1, notes: "" }, null, 2),
+  regions:   JSON.stringify([], null, 2),
+  structure: JSON.stringify({ chapter: "", section: "", subsection: "", headings: [], page_summary: "" }, null, 2),
+  json:      JSON.stringify({ layout_type: "", content_blocks: [], page_summary: "" }, null, 2),
+};
+
 function StatusBadge({ status }: { status: string }) {
   const variants: Record<string, string> = {
     queued:      "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
@@ -73,8 +82,17 @@ function StatusBadge({ status }: { status: string }) {
 
 // ── Tab content helpers ───────────────────────────────────────────────────────
 
-function JsonViewer({ value }: { value: unknown }) {
-  if (value == null) return <span className="text-muted-foreground italic text-xs">—</span>;
+function JsonViewer({ value, emptyTemplate }: { value: unknown; emptyTemplate?: string }) {
+  if (value == null) {
+    if (emptyTemplate) {
+      return (
+        <pre className="text-xs bg-muted/10 border border-dashed border-border/40 rounded p-3 overflow-auto max-h-64 whitespace-pre-wrap break-all text-muted-foreground/50">
+          {emptyTemplate}
+        </pre>
+      );
+    }
+    return <span className="text-muted-foreground italic text-xs">—</span>;
+  }
   return (
     <pre className="text-xs bg-muted/20 border border-border/40 rounded p-3 overflow-auto max-h-64 whitespace-pre-wrap break-all">
       {typeof value === "string" ? value : JSON.stringify(value, null, 2)}
@@ -134,15 +152,13 @@ function LayoutTab({ item, correction, onCorrect, onSave, isSaving }: TabProps) 
       <div className="flex gap-3 items-center">
         <span className="text-xs text-muted-foreground uppercase tracking-wide">Layout Type</span>
         <span className="text-sm font-mono px-2 py-0.5 rounded bg-muted/30 border border-border/40">
-          {layoutType ?? "Unknown"}
+          {layoutType ?? <span className="text-muted-foreground/50 italic">not detected</span>}
         </span>
       </div>
-      {layoutMeta && (
-        <div>
-          <p className="text-xs text-muted-foreground mb-1">Layout metadata</p>
-          <JsonViewer value={layoutMeta} />
-        </div>
-      )}
+      <div>
+        <p className="text-xs text-muted-foreground mb-1">Layout metadata</p>
+        <JsonViewer value={layoutMeta ?? null} emptyTemplate={EMPTY_TEMPLATES.layout} />
+      </div>
       <CorrectionField label="Layout correction (JSON or plain description)"
         value={correction} onChange={onCorrect} onSave={onSave} isSaving={isSaving} />
     </div>
@@ -155,16 +171,12 @@ function RegionsTab({ item, correction, onCorrect, onSave, isSaving }: TabProps)
 
   return (
     <div className="space-y-3">
-      {regions ? (
-        <>
-          <p className="text-xs text-muted-foreground">
-            {Array.isArray(regions) ? `${regions.length} region(s) detected` : "Region data"}
-          </p>
-          <JsonViewer value={regions} />
-        </>
-      ) : (
-        <p className="text-xs text-muted-foreground italic">No bounding box / region data available for this page.</p>
-      )}
+      <p className="text-xs text-muted-foreground">
+        {regions
+          ? (Array.isArray(regions) ? `${regions.length} region(s) detected` : "Region data")
+          : <span className="italic">No bounding box / region data detected — empty template shown below.</span>}
+      </p>
+      <JsonViewer value={regions ?? null} emptyTemplate={EMPTY_TEMPLATES.regions} />
       <CorrectionField label="Region correction (JSON array)"
         value={correction} onChange={onCorrect} onSave={onSave} isSaving={isSaving} />
     </div>
@@ -185,9 +197,12 @@ function StructureTab({ item, correction, onCorrect, onSave, isSaving }: TabProp
   return (
     <div className="space-y-3">
       {fields.length === 0 ? (
-        <p className="text-xs text-muted-foreground italic">
-          No structural metadata (chapter, section, headings) found in OCR output.
-        </p>
+        <>
+          <p className="text-xs text-muted-foreground italic">
+            No structural metadata (chapter, section, headings) found in OCR output — empty template shown below.
+          </p>
+          <JsonViewer value={null} emptyTemplate={EMPTY_TEMPLATES.structure} />
+        </>
       ) : (
         <div className="space-y-3">
           {fields.map(([label, value]) => (
@@ -208,8 +223,10 @@ function JsonTab({ item, correction, onCorrect, onSave, isSaving }: TabProps) {
   const sd = item.ocr?.structuredData;
   return (
     <div>
-      <p className="text-xs text-muted-foreground mb-2">Full structured output from OCR extraction</p>
-      <JsonViewer value={sd ?? "No structured data"} />
+      <p className="text-xs text-muted-foreground mb-2">
+        {sd ? "Full structured output from OCR extraction" : <span className="italic">No structured data — empty template shown below.</span>}
+      </p>
+      <JsonViewer value={sd ?? null} emptyTemplate={EMPTY_TEMPLATES.json} />
       <CorrectionField label="Full JSON correction (paste complete corrected JSON)"
         value={correction} onChange={onCorrect} onSave={onSave} isSaving={isSaving} />
     </div>
@@ -262,8 +279,20 @@ function HitlCard({ item, onResolved, isSelected, onToggle }: {
   const { toast } = useToast();
   const [expanded, setExpanded] = useState(false);
   const [activeTab, setActiveTab] = useState<TabId>("text");
-  const [corrections, setCorrections] = useState<Record<TabId, string>>({
-    text: "", layout: "", regions: "", structure: "", json: "", document: "",
+  const [corrections, setCorrections] = useState<Record<TabId, string>>(() => {
+    const sd = item.ocr?.structuredData as any;
+    const hasLayout    = !!(item.page?.layoutType || sd?.layout_type || sd?.layout || sd?.layout_metadata || sd?.page_layout);
+    const hasRegions   = !!(item.page?.contentRegions || sd?.regions || sd?.bounding_boxes || sd?.content_regions);
+    const hasStructure = !!(sd?.chapter || sd?.section || sd?.subsection || sd?.headings || sd?.document_summary || sd?.page_summary || sd?.summary);
+    const hasJson      = !!sd;
+    return {
+      text:      "",
+      layout:    hasLayout    ? "" : (EMPTY_TEMPLATES.layout    ?? ""),
+      regions:   hasRegions   ? "" : (EMPTY_TEMPLATES.regions   ?? ""),
+      structure: hasStructure ? "" : (EMPTY_TEMPLATES.structure ?? ""),
+      json:      hasJson      ? "" : (EMPTY_TEMPLATES.json      ?? ""),
+      document:  "",
+    };
   });
   const [notes, setNotes] = useState("");
 

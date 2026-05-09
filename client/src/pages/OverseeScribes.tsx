@@ -468,11 +468,14 @@ export default function OverseeScribes() {
                       </div>
 
                       {/* Progress */}
-                      <div className="flex items-center gap-2 flex-shrink-0 w-28">
-                        <div className="flex-1 bg-muted rounded-full h-2">
-                          <div className={`${progressColor} h-2 rounded-full`} style={{ width: `${progress}%` }} />
+                      <div className="flex flex-col gap-1 flex-shrink-0 w-32">
+                        <div className="flex items-center justify-between text-xs font-mono">
+                          <span>{job.processedPages ?? 0}/{job.totalPages ?? 0} pp</span>
+                          <span className="text-muted-foreground">{progress}%</span>
                         </div>
-                        <span className="text-xs font-mono w-8 text-right">{progress}%</span>
+                        <div className="bg-muted rounded-full h-1.5">
+                          <div className={`${progressColor} h-1.5 rounded-full transition-all`} style={{ width: `${progress}%` }} />
+                        </div>
                       </div>
 
                       {/* Status */}
