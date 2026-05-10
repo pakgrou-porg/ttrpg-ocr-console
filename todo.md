@@ -130,7 +130,7 @@
 - [x] Write README.md (setup, env vars, pipeline architecture, security assumptions)
 - [x] Write .env.example with all required variables
 - [x] Update Tome of Knowledge page with pipeline API integration guide
-- [ ] Add GitHub Actions CI workflow (.github/workflows/ci.yml)
+- [x] Add GitHub Actions CI workflow (.github/workflows/ci.yml)
 
 ### Tests
 - [x] Test: upload rejects unauthenticated before reading file body
@@ -311,15 +311,15 @@
 ## Phase: Remaining Work (Confirmed Outstanding)
 
 ### CI / DevOps
-- [ ] Add GitHub Actions CI workflow (.github/workflows/ci.yml) — runs `pnpm test` on push/PR to main
+- [x] Add GitHub Actions CI workflow (.github/workflows/ci.yml) — runs `pnpm test` on push/PR to main
 
 ### Tests
 - [ ] Test: document list scoped by ownership (listDocuments returns only docs where ownerUserId = ctx.user.id or visibility = 'global')
 
 ### Health Endpoints
 - [x] health.all — scribes: replace hardcoded stub with real `getActiveIngestionJobs()` count (done)
-- [ ] health.all — agents: replace hardcoded stub once LM Studio health endpoint is defined (needs real service endpoint)
-- [ ] health.all — cloudConduit: replace hardcoded stub once OpenRouter connectivity check is implemented (needs real ping)
+- [x] health.all — agents: replaced stub with real LM Studio /v1/models ping (aborts after 3 s)
+- [x] health.all — cloudConduit: replaced stub with real OpenRouter /api/v1/models ping (aborts after 5 s)
 
 ### Document Ownership
 - [ ] listDocuments: add ownership filter at DB level (WHERE ownerUserId = ? OR visibility = 'global') instead of JS post-filter
@@ -514,3 +514,42 @@
 - [x] Merge v0.1.15 SSL improvements (sslmode driven by connection string), tag v0.1.16, push to GitHub
 - [x] pnpm install updated: mysql2 removed, postgres (postgres-js) added
 - [x] TypeScript: 0 errors after all fixes
+
+## Phase: HITL Empty Templates + Page-Level Progress (v0.1.44)
+
+- [x] HITL review: pre-populate empty JSON editor with per-type stub templates (heading, paragraph, table, etc.) so reviewers have a valid starting point
+- [x] Oversee the Scribes: add per-page progress bar and status breakdown (pending/running/done/failed counts) per job
+- [x] CI alignment: fix import paths, env var references, and test fixtures after PostgreSQL migration
+
+## Phase: LLM Timing Metrics (v0.1.45–v0.1.46)
+
+- [x] Add `llm_timing_metrics` table to schema (stage, provider, model, durationMs, tokensUsed, jobId, pageId, isFallback, success)
+- [x] Apply DB migration (drizzle/0005 + composite indexes in 0006)
+- [x] Fire-and-forget metric insert in invoke.ts after every successful or fallback LLM call
+- [x] Add `assignments.timingMetrics` tRPC procedure: per-stage avg/p95 duration, token totals, success rates
+- [x] Build LLM Timing panel in Divination & Omens page (per-stage breakdown table)
+- [x] Build per-job timing breakdown in Oversee the Scribes job detail panel
+- [x] Bug fix: `prompt?.content` → `prompt?.promptText` in invoke.ts (field was renamed in schema; stages were silently loading no system prompt)
+
+## Phase: Simplify & Optimise (v0.1.47)
+
+- [x] Extract shared `ConfidenceBadge` component (replaces 3 near-identical local copies in LibraryShelves, ArchivistsDesk, OverseeScribes)
+- [x] Extract `fmtMs` duration formatter into `client/src/lib/utils.ts` (replaces 2 inline copies)
+- [x] Replace serial `for...await` in `hitl.bulkResolve` with `Promise.all`
+- [x] Replace O(n×m) `pageTiming.find()` inside render loop with `useMemo` Map lookup in OverseeScribes
+- [x] Replace tab state `useState` in OverseeScribes PageCard with shadcn `Tabs` component (already imported, unused)
+- [x] Wire `health.all` agents ping: real LM Studio `/v1/models` request with 3 s AbortSignal timeout
+- [x] Wire `health.all` cloudConduit ping: real OpenRouter `/api/v1/models` request with 5 s AbortSignal timeout
+- [x] 128/128 tests passing, tag v0.1.47, push to GitHub
+
+## Phase: BBox Region Overlay (v0.1.48)
+
+- [x] Build `BboxOverlay` component: SVG overlay on page image using `viewBox="0 0 100 100" preserveAspectRatio="none"` so percentage bbox coords map directly
+- [x] Build `BboxOverlayToggle` component: wraps image with toggle button and region count badge
+- [x] Update `bbox_detection` runner prompt to request percentage-based `{x, y, w, h}` coordinates (0–100%) instead of coarse positional labels
+- [x] Add 3 detailed few-shot examples to bbox detection with realistic percentage coordinates
+- [x] Add "Overlay" tab to OverseeScribes PageCard (4th tab alongside Text / Regions / JSON)
+- [x] Replace plain `<img>` in Trials of Truth left panel with `BboxOverlayToggle`
+- [x] Graceful fallback: "No bbox coordinates — re-run bbox_detection to populate" when coords are absent
+- [x] Colour palette per region type: heading=#a855f7, paragraph=#3b82f6, table=#f97316, image/illustration=#22c55e, stat_block=#eab308, sidebar=#14b8a6, header/footer=#6b7280
+- [x] 128/128 tests passing, tag v0.1.48, push to GitHub

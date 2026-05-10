@@ -134,7 +134,7 @@ The LLM receives the preprocessed PNG for a single page and must classify its la
 
 **Logic:**
 The LLM receives the preprocessed PNG and the `layout_type` from Stage 4. It must identify every visually distinct region and output it as a bounding box with:
-- Pixel coordinates `{x, y, w, h}` relative to the image dimensions (top-left origin).
+- Percentage coordinates `{x, y, w, h}` — each value is 0–100, representing percentage of the page width (x, w) or height (y, h). Top-left origin. This avoids any dependency on actual pixel dimensions.
 - A `regionType` classification.
 - A `sequence` number indicating reading order (1-indexed, left-to-right, top-to-bottom within each column).
 - Optional `contentTypeFlags` for regions that contain mixed content.
@@ -162,42 +162,40 @@ The LLM receives the preprocessed PNG and the `layout_type` from Stage 4. It mus
 ```json
 {
   "page_id": 142,
-  "image_width": 1700,
-  "image_height": 2200,
   "layout_type": "two_column",
   "regions": [
     {
       "sequence": 1,
       "regionType": "header",
-      "bbox": { "x": 0, "y": 0, "w": 1700, "h": 80 },
+      "bbox": { "x": 0, "y": 0, "w": 100, "h": 4 },
       "contentTypeFlags": [],
       "isMixedBoundary": false
     },
     {
       "sequence": 2,
       "regionType": "text",
-      "bbox": { "x": 60, "y": 110, "w": 760, "h": 1900 },
+      "bbox": { "x": 3, "y": 5, "w": 45, "h": 87 },
       "contentTypeFlags": ["has_bold_terms", "has_italic"],
       "isMixedBoundary": false
     },
     {
       "sequence": 3,
       "regionType": "table",
-      "bbox": { "x": 880, "y": 110, "w": 760, "h": 420 },
+      "bbox": { "x": 52, "y": 5, "w": 45, "h": 20 },
       "contentTypeFlags": ["stat_block"],
       "isMixedBoundary": false
     },
     {
       "sequence": 4,
       "regionType": "text",
-      "bbox": { "x": 880, "y": 560, "w": 760, "h": 1450 },
+      "bbox": { "x": 52, "y": 26, "w": 45, "h": 66 },
       "contentTypeFlags": [],
       "isMixedBoundary": false
     },
     {
       "sequence": 5,
       "regionType": "footer",
-      "bbox": { "x": 0, "y": 2120, "w": 1700, "h": 80 },
+      "bbox": { "x": 0, "y": 96, "w": 100, "h": 4 },
       "contentTypeFlags": [],
       "isMixedBoundary": false
     }
@@ -595,7 +593,7 @@ This stage is invoked in addition to `ocr_extraction` for table-dominant pages, 
     {
       "sequence": 1,
       "regionType": "header",
-      "bbox": { "x": 0, "y": 0, "w": 1700, "h": 80 },
+      "bbox": { "x": 0, "y": 0, "w": 100, "h": 4 },
       "content_blocks": [
         { "block_type": "header_text", "text": "Chapter 3: Adventuring", "formatting": [] }
       ]
@@ -603,7 +601,7 @@ This stage is invoked in addition to `ocr_extraction` for table-dominant pages, 
     {
       "sequence": 2,
       "regionType": "text",
-      "bbox": { "x": 60, "y": 110, "w": 760, "h": 1900 },
+      "bbox": { "x": 3, "y": 5, "w": 45, "h": 87 },
       "content_blocks": [
         { "block_type": "heading", "level": 2, "text": "Combat", "formatting": ["bold"] },
         { "block_type": "paragraph", "text": "A typical combat encounter...", "formatting": [] }
@@ -612,7 +610,7 @@ This stage is invoked in addition to `ocr_extraction` for table-dominant pages, 
     {
       "sequence": 3,
       "regionType": "table",
-      "bbox": { "x": 880, "y": 110, "w": 760, "h": 420 },
+      "bbox": { "x": 52, "y": 5, "w": 45, "h": 20 },
       "table_type": "stat_block",
       "entity_name": "Goblin",
       "headers": ["AC", "HP", "Speed"],
