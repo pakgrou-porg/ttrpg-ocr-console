@@ -1,4 +1,4 @@
-import { getLlmProviderById, getStageInscriptionByStage, getSystemPromptByName } from "../db";
+import { getLlmProviderById, getStageInscriptionByStage, getSystemPromptByName, insertLlmTimingMetric } from "../db";
 import { decryptSecret } from "../crypto";
 
 const RETRYABLE_STATUS = new Set([429, 502, 503, 504]);
@@ -42,6 +42,14 @@ export interface StageInvokeResult {
   model: string;
   tokensUsed: number;
   providerId: number;
+  /** Wall-clock milliseconds from request dispatch to valid response (includes retries). */
+  durationMs: number;
+}
+
+/** Optional per-call context for metric logging (pageId / jobId). */
+export interface InvokeContext {
+  pageId?: number;
+  jobId?: number;
 }
 
 export interface InvokeOptions {
@@ -100,6 +108,8 @@ async function dispatchToProvider(
 ): Promise<StageInvokeResult> {
   const { url, headers, body } = await buildProviderCall(provider, messages, inscription, options);
   const fetchFn = withRetry ? fetchWithRetry : fetch;
+
+  const startMs = Date.now();
   const res = await fetchFn(url, {
     method: "POST",
     headers,
@@ -113,6 +123,8 @@ async function dispatchToProvider(
   }
 
   const data = await res.json() as any;
+  const durationMs = Date.now() - startMs;
+
   const rawContent = data.choices?.[0]?.message?.content ?? "";
   let content = typeof rawContent === "string"
     ? rawContent
@@ -127,7 +139,15 @@ async function dispatchToProvider(
     model: data.model ?? provider.defaultModelId ?? "",
     tokensUsed: data.usage?.total_tokens ?? 0,
     providerId: provider.id,
+    durationMs,
   };
+}
+
+/** Fire-and-forget metric insert — never throws, never blocks the caller. */
+function logMetric(row: Parameters<typeof insertLlmTimingMetric>[0]): void {
+  insertLlmTimingMetric(row).catch(err =>
+    console.warn("[invoke] metric insert failed:", err?.message)
+  );
 }
 
 export async function invokeStage(
@@ -136,6 +156,7 @@ export async function invokeStage(
   extraSystemContext?: string,
   fallbackSystemPrompt?: string,
   options?: InvokeOptions,
+  context?: InvokeContext,
 ): Promise<StageInvokeResult> {
   const inscription = await getStageInscriptionByStage(stage);
   if (!inscription) throw new Error(`[CONFIG] No stage inscription configured for "${stage}". Add an inscription in Conclave → Stage Inscriptions.`);
@@ -174,7 +195,14 @@ export async function invokeStage(
 
   // ── Primary attempt (with full retry loop) ───────────────────────────────
   try {
-    return await dispatchToProvider(stage, primary, messages, inscription, options, true);
+    const result = await dispatchToProvider(stage, primary, messages, inscription, options, true);
+    logMetric({
+      jobId: context?.jobId, pageId: context?.pageId,
+      stage, providerId: primary.id, providerName: primary.displayName ?? primary.name,
+      model: result.model, durationMs: result.durationMs,
+      tokensUsed: result.tokensUsed, isFallback: false, success: true,
+    });
+    return result;
   } catch (primaryErr: any) {
     const fallbackProviderId = (inscription as any).fallbackProviderId as number | null | undefined;
     if (!fallbackProviderId) throw primaryErr; // no fallback configured — propagate original error
@@ -192,6 +220,12 @@ export async function invokeStage(
     try {
       const result = await dispatchToProvider(stage, fallback, messages, inscription, fallbackOptions, false);
       console.log(`[invoke] ${stage} fallback provider succeeded (model: ${result.model})`);
+      logMetric({
+        jobId: context?.jobId, pageId: context?.pageId,
+        stage, providerId: fallback.id, providerName: fallback.displayName ?? fallback.name,
+        model: result.model, durationMs: result.durationMs,
+        tokensUsed: result.tokensUsed, isFallback: true, success: true,
+      });
       return result;
     } catch (fallbackErr: any) {
       // Both failed — throw a combined error so the caller sees the full picture

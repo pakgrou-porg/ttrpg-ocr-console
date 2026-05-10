@@ -20,6 +20,7 @@ import {
   supabaseInstances, InsertSupabaseInstance,
   promptVersions, InsertPromptVersion,
   gameSystems, InsertGameSystem,
+  llmTimingMetrics, InsertLlmTimingMetric,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
@@ -1332,4 +1333,99 @@ export async function deleteGameSystem(id: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.delete(gameSystems).where(eq(gameSystems.id, id));
+}
+
+// ─── LLM Timing Metrics ───────────────────────────────────────────────────────
+
+export async function insertLlmTimingMetric(data: InsertLlmTimingMetric) {
+  const db = await getDb();
+  if (!db) return;
+  await db.insert(llmTimingMetrics).values(data);
+}
+
+/** All metric rows for a single page, ordered by time. */
+export async function getLlmMetricsByPage(pageId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(llmTimingMetrics)
+    .where(eq(llmTimingMetrics.pageId, pageId))
+    .orderBy(llmTimingMetrics.createdAt);
+}
+
+/** Per-stage aggregates for a job — total calls, avg/total duration, total tokens, failures. */
+export async function getLlmMetricsJobSummary(jobId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.execute(sql`
+    SELECT
+      stage,
+      COUNT(*)::int                                           AS call_count,
+      ROUND(AVG(duration_ms))::int                           AS avg_duration_ms,
+      SUM(duration_ms)::int                                  AS total_duration_ms,
+      SUM(tokens_used)::int                                  AS total_tokens,
+      COUNT(*) FILTER (WHERE success = false)::int           AS failure_count,
+      COUNT(*) FILTER (WHERE is_fallback = true)::int        AS fallback_count,
+      provider_name
+    FROM llm_timing_metrics
+    WHERE job_id = ${jobId}
+    GROUP BY stage, provider_name
+    ORDER BY total_duration_ms DESC
+  `);
+  return rows as unknown as Array<{
+    stage: string; call_count: number; avg_duration_ms: number;
+    total_duration_ms: number; total_tokens: number;
+    failure_count: number; fallback_count: number; provider_name: string | null;
+  }>;
+}
+
+/** Per-page summary for a job — total LLM time and call count per page. */
+export async function getLlmMetricsPageSummary(jobId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.execute(sql`
+    SELECT
+      page_id,
+      COUNT(*)::int        AS call_count,
+      SUM(duration_ms)::int AS total_duration_ms,
+      SUM(tokens_used)::int AS total_tokens
+    FROM llm_timing_metrics
+    WHERE job_id = ${jobId} AND page_id IS NOT NULL
+    GROUP BY page_id
+  `);
+  return rows as unknown as Array<{
+    page_id: number; call_count: number; total_duration_ms: number; total_tokens: number;
+  }>;
+}
+
+/** Per-provider summary over the last N days. */
+export async function getLlmProviderMetricsSummary(days = 7) {
+  const db = await getDb();
+  if (!db) return [];
+  const since = new Date();
+  since.setDate(since.getDate() - days);
+  const rows = await db.execute(sql`
+    SELECT
+      provider_id,
+      provider_name,
+      COUNT(*)::int                                             AS total_calls,
+      ROUND(AVG(duration_ms))::int                             AS avg_duration_ms,
+      MIN(duration_ms)::int                                    AS min_duration_ms,
+      MAX(duration_ms)::int                                    AS max_duration_ms,
+      SUM(tokens_used)::int                                    AS total_tokens,
+      COUNT(*) FILTER (WHERE success = false)::int             AS failure_count,
+      COUNT(*) FILTER (WHERE is_fallback = true)::int          AS fallback_count,
+      ROUND(
+        100.0 * COUNT(*) FILTER (WHERE success = true) / NULLIF(COUNT(*), 0),
+        1
+      )::float                                                 AS success_rate
+    FROM llm_timing_metrics
+    WHERE created_at >= ${since}
+    GROUP BY provider_id, provider_name
+    ORDER BY total_calls DESC
+  `);
+  return rows as unknown as Array<{
+    provider_id: number | null; provider_name: string | null;
+    total_calls: number; avg_duration_ms: number; min_duration_ms: number; max_duration_ms: number;
+    total_tokens: number; failure_count: number; fallback_count: number; success_rate: number;
+  }>;
 }

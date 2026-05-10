@@ -36,6 +36,13 @@
       "when": 1746921600000,
       "tag": "0004_printed_page_label",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1746994800000,
+      "tag": "0005_llm_timing_metrics",
+      "breakpoints": true
     }
   ]
 }

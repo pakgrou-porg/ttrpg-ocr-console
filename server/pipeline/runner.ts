@@ -308,7 +308,7 @@ async function _runJob(jobId: number): Promise<void> {
       sampleContent.push({ type: "text", text: "Extract the document metadata from these pages. Reply with ONLY a JSON object — start with { and end with }." });
 
       const result = await invokeStage("document_intelligence", sampleContent, undefined, PROMPT_DOCUMENT_INTELLIGENCE,
-        { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_DOC_INTEL });
+        { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_DOC_INTEL }, { jobId });
       const meta = parseJsonResponse(result.content);
 
       await updateDocument(documentId, {
@@ -351,7 +351,7 @@ async function _runJob(jobId: number): Promise<void> {
     try {
       const layoutContent: UserContentPart[] = [imgPart, { type: "text", text: "Classify the layout type and structure of this page. Reply with ONLY a JSON object — start with { and end with }." }];
       const r = await invokeStage("layout_analysis", layoutContent, undefined, PROMPT_LAYOUT_ANALYSIS,
-        { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_LAYOUT });
+        { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_LAYOUT }, { pageId, jobId });
       layoutData = parseJsonResponse(r.content);
       await updateDocumentPage(pageId, { layoutType: (layoutData.layout_type as string) || undefined });
     } catch (err: any) {
@@ -366,7 +366,7 @@ async function _runJob(jobId: number): Promise<void> {
       await updateIngestionJobStatus(jobId, { currentStage: "bbox_detection" });
       const bboxContent: UserContentPart[] = [imgPart, { type: "text", text: "Identify all distinct content regions on this page. Reply with ONLY a JSON object — start with { and end with }." }];
       const r = await invokeStage("bbox_detection", bboxContent, undefined, PROMPT_BBOX_DETECTION,
-        { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_BBOX });
+        { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_BBOX }, { pageId, jobId });
       const data = parseJsonResponse(r.content);
       regions = Array.isArray(data.regions) ? data.regions : [];
       await updateDocumentPage(pageId, { contentRegions: regions });
@@ -387,7 +387,7 @@ async function _runJob(jobId: number): Promise<void> {
       const regionContext = contextParts.length > 0 ? contextParts.join("\n") : undefined;
       const ocrContent: UserContentPart[] = [imgPart, { type: "text", text: "Extract all readable text from this page in reading order. Reply with ONLY a JSON object — start with { and end with }." }];
       const r = await invokeStage("ocr_extraction", ocrContent, regionContext, PROMPT_OCR_EXTRACTION,
-        { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_OCR });
+        { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_OCR }, { pageId, jobId });
       const data = parseJsonResponse(r.content);
       ocrConfidence = typeof data.confidence === "number" ? data.confidence : 0;
 
@@ -531,7 +531,7 @@ export async function retryPageStages(
       try {
         const content: UserContentPart[] = [imgPart, { type: "text", text: "Classify the layout type and structure of this page. Reply with ONLY a JSON object — start with { and end with }." }];
         const r = await invokeStage("layout_analysis", content, surroundingContext, PROMPT_LAYOUT_ANALYSIS,
-          { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_LAYOUT });
+          { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_LAYOUT }, { pageId, jobId: doc?.ingestionJobId ?? undefined });
         const data = parseJsonResponse(r.content);
         await updateDocumentPage(pageId, { layoutType: (data.layout_type as string) || undefined });
       } catch (err: any) {
@@ -547,7 +547,7 @@ export async function retryPageStages(
       try {
         const content: UserContentPart[] = [imgPart, { type: "text", text: "Identify all distinct content regions on this page. Reply with ONLY a JSON object — start with { and end with }." }];
         const r = await invokeStage("bbox_detection", content, surroundingContext, PROMPT_BBOX_DETECTION,
-          { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_BBOX });
+          { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_BBOX }, { pageId, jobId: doc?.ingestionJobId ?? undefined });
         const data = parseJsonResponse(r.content);
         regions = Array.isArray(data.regions) ? data.regions : [];
         await updateDocumentPage(pageId, { contentRegions: regions });
@@ -567,7 +567,7 @@ export async function retryPageStages(
         const fullContext = [surroundingContext, regionCtx].filter(Boolean).join("\n\n") || undefined;
         const content: UserContentPart[] = [imgPart, { type: "text", text: "Extract all readable text from this page in reading order. Reply with ONLY a JSON object — start with { and end with }." }];
         const r = await invokeStage("ocr_extraction", content, fullContext, PROMPT_OCR_EXTRACTION,
-          { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_OCR });
+          { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_OCR }, { pageId, jobId: doc?.ingestionJobId ?? undefined });
         const data = parseJsonResponse(r.content);
         ocrConfidence = typeof data.confidence === "number" ? data.confidence : 0;
 

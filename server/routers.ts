@@ -26,6 +26,7 @@ import {
   getOcrResultByPageId, getOcrResultById, createOcrResult, updateOcrResult,
   getHitlItemById, getHitlItemsByIds, getHitlItemsByPageId, getAllHitlItems, createHitlItem, updateHitlItem, getHitlStats,
   getAllGameSystems, createGameSystem, updateGameSystem, deleteGameSystem,
+  getLlmMetricsByPage, getLlmMetricsJobSummary, getLlmMetricsPageSummary, getLlmProviderMetricsSummary,
 } from "./db";
 import { encryptSecret, decryptSecret, storeSecretHint, renderMaskedSecret } from "./crypto";
 import { startJob, retryPageStages, RetryStage } from "./pipeline/runner";
@@ -2093,6 +2094,29 @@ export const appRouter = router({
       await clearGoogleTokens();
       return { success: true };
     }),
+  }),
+
+  // ─── LLM Timing Metrics ───────────────────────────────────────────────────────
+  metrics: router({
+    /** All LLM call records for a single page. */
+    byPage: protectedProcedure
+      .input(z.object({ pageId: z.number().int() }))
+      .query(({ input }) => getLlmMetricsByPage(input.pageId)),
+
+    /** Per-stage aggregates (calls, avg/total ms, tokens) for one job. */
+    jobSummary: protectedProcedure
+      .input(z.object({ jobId: z.number().int() }))
+      .query(({ input }) => getLlmMetricsJobSummary(input.jobId)),
+
+    /** Per-page totals (total LLM ms, call count) for one job — used by the page browser. */
+    pageSummary: protectedProcedure
+      .input(z.object({ jobId: z.number().int() }))
+      .query(({ input }) => getLlmMetricsPageSummary(input.jobId)),
+
+    /** Per-provider aggregates over the last N days (default 7). */
+    providerSummary: protectedProcedure
+      .input(z.object({ days: z.number().int().min(1).max(90).default(7) }))
+      .query(({ input }) => getLlmProviderMetricsSummary(input.days)),
   }),
 
   // ─── Game Systems ─────────────────────────────────────────────────────────────

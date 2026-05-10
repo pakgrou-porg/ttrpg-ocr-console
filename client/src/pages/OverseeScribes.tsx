@@ -4,7 +4,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Activity, Clock, CheckCircle2, AlertCircle, Pause, RotateCcw, Loader2,
   Gamepad2, Plus, Trash2, Pencil, Check, X, ChevronDown, ChevronRight,
-  BookOpen, Flag, Eye, ImageOff, ChevronLeft,
+  BookOpen, Flag, Eye, ImageOff, ChevronLeft, Timer, BarChart2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -108,7 +108,16 @@ function ConfidenceBadge({ value }: { value: number | null | undefined }) {
   return <Badge variant="outline" className={`text-xs ${cls}`}>{value}%</Badge>;
 }
 
-function PageCard({ page, jobId, onFlagged }: { page: any; jobId: number; onFlagged: () => void }) {
+function fmtMs(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
+}
+
+function PageCard({ page, jobId, onFlagged, timing }: {
+  page: any; jobId: number; onFlagged: () => void;
+  timing?: { total_duration_ms: number; call_count: number };
+}) {
   const [tab, setTab] = useState<"text" | "regions" | "json">("text");
   const [flagReason, setFlagReason] = useState("");
   const [showFlagInput, setShowFlagInput] = useState(false);
@@ -147,6 +156,12 @@ function PageCard({ page, jobId, onFlagged }: { page: any; jobId: number; onFlag
         )}
         {page.isFlagged && (
           <Badge variant="outline" className="text-xs text-orange-500 border-orange-500/30 bg-orange-500/10">In HITL</Badge>
+        )}
+        {timing && (
+          <Badge variant="outline" className="text-xs text-muted-foreground gap-1 flex items-center">
+            <Timer className="h-2.5 w-2.5" />
+            {fmtMs(timing.total_duration_ms)} · {timing.call_count} call{timing.call_count !== 1 ? "s" : ""}
+          </Badge>
         )}
         <div className="ml-auto flex items-center gap-2">
           {!page.isFlagged && !showFlagInput && (
@@ -249,6 +264,7 @@ function JobPageBrowser({ jobId, onClose }: { jobId: number; onClose: () => void
     { documentId: doc?.id ?? 0, offset: page * limit, limit },
     { enabled: !!doc?.id },
   );
+  const { data: pageTiming } = trpc.metrics.pageSummary.useQuery({ jobId });
 
   const totalPages = result?.total ?? 0;
   const pageCount = Math.max(1, Math.ceil(totalPages / limit));
@@ -282,9 +298,13 @@ function JobPageBrowser({ jobId, onClose }: { jobId: number; onClose: () => void
         </div>
       ) : (
         <div className="space-y-3">
-          {result?.pages.map((p: any) => (
-            <PageCard key={p.id} page={p} jobId={jobId} onFlagged={refetch} />
-          ))}
+          {result?.pages.map((p: any) => {
+            const timing = pageTiming?.find((t: any) => t.page_id === p.id);
+            return (
+              <PageCard key={p.id} page={p} jobId={jobId} onFlagged={refetch}
+                timing={timing ? { total_duration_ms: timing.total_duration_ms, call_count: timing.call_count } : undefined} />
+            );
+          })}
         </div>
       )}
 
@@ -304,6 +324,72 @@ function JobPageBrowser({ jobId, onClose }: { jobId: number; onClose: () => void
   );
 }
 
+// ─── Per-Job Metrics Panel ────────────────────────────────────────────────────
+
+function JobMetricsPanel({ jobId, onClose }: { jobId: number; onClose: () => void }) {
+  const { data: rows, isLoading } = trpc.metrics.jobSummary.useQuery({ jobId });
+
+  const totalMs    = rows?.reduce((s: number, r: any) => s + r.total_duration_ms, 0) ?? 0;
+  const totalTok   = rows?.reduce((s: number, r: any) => s + r.total_tokens, 0) ?? 0;
+  const totalCalls = rows?.reduce((s: number, r: any) => s + r.call_count, 0) ?? 0;
+
+  return (
+    <div className="border-t border-border/50 bg-muted/5 px-4 py-4 space-y-3">
+      <div className="flex items-center gap-3">
+        <BarChart2 className="h-4 w-4 text-muted-foreground" />
+        <span className="text-sm font-medium">LLM Timing — JOB-{jobId}</span>
+        {!isLoading && rows && (
+          <span className="text-xs text-muted-foreground ml-1">
+            {totalCalls} calls · {fmtMs(totalMs)} total · {totalTok.toLocaleString()} tokens
+          </span>
+        )}
+        <button className="ml-auto text-muted-foreground hover:text-foreground" onClick={onClose}>
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
+      {isLoading ? (
+        <div className="flex items-center gap-2 py-4 text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" /> Loading metrics…
+        </div>
+      ) : !rows || rows.length === 0 ? (
+        <p className="text-xs text-muted-foreground italic py-2">No metrics recorded yet — metrics are captured during active pipeline runs.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-muted-foreground border-b border-border/40">
+                <th className="text-left pb-2 pr-4 font-medium">Stage</th>
+                <th className="text-left pb-2 pr-4 font-medium">Provider</th>
+                <th className="text-right pb-2 pr-4 font-medium">Calls</th>
+                <th className="text-right pb-2 pr-4 font-medium">Avg</th>
+                <th className="text-right pb-2 pr-4 font-medium">Total</th>
+                <th className="text-right pb-2 pr-4 font-medium">Tokens</th>
+                <th className="text-right pb-2 font-medium">Fallbacks</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/20">
+              {(rows as any[]).map((r: any, i: number) => (
+                <tr key={i} className="hover:bg-muted/10 transition-colors">
+                  <td className="py-1.5 pr-4 font-mono">{r.stage}</td>
+                  <td className="py-1.5 pr-4 text-muted-foreground">{r.provider_name ?? "—"}</td>
+                  <td className="py-1.5 pr-4 text-right tabular-nums">{r.call_count}</td>
+                  <td className="py-1.5 pr-4 text-right tabular-nums">{fmtMs(r.avg_duration_ms)}</td>
+                  <td className="py-1.5 pr-4 text-right tabular-nums font-medium">{fmtMs(r.total_duration_ms)}</td>
+                  <td className="py-1.5 pr-4 text-right tabular-nums">{(r.total_tokens ?? 0).toLocaleString()}</td>
+                  <td className={`py-1.5 text-right tabular-nums ${r.fallback_count > 0 ? "text-orange-400" : "text-muted-foreground"}`}>
+                    {r.fallback_count}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function OverseeScribes() {
@@ -312,6 +398,7 @@ export default function OverseeScribes() {
 
   const [expandedJobId, setExpandedJobId]   = useState<number | null>(null);
   const [browsingJobId, setBrowsingJobId]   = useState<number | null>(null);
+  const [metricsJobId, setMetricsJobId]     = useState<number | null>(null);
 
   const deleteMut = trpc.jobs.delete.useMutation({
     onSuccess: () => { refetch(); toast.success("Job removed."); },
@@ -453,6 +540,7 @@ export default function OverseeScribes() {
                 const progressColor = job.status === "completed" ? "bg-green-500" : job.status === "failed" ? "bg-red-500" : "bg-blue-500";
                 const isErrExpanded = expandedJobId === job.id;
                 const isBrowsing  = browsingJobId === job.id;
+                const isMetrics   = metricsJobId === job.id;
                 const pageOffset  = job.pageOffset ?? 0;
                 const blockSize   = job.blockSize  ?? 10;
                 const blockLabel  = `pp. ${pageOffset + 1}–${pageOffset + blockSize}`;
@@ -503,6 +591,11 @@ export default function OverseeScribes() {
                           <Eye className="w-3 h-3" />
                           {isBrowsing ? "Close" : "Browse Pages"}
                         </Button>
+                        <Button size="sm" variant={isMetrics ? "secondary" : "outline"} className="h-7 text-xs gap-1.5"
+                          onClick={() => setMetricsJobId(isMetrics ? null : job.id)}>
+                          <BarChart2 className="w-3 h-3" />
+                          {isMetrics ? "Close" : "Metrics"}
+                        </Button>
                         {["queued", "converting", "pass1_ocr", "pass2_ocr", "enriching"].includes(job.status) && (
                           <button onClick={() => cancelMut.mutate({ id: job.id })} disabled={cancelMut.isPending}
                             title="Cancel job chain" className="text-muted-foreground hover:text-orange-400 transition-colors p-1">
@@ -531,6 +624,11 @@ export default function OverseeScribes() {
                     {/* Page browser */}
                     {isBrowsing && (
                       <JobPageBrowser jobId={job.id} onClose={() => setBrowsingJobId(null)} />
+                    )}
+
+                    {/* Metrics panel */}
+                    {isMetrics && (
+                      <JobMetricsPanel jobId={job.id} onClose={() => setMetricsJobId(null)} />
                     )}
                   </div>
                 );

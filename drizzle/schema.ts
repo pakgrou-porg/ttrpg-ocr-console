@@ -622,3 +622,44 @@ export const googleOAuthTokens = pgTable("google_oauth_tokens", {
 
 export type GoogleOAuthToken = typeof googleOAuthTokens.$inferSelect;
 export type InsertGoogleOAuthToken = typeof googleOAuthTokens.$inferInsert;
+
+// ─── LLM Timing Metrics ───────────────────────────────────────────────────────
+//
+// Append-only log of every LLM call made by the pipeline.
+// Aggregated at query time for per-page, per-job, per-batch, and per-provider views.
+
+export const llmTimingMetrics = pgTable("llm_timing_metrics", {
+  id: serial("id").primaryKey(),
+  /** Ingestion job that triggered this call (nullable for one-off calls). */
+  jobId: integer("job_id"),
+  /** Document page being processed (nullable for doc-level calls like document_intelligence). */
+  pageId: integer("page_id"),
+  /** Pipeline stage name (e.g. "ocr_extraction"). */
+  stage: varchar("stage", { length: 64 }).notNull(),
+  /** Provider record ID used for this call. */
+  providerId: integer("provider_id"),
+  /** Provider display name (denormalised for cheap GROUP BY queries). */
+  providerName: varchar("provider_name", { length: 128 }),
+  /** Model identifier returned in the LLM response. */
+  model: varchar("model", { length: 256 }),
+  /** Wall-clock milliseconds from first byte sent to last byte received (includes retries). */
+  durationMs: integer("duration_ms").notNull(),
+  /** Total tokens consumed (prompt + completion). */
+  tokensUsed: integer("tokens_used").default(0).notNull(),
+  /** True when the fallback provider handled the call (primary failed). */
+  isFallback: boolean("is_fallback").default(false).notNull(),
+  /** Whether the call completed without an error. */
+  success: boolean("success").default(true).notNull(),
+  /** Short error description when success = false. */
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  jobIdIdx:      index("llm_timing_job_id_idx").on(t.jobId),
+  pageIdIdx:     index("llm_timing_page_id_idx").on(t.pageId),
+  providerIdx:   index("llm_timing_provider_id_idx").on(t.providerId),
+  stageIdx:      index("llm_timing_stage_idx").on(t.stage),
+  createdAtIdx:  index("llm_timing_created_at_idx").on(t.createdAt),
+}));
+
+export type LlmTimingMetric = typeof llmTimingMetrics.$inferSelect;
+export type InsertLlmTimingMetric = typeof llmTimingMetrics.$inferInsert;
