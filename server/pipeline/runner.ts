@@ -11,6 +11,8 @@ import {
   getPageById, getDocumentById,
   getOcrResultByPageId,
   getPageByDocumentAndNumber,
+  createContentSummary,
+  resolveContentSummaryBoundaries,
 } from "../db";
 import { invokeStage, parseJsonResponse, UserContentPart, InvokeOptions } from "./invoke";
 import { downloadDriveFile, getDriveFileName, deleteLocalFile } from "./drive";
@@ -127,6 +129,62 @@ const FEW_SHOT_OCR: InvokeOptions["fewShotExamples"] = [
   },
 ];
 
+const PROMPT_CONTENT_BREAK_DETECT = `You are a document structure analyser for TTRPG publications.
+Examine the provided page text and determine structural breaks and cross-page sentence continuity.
+${STRICT_RULES}
+
+Required output schema:
+{"page_number":1,"structural_breaks":[{"break_type":"chapter","heading_text":"Chapter 3: Combat","position":1}],"continuity":{"continues_from_previous_page":false,"continues_to_next_page":false,"mid_sentence_break_at_end":false,"section_continues_from_previous_page":false},"confidence":89}
+
+break_type must be one of: chapter, section, subsection, appendix
+structural_breaks lists ALL heading transitions visible on this page — may be empty [].
+position is the 1-based reading-order index where the break occurs.
+continues_from_previous_page: true when the first sentence is clearly a continuation.
+mid_sentence_break_at_end: true when the final sentence is incomplete (cut off at bottom of page).`;
+
+const PROMPT_TABULAR_EXTRACTION = `You are a table and stat block extraction specialist for TTRPG publications.
+Extract ALL tables, stat blocks, and structured data grids from this page image with complete accuracy.
+${STRICT_RULES}
+
+Required output schema:
+{"tables":[{"type":"stat_block","caption":"Goblin","headers":["AC","HP","Speed"],"rows":[["15","7 (2d6)","30 ft."]],"ability_scores":{"STR":8,"DEX":14,"CON":10,"INT":10,"WIS":8,"CHA":8},"challenge_rating":"1/4","xp":50}]}
+
+type must be one of: stat_block, generic, spell_list, equipment, ability_scores
+Preserve ALL columns, ALL rows, ALL headers exactly. Never truncate or merge cells.
+TTRPG abbreviations (AC, HP, STR, DEX, CON, INT, WIS, CHA, CR, XP, DC, d4/d6/d8/d10/d12/d20) must never be expanded.
+For stat_block type: include ability_scores, challenge_rating, and xp when visible.
+If no tables are present, return {"tables":[]}.`;
+
+const FEW_SHOT_CONTENT_BREAK: InvokeOptions["fewShotExamples"] = [
+  {
+    user: "Analyse this page for structural breaks and cross-page continuity. Reply with ONLY a JSON object — start with { and end with }.",
+    assistant: '{"page_number":23,"structural_breaks":[{"break_type":"chapter","heading_text":"Chapter 2: Combat","position":1},{"break_type":"section","heading_text":"Initiative","position":4}],"continuity":{"continues_from_previous_page":false,"continues_to_next_page":false,"mid_sentence_break_at_end":false,"section_continues_from_previous_page":false},"confidence":94}',
+  },
+  {
+    user: "Analyse this page for structural breaks and cross-page continuity. Reply with ONLY a JSON object — start with { and end with }.",
+    assistant: '{"page_number":87,"structural_breaks":[],"continuity":{"continues_from_previous_page":true,"continues_to_next_page":true,"mid_sentence_break_at_end":true,"section_continues_from_previous_page":true},"confidence":91}',
+  },
+  {
+    user: "Analyse this page for structural breaks and cross-page continuity. Reply with ONLY a JSON object — start with { and end with }.",
+    assistant: '{"page_number":142,"structural_breaks":[{"break_type":"section","heading_text":"Saving Throws","position":3},{"break_type":"subsection","heading_text":"Death Saving Throws","position":8}],"continuity":{"continues_from_previous_page":false,"continues_to_next_page":false,"mid_sentence_break_at_end":false,"section_continues_from_previous_page":false},"confidence":96}',
+  },
+];
+
+const FEW_SHOT_TABULAR: InvokeOptions["fewShotExamples"] = [
+  {
+    user: "Extract ALL tables and stat blocks from this page with complete accuracy. Reply with ONLY a JSON object — start with { and end with }.",
+    assistant: '{"tables":[{"type":"stat_block","caption":"Goblin","headers":["AC","HP","Speed"],"rows":[["15 (leather armor, shield)","7 (2d6)","30 ft."]],"ability_scores":{"STR":8,"DEX":14,"CON":10,"INT":10,"WIS":8,"CHA":8},"challenge_rating":"1/4","xp":50}]}',
+  },
+  {
+    user: "Extract ALL tables and stat blocks from this page with complete accuracy. Reply with ONLY a JSON object — start with { and end with }.",
+    assistant: '{"tables":[{"type":"generic","caption":"Random Trinkets","headers":["d100","Trinket"],"rows":[["01","A mummified goblin hand"],["02","A piece of crystal that faintly glows in the moonlight"],["03","A small cloth doll skewered with needles"],["04","A copper coin minted in an unknown land"]]}]}',
+  },
+  {
+    user: "Extract ALL tables and stat blocks from this page with complete accuracy. Reply with ONLY a JSON object — start with { and end with }.",
+    assistant: '{"tables":[{"type":"spell_list","caption":"Cleric Spells","headers":["Spell Level","Spell Name","Casting Time","Range","Duration"],"rows":[["Cantrip","Guidance","1 action","Touch","Concentration, up to 1 minute"],["Cantrip","Sacred Flame","1 action","60 ft.","Instantaneous"],["1st","Cure Wounds","1 action","Touch","Instantaneous"],["1st","Guiding Bolt","1 action","120 ft.","1 round"]]}]}',
+  },
+];
+
 // ── Shared invoke options for all OCR stages ─────────────────────────────────
 // response_format forces JSON-constrained sampling at the vLLM token level —
 // the model cannot physically emit non-JSON tokens regardless of its tendencies.
@@ -195,6 +253,52 @@ function buildRawText(data: Record<string, unknown>): string {
     }
     return b.text ?? "";
   }).filter(Boolean).join("\n\n");
+}
+
+/**
+ * Merge higher-accuracy tabular_extraction results into OCR structured data.
+ * Replaces existing table content_blocks in order; appends any extras found.
+ */
+function mergeTabularExtraction(
+  ocrData: Record<string, unknown>,
+  extractedTables: any[],
+): Record<string, unknown> {
+  if (!Array.isArray(ocrData.content_blocks) || extractedTables.length === 0) return ocrData;
+
+  let tableIdx = 0;
+  const merged = (ocrData.content_blocks as any[]).map((block: any) => {
+    if (block.type !== "table" || tableIdx >= extractedTables.length) return block;
+    const t = extractedTables[tableIdx++];
+    return {
+      type: "table",
+      caption: t.caption ?? t.entity_name ?? block.caption,
+      headers: t.headers ?? block.headers ?? [],
+      rows: t.rows ?? block.rows ?? [],
+      table_type: t.type,
+      ...(t.ability_scores    ? { ability_scores: t.ability_scores }     : {}),
+      ...(t.challenge_rating  ? { challenge_rating: t.challenge_rating } : {}),
+      ...(t.xp !== undefined  ? { xp: t.xp }                            : {}),
+      sequence: block.sequence,
+    };
+  });
+
+  // Append any extra tables not matched to an OCR block
+  while (tableIdx < extractedTables.length) {
+    const t = extractedTables[tableIdx++];
+    merged.push({
+      type: "table",
+      caption: t.caption ?? t.entity_name,
+      headers: t.headers ?? [],
+      rows: t.rows ?? [],
+      table_type: t.type,
+      ...(t.ability_scores   ? { ability_scores: t.ability_scores }     : {}),
+      ...(t.challenge_rating ? { challenge_rating: t.challenge_rating } : {}),
+      ...(t.xp !== undefined ? { xp: t.xp }                            : {}),
+      sequence: merged.length + 1,
+    });
+  }
+
+  return { ...ocrData, content_blocks: merged };
 }
 
 const HITL_CONFIDENCE_THRESHOLD = 80;
@@ -334,6 +438,7 @@ async function _runJob(jobId: number): Promise<void> {
   // ── Per-page stages ───────────────────────────────────────────────────────
   const confidences: number[] = [];
   let processedPages = 0;
+  let prevRawText: string | null = null; // tail of previous page — fed to content_break_detect
 
   for (let i = 0; i < pageFiles.length; i++) {
     const pageNum = pageOffset + i + 1;
@@ -342,6 +447,7 @@ async function _runJob(jobId: number): Promise<void> {
     const stagesFailed: string[] = [];
     let ocrConfidence = 0;
     let ocrResultId: number | null = null;
+    let currentRawText: string | null = null; // set when OCR succeeds; used by content_break_detect
 
     await updateIngestionJobStatus(jobId, { currentStage: "layout_analysis", processedPages });
 
@@ -396,10 +502,11 @@ async function _runJob(jobId: number): Promise<void> {
       const data = parseJsonResponse(r.content);
       ocrConfidence = typeof data.confidence === "number" ? data.confidence : 0;
 
+      currentRawText = buildRawText(data);
       const ocrResult = await createOcrResult({
         pageId,
         structuredData: data,
-        rawText: buildRawText(data),
+        rawText: currentRawText,
         confidence: ocrConfidence,
         status: "pass1_complete",
         pass1Model: r.model,
@@ -418,6 +525,103 @@ async function _runJob(jobId: number): Promise<void> {
       console.warn(`[Pipeline] Job ${jobId} p${pageNum} ocr_extraction: ${err.message}`);
       const ocrResult = await createOcrResult({ pageId, status: "failed", confidence: 0 });
       ocrResultId = ocrResult.id;
+    }
+
+    // ── content_break_detect ────────────────────────────────────────────────
+    // Text-only stage — runs only when OCR produced text. Not critical: failures
+    // are logged but do not add to stagesFailed and do not trigger HITL.
+    if (currentRawText !== null) {
+      try {
+        await updateIngestionJobStatus(jobId, { currentStage: "content_break_detect" });
+        // prevRawText still holds the PREVIOUS page's text here — we advance it below.
+        const prevTail = prevRawText
+          ? `Previous page ends with:\n${prevRawText.slice(-400).trim()}`
+          : "";
+        const cbText = [
+          prevTail,
+          `Current page text (page ${pageNum}):\n${currentRawText}`,
+          "Analyse this page for structural breaks and cross-page continuity. Reply with ONLY a JSON object — start with { and end with }.",
+        ].filter(Boolean).join("\n\n");
+        const cbContent: UserContentPart[] = [{ type: "text", text: cbText }];
+        const cbResult = await invokeStage("content_break_detect", cbContent, undefined, PROMPT_CONTENT_BREAK_DETECT,
+          { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_CONTENT_BREAK }, { pageId, jobId });
+        const cbData = parseJsonResponse(cbResult.content);
+
+        const contObj = cbData.continuity as any;
+        const breaks: any[] = Array.isArray(cbData.structural_breaks) ? cbData.structural_breaks : [];
+
+        await updateDocumentPage(pageId, {
+          ...(contObj ? {
+            continuityFlags: {
+              continuesFromPreviousPage:        !!contObj.continues_from_previous_page,
+              continuesToNextPage:              !!contObj.continues_to_next_page,
+              midSentenceBreakAtEnd:            !!contObj.mid_sentence_break_at_end,
+              sectionContinuesFromPreviousPage: !!contObj.section_continues_from_previous_page,
+            },
+          } : {}),
+          structuralBreaks: breaks.map((b: any) => ({
+            breakType: b.break_type,
+            headingText: b.heading_text ?? "",
+            position: b.position ?? 1,
+          })),
+        });
+
+        // Skeleton contentSummaries records — boundaries resolved after all pages are done
+        for (const brk of breaks) {
+          if (brk.break_type && brk.break_type !== "none") {
+            await createContentSummary({
+              documentId,
+              levelType: brk.break_type,
+              headingText: brk.heading_text ?? null,
+              startPageId: pageId,
+              startPageNumber: pageNum,
+            });
+          }
+        }
+      } catch (err: any) {
+        if (isConfigError(err)) throw err;
+        console.warn(`[Pipeline] Job ${jobId} p${pageNum} content_break_detect: ${err.message}`);
+      }
+      // Advance so next page's content_break_detect gets THIS page as its prevRawText
+      prevRawText = currentRawText;
+    }
+
+    // ── tabular_extraction ──────────────────────────────────────────────────
+    // Runs when layout analysis or bbox detection found table/stat-block content.
+    // Not critical: failures are logged but do not trigger HITL.
+    const hasTableContent = layoutData.has_table === true
+      || regions.some((r: any) => r.type === "table" || r.type === "stat_block");
+    if (hasTableContent && ocrResultId !== null) {
+      try {
+        await updateIngestionJobStatus(jobId, { currentStage: "tabular_extraction" });
+        const tableRegions = regions.filter((r: any) => r.type === "table" || r.type === "stat_block");
+        const tableCtx = tableRegions.length > 0
+          ? `Table/stat-block regions detected: ${JSON.stringify(tableRegions)}`
+          : undefined;
+        const tabContent: UserContentPart[] = [
+          imgPart,
+          { type: "text", text: "Extract ALL tables and stat blocks from this page with complete accuracy. Reply with ONLY a JSON object — start with { and end with }." },
+        ];
+        const tabResult = await invokeStage("tabular_extraction", tabContent, tableCtx, PROMPT_TABULAR_EXTRACTION,
+          { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_TABULAR }, { pageId, jobId });
+        const tabData = parseJsonResponse(tabResult.content);
+
+        if (Array.isArray(tabData.tables) && tabData.tables.length > 0) {
+          const existing = await getOcrResultByPageId(pageId);
+          if (existing?.structuredData) {
+            const mergedData = mergeTabularExtraction(existing.structuredData, tabData.tables);
+            await updateOcrResult(existing.id, {
+              structuredData: mergedData,
+              rawText: buildRawText(mergedData),
+              auditLog: [...((existing.auditLog as any[]) ?? []),
+                { timestamp: new Date().toISOString(), action: "tabular_extraction", model: tabResult.model }],
+            });
+          }
+        }
+      } catch (err: any) {
+        if (isConfigError(err)) throw err;
+        console.warn(`[Pipeline] Job ${jobId} p${pageNum} tabular_extraction: ${err.message}`);
+      }
     }
 
     // Queue for HITL review: always if a stage failed or confidence is below threshold
@@ -470,6 +674,14 @@ async function _runJob(jobId: number): Promise<void> {
   });
 
   console.log(`[Pipeline] Job ${jobId}: ${processedPages} pages queued for HITL (avg confidence: ${avgConfidence})`);
+
+  // ── Resolve section boundaries (final block only) ────────────────────────
+  // Once all pages are done, close content_summary intervals and assign parentIds.
+  if (!hasMore) {
+    await resolveContentSummaryBoundaries(documentId, totalDocPages).catch(err =>
+      console.warn(`[Pipeline] Job ${jobId}: resolveContentSummaryBoundaries failed: ${err.message}`)
+    );
+  }
 
   // ── Auto-chain next block ─────────────────────────────────────────────────
   // Re-fetch the job to check whether a cancel was requested while this block ran

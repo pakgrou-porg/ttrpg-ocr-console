@@ -21,6 +21,7 @@ import {
   promptVersions, InsertPromptVersion,
   gameSystems, InsertGameSystem,
   llmTimingMetrics, InsertLlmTimingMetric,
+  contentSummaries, InsertContentSummary,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
@@ -1395,6 +1396,96 @@ export async function getLlmMetricsPageSummary(jobId: number) {
   return rows as unknown as Array<{
     page_id: number; call_count: number; total_duration_ms: number; total_tokens: number;
   }>;
+}
+
+// ─── Content Summaries ────────────────────────────────────────────────────────
+
+export async function createContentSummary(data: InsertContentSummary) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [row] = await db.insert(contentSummaries).values(data).returning({ id: contentSummaries.id });
+  return row;
+}
+
+export async function updateContentSummary(id: number, updates: Partial<InsertContentSummary>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(contentSummaries)
+    .set({ ...updates, updatedAt: new Date() })
+    .where(eq(contentSummaries.id, id));
+}
+
+export async function getContentSummariesByDocument(documentId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(contentSummaries)
+    .where(eq(contentSummaries.documentId, documentId))
+    .orderBy(asc(contentSummaries.startPageNumber), asc(contentSummaries.id));
+}
+
+export async function getPendingSummariesByDocument(documentId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(contentSummaries)
+    .where(and(
+      eq(contentSummaries.documentId, documentId),
+      eq(contentSummaries.summaryStatus, "pending"),
+    ))
+    .orderBy(asc(contentSummaries.startPageNumber));
+}
+
+/**
+ * After all pages in a document are processed, resolve section boundaries and
+ * parent–child relationships for all content_summaries records.
+ *
+ * Algorithm:
+ *   - Sort all records by startPageNumber, then by level depth (chapter < section < subsection).
+ *   - For each record, endPageNumber = startPageNumber of the next record at the same or higher
+ *     level (lower depth number), minus 1.  Last record of its level spans to document end.
+ *   - parentId = the most recently opened record at the next-higher level.
+ */
+export async function resolveContentSummaryBoundaries(documentId: number, totalPages: number) {
+  const db = await getDb();
+  if (!db) return;
+
+  const LEVEL_DEPTH: Record<string, number> = { chapter: 1, section: 2, subsection: 3, page: 4 };
+
+  const all = await db.select().from(contentSummaries)
+    .where(eq(contentSummaries.documentId, documentId))
+    .orderBy(asc(contentSummaries.startPageNumber), asc(contentSummaries.id));
+
+  for (let i = 0; i < all.length; i++) {
+    const cur = all[i];
+    const curDepth = LEVEL_DEPTH[cur.levelType] ?? 5;
+
+    // End page: next record at same or higher level (lower depth number)
+    let endPage = totalPages;
+    let endPageId: number | null = null;
+    for (let j = i + 1; j < all.length; j++) {
+      const next = all[j];
+      if ((LEVEL_DEPTH[next.levelType] ?? 5) <= curDepth) {
+        endPage = next.startPageNumber - 1;
+        endPageId = null; // we don't have a prior-page id, null is fine
+        break;
+      }
+    }
+
+    // Parent: nearest preceding record at one level higher
+    let parentId: number | null = null;
+    for (let j = i - 1; j >= 0; j--) {
+      const prev = all[j];
+      if ((LEVEL_DEPTH[prev.levelType] ?? 5) === curDepth - 1) {
+        parentId = prev.id;
+        break;
+      }
+    }
+
+    if (cur.endPageNumber !== endPage || cur.parentId !== parentId) {
+      await db.update(contentSummaries)
+        .set({ endPageNumber: endPage, endPageId, parentId, updatedAt: new Date() })
+        .where(eq(contentSummaries.id, cur.id));
+    }
+  }
 }
 
 /** Per-provider summary over the last N days. */

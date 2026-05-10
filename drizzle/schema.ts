@@ -478,6 +478,11 @@ export const documentPages = pgTable("document_pages", {
     midSentenceBreakAtEnd: boolean;
     sectionContinuesFromPreviousPage: boolean;
   }>(),
+  structuralBreaks: jsonb("structural_breaks").$type<Array<{
+    breakType: "chapter" | "section" | "subsection" | "appendix";
+    headingText: string;
+    position: number;
+  }>>(),
   pageJsonOutput: jsonb("page_json_output").$type<Record<string, unknown>>(),
   phaseStatus: varchar("phase_status", { length: 64 }),
   isFlagged: boolean("is_flagged").default(false).notNull(),
@@ -663,3 +668,56 @@ export const llmTimingMetrics = pgTable("llm_timing_metrics", {
 
 export type LlmTimingMetric = typeof llmTimingMetrics.$inferSelect;
 export type InsertLlmTimingMetric = typeof llmTimingMetrics.$inferInsert;
+
+// ─── Content Summaries ────────────────────────────────────────────────────────
+//
+// Hierarchical summaries for chapters, sections, subsections, and pages.
+// These are the "big chunks" for Small-to-Big Retrieval in the RAG layer.
+// Structural breaks detected by content_break_detect are used to define
+// the page-range boundaries for each summary.
+// Parent–child hierarchy: subsection → section → chapter → document.
+
+export const SUMMARY_LEVELS = ["chapter", "section", "subsection", "page"] as const;
+export type SummaryLevel = (typeof SUMMARY_LEVELS)[number];
+
+export const SUMMARY_STATUSES = ["pending", "generating", "generated", "approved", "failed"] as const;
+export type SummaryStatus = (typeof SUMMARY_STATUSES)[number];
+
+export const EMBEDDING_STATUSES = ["pending", "embedded", "failed"] as const;
+export type EmbeddingStatus = (typeof EMBEDDING_STATUSES)[number];
+
+export const contentSummaries = pgTable("content_summaries", {
+  id: serial("id").primaryKey(),
+  documentId: integer("document_id").notNull(),
+  /** Hierarchy level: chapter > section > subsection > page */
+  levelType: varchar("level_type", { length: 32 }).notNull(),
+  /** Heading text as extracted by content_break_detect */
+  headingText: varchar("heading_text", { length: 512 }),
+  /** FK to the document_pages row where this section begins */
+  startPageId: integer("start_page_id").notNull(),
+  /** FK to the document_pages row where this section ends (null until resolved) */
+  endPageId: integer("end_page_id"),
+  startPageNumber: integer("start_page_number").notNull(),
+  endPageNumber: integer("end_page_number"),
+  /** 1–2 sentence summary for vector store metadata (embedding key chunk) */
+  shortSummary: text("short_summary"),
+  /** Full section summary for Small-to-Big retrieval context */
+  longSummary: text("long_summary"),
+  keyTerms: jsonb("key_terms").$type<string[]>().default([]),
+  keyEntities: jsonb("key_entities").$type<string[]>().default([]),
+  /** Parent summary ID — null for top-level chapters */
+  parentId: integer("parent_id"),
+  summaryStatus: varchar("summary_status", { length: 32 }).default("pending").notNull(),
+  embeddingStatus: varchar("embedding_status", { length: 32 }).default("pending").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  documentIdIdx: index("content_summaries_document_id_idx").on(t.documentId),
+  levelTypeIdx:  index("content_summaries_level_type_idx").on(t.documentId, t.levelType),
+  startPageIdx:  index("content_summaries_start_page_idx").on(t.startPageId),
+  parentIdx:     index("content_summaries_parent_idx").on(t.parentId),
+  statusIdx:     index("content_summaries_status_idx").on(t.summaryStatus),
+}));
+
+export type ContentSummary = typeof contentSummaries.$inferSelect;
+export type InsertContentSummary = typeof contentSummaries.$inferInsert;

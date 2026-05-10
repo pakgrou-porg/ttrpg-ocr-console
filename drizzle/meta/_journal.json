@@ -50,6 +50,13 @@
       "when": 1747080000000,
       "tag": "0006_llm_timing_composite_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1747166400000,
+      "tag": "0007_content_breaks_summaries",
+      "breakpoints": true
     }
   ]
 }
