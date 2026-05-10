@@ -8,9 +8,10 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
+import { ConfidenceBadge } from "@/components/ConfidenceBadge";
+import { fmtMs } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { toast } from "sonner";
 
 // ─── Game System Admin ────────────────────────────────────────────────────────
@@ -100,25 +101,10 @@ function GameSystemAdmin() {
 
 // ─── Page Browser ─────────────────────────────────────────────────────────────
 
-function ConfidenceBadge({ value }: { value: number | null | undefined }) {
-  if (value === null || value === undefined) return <Badge variant="outline" className="text-muted-foreground text-xs">N/A</Badge>;
-  const cls = value >= 80 ? "text-green-500 border-green-500/30 bg-green-500/10"
-    : value >= 50 ? "text-amber-500 border-amber-500/30 bg-amber-500/10"
-    : "text-red-500 border-red-500/30 bg-red-500/10";
-  return <Badge variant="outline" className={`text-xs ${cls}`}>{value}%</Badge>;
-}
-
-function fmtMs(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
-}
-
 function PageCard({ page, jobId, onFlagged, timing }: {
   page: any; jobId: number; onFlagged: () => void;
   timing?: { total_duration_ms: number; call_count: number };
 }) {
-  const [tab, setTab] = useState<"text" | "regions" | "json">("text");
   const [flagReason, setFlagReason] = useState("");
   const [showFlagInput, setShowFlagInput] = useState(false);
 
@@ -150,7 +136,7 @@ function PageCard({ page, jobId, onFlagged, timing }: {
             </span>
           )}
         </span>
-        <ConfidenceBadge value={page.ocrConfidence} />
+        <ConfidenceBadge confidence={page.ocrConfidence} />
         {page.layoutType && (
           <Badge variant="outline" className="text-xs text-muted-foreground">{page.layoutType}</Badge>
         )}
@@ -212,44 +198,35 @@ function PageCard({ page, jobId, onFlagged, timing }: {
           )}
         </div>
 
-        {/* Tabs */}
-        <div className="flex-1 min-w-0 p-3">
-          <div className="flex gap-2 mb-2 text-xs">
-            {(["text", "regions", "json"] as const).map(t => (
-              <button
-                key={t}
-                onClick={() => setTab(t)}
-                className={`px-2 py-0.5 rounded border transition-colors ${tab === t
-                  ? "border-primary/50 bg-primary/10 text-primary"
-                  : "border-border/40 text-muted-foreground hover:text-foreground"}`}
-              >
-                {t === "text" ? "OCR Text" : t === "regions" ? "Regions" : "Raw JSON"}
-              </button>
-            ))}
-          </div>
+        <Tabs defaultValue="text" className="flex-1 min-w-0 p-3">
+          <TabsList className="h-7 mb-2">
+            <TabsTrigger value="text" className="text-xs h-6 px-2">OCR Text</TabsTrigger>
+            <TabsTrigger value="regions" className="text-xs h-6 px-2">Regions</TabsTrigger>
+            <TabsTrigger value="json" className="text-xs h-6 px-2">Raw JSON</TabsTrigger>
+          </TabsList>
 
-          {tab === "text" && (
+          <TabsContent value="text">
             <pre className="text-xs font-mono whitespace-pre-wrap break-words max-h-36 overflow-y-auto text-foreground/80 bg-background/30 rounded p-2 border border-border/30">
               {displayText ?? <span className="text-muted-foreground italic">No OCR text extracted</span>}
             </pre>
-          )}
+          </TabsContent>
 
-          {tab === "regions" && (
+          <TabsContent value="regions">
             <pre className="text-xs font-mono whitespace-pre-wrap break-words max-h-36 overflow-y-auto text-foreground/80 bg-background/30 rounded p-2 border border-border/30">
               {regions ? JSON.stringify(regions, null, 2) : <span className="text-muted-foreground italic">No regions detected</span>}
             </pre>
-          )}
+          </TabsContent>
 
-          {tab === "json" && (
+          <TabsContent value="json">
             <pre className="text-xs font-mono whitespace-pre-wrap break-words max-h-36 overflow-y-auto text-foreground/80 bg-background/30 rounded p-2 border border-border/30">
               {ocr ? JSON.stringify(ocr.structuredData, null, 2) : <span className="text-muted-foreground italic">No OCR result</span>}
             </pre>
-          )}
+          </TabsContent>
 
           {ocr?.pass1Model && (
             <p className="text-xs text-muted-foreground mt-1.5">Model: {ocr.pass1Model}</p>
           )}
-        </div>
+        </Tabs>
       </div>
     </div>
   );
@@ -265,6 +242,10 @@ function JobPageBrowser({ jobId, onClose }: { jobId: number; onClose: () => void
     { enabled: !!doc?.id },
   );
   const { data: pageTiming } = trpc.metrics.pageSummary.useQuery({ jobId });
+  const timingMap = useMemo(
+    () => new Map((pageTiming ?? []).map((t: any) => [t.page_id, t])),
+    [pageTiming],
+  );
 
   const totalPages = result?.total ?? 0;
   const pageCount = Math.max(1, Math.ceil(totalPages / limit));
@@ -299,7 +280,7 @@ function JobPageBrowser({ jobId, onClose }: { jobId: number; onClose: () => void
       ) : (
         <div className="space-y-3">
           {result?.pages.map((p: any) => {
-            const timing = pageTiming?.find((t: any) => t.page_id === p.id);
+            const timing = timingMap.get(p.id);
             return (
               <PageCard key={p.id} page={p} jobId={jobId} onFlagged={refetch}
                 timing={timing ? { total_duration_ms: timing.total_duration_ms, call_count: timing.call_count } : undefined} />

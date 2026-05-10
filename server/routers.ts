@@ -41,6 +41,52 @@ const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   return next({ ctx });
 });
 
+// ─── Health helpers ───────────────────────────────────────────────────────────
+
+async function pingLocalAgents(providers: Array<{ baseUrl: string; port: number | null; apiPrefix: string | null; displayName: string; name: string }>): Promise<{ ok: boolean; latencyMs: number; detail: string }> {
+  if (providers.length === 0) {
+    return { ok: false, latencyMs: 0, detail: "No local agent providers configured" };
+  }
+  const start = Date.now();
+  const results = await Promise.all(providers.map(async p => {
+    const host = p.baseUrl.replace(/\/$/, "");
+    const portStr = p.port ? `:${p.port}` : "";
+    const prefix = (p.apiPrefix ?? "/v1").replace(/\/$/, "");
+    try {
+      const res = await fetch(`${host}${portStr}${prefix}/models`, { signal: AbortSignal.timeout(5000) });
+      return res.ok;
+    } catch { return false; }
+  }));
+  const ok = results.some(Boolean);
+  const count = results.filter(Boolean).length;
+  const latencyMs = Date.now() - start;
+  const detail = ok
+    ? `${count}/${providers.length} agent${providers.length !== 1 ? "s" : ""} responding`
+    : `No agents responding (checked ${providers.length})`;
+  return { ok, latencyMs, detail };
+}
+
+async function pingCloudConduit(provider: { encryptedApiKey: string | null; keyIv: string | null; keyAuthTag: string | null } | undefined): Promise<{ ok: boolean; latencyMs: number; detail: string }> {
+  if (!provider) return { ok: false, latencyMs: 0, detail: "No OpenRouter provider configured" };
+  const start = Date.now();
+  try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (provider.encryptedApiKey) {
+      try {
+        const key = decryptSecret({ ciphertext: provider.encryptedApiKey, iv: provider.keyIv ?? "", authTag: provider.keyAuthTag ?? "" });
+        headers["Authorization"] = `Bearer ${key}`;
+      } catch { /* proceed without key — will get 401 but still proves reachability */ }
+    }
+    const res = await fetch("https://openrouter.ai/api/v1/models", { headers, signal: AbortSignal.timeout(8000) });
+    const latencyMs = Date.now() - start;
+    return res.ok
+      ? { ok: true,  latencyMs, detail: "OpenRouter reachable" }
+      : { ok: false, latencyMs, detail: `HTTP ${res.status}` };
+  } catch (err: any) {
+    return { ok: false, latencyMs: Date.now() - start, detail: err?.message?.slice(0, 80) ?? "Connection failed" };
+  }
+}
+
 export const appRouter = router({
   system: systemRouter,
 
@@ -66,19 +112,30 @@ export const appRouter = router({
 
     // P1: Full service status is behind authentication — exposes service topology.
     all: protectedProcedure.query(async () => {
-      const [dbResult, activeJobs] = await Promise.all([
+      const [dbResult, activeJobs, allProviders] = await Promise.all([
         pingDatabase(),
         getActiveIngestionJobs(),
+        getAllLlmProviders(),
       ]);
+
+      const localAgents = allProviders.filter(p => p.isActive && p.providerType === "lm_studio");
+      const orProvider  = allProviders.find(p => p.isActive && p.providerType === "openrouter");
+
+      const [agentsResult, cloudResult] = await Promise.all([
+        pingLocalAgents(localAgents),
+        pingCloudConduit(orProvider),
+      ]);
+
       const jobCount = activeJobs.length;
       const scribesDetail = jobCount === 0
         ? "Idle — No Active Jobs"
         : `${jobCount} Active Job${jobCount === 1 ? "" : "s"}`;
+
       return {
-        database: dbResult,
-        agents: { ok: true, latencyMs: 0, detail: "Available & Ready" },
-        scribes: { ok: jobCount === 0, latencyMs: 0, detail: scribesDetail },
-        cloudConduit: { ok: true, latencyMs: 0, detail: "OpenRouter Active" },
+        database:     dbResult,
+        agents:       agentsResult,
+        scribes:      { ok: jobCount === 0, latencyMs: 0, detail: scribesDetail },
+        cloudConduit: cloudResult,
       };
     }),
   }),
@@ -1740,13 +1797,11 @@ export const appRouter = router({
     bulkResolve: protectedProcedure
       .input(z.object({ ids: z.array(z.number().int()).min(1) }))
       .mutation(async ({ ctx, input }) => {
-        for (const id of input.ids) {
-          await updateHitlItem(id, {
-            status: "resolved",
-            resolvedBy: ctx.user.id,
-            resolvedAt: new Date(),
-          });
-        }
+        await Promise.all(input.ids.map(id => updateHitlItem(id, {
+          status: "resolved",
+          resolvedBy: ctx.user.id,
+          resolvedAt: new Date(),
+        })));
         return { success: true, count: input.ids.length };
       }),
 

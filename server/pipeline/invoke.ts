@@ -171,7 +171,7 @@ export async function invokeStage(
   let systemPrompt = "";
   if (inscription.promptName) {
     const prompt = await getSystemPromptByName(inscription.promptName);
-    if (prompt?.content) systemPrompt = prompt.content;
+    if (prompt?.promptText) systemPrompt = prompt.promptText;
   }
   if (!systemPrompt && fallbackSystemPrompt) {
     systemPrompt = fallbackSystemPrompt;
