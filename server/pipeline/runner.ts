@@ -50,14 +50,15 @@ Required output schema (fill every field with real values from the page):
 layout_type must be one of: cover, title_page, toc, chapter_header, body_text, stat_block, table, illustration_full, illustration_with_text, index, appendix, mixed`;
 
 const PROMPT_BBOX_DETECTION = `You are a document content-region detector for TTRPG publications.
-Identify distinct content regions in the page image.
+Identify distinct content regions in the page image and estimate each region's bounding box.
 ${STRICT_RULES}
 
 Required output schema (list every visible region):
-{"regions":[{"type":"…","label":"…","position":"…"}]}
+{"regions":[{"type":"…","label":"…","bbox":{"x":0,"y":0,"w":100,"h":100}}]}
 
 type must be one of: heading, subheading, paragraph, table, list, image, stat_block, sidebar, caption, header, footer, page_number
-position must be one of: top, upper_left, upper_right, middle, lower_left, lower_right, bottom, full_page`;
+bbox values are percentages of the page width/height (0–100). x,y = top-left corner; w,h = width and height.
+Estimate bounding boxes as precisely as possible from the visual layout.`;
 
 const PROMPT_OCR_EXTRACTION = `You are an OCR text extraction system for TTRPG document pages.
 Extract ALL readable text from the page image in reading order.
@@ -103,11 +104,15 @@ const FEW_SHOT_LAYOUT: InvokeOptions["fewShotExamples"] = [
 const FEW_SHOT_BBOX: InvokeOptions["fewShotExamples"] = [
   {
     user: "Identify all distinct content regions on this page. Reply with ONLY a JSON object — start with { and end with }.",
-    assistant: '{"regions":[{"type":"heading","label":"Chapter 3: Weapons","position":"top"},{"type":"table","label":"Weapon damage table","position":"middle"},{"type":"caption","label":"Table 3-1 footnote","position":"bottom"}]}',
+    assistant: '{"regions":[{"type":"heading","label":"Chapter 3: Weapons","bbox":{"x":5,"y":3,"w":90,"h":7}},{"type":"paragraph","label":"Chapter intro text","bbox":{"x":5,"y":12,"w":90,"h":18}},{"type":"table","label":"Weapon damage table","bbox":{"x":5,"y":33,"w":90,"h":45}},{"type":"caption","label":"Table 3-1 footnote","bbox":{"x":5,"y":80,"w":70,"h":4}}]}',
   },
   {
     user: "Identify all distinct content regions on this page. Reply with ONLY a JSON object — start with { and end with }.",
-    assistant: '{"regions":[{"type":"image","label":"Full-page illustration: dungeon battle scene","position":"full_page"},{"type":"caption","label":"Illustration credit text","position":"bottom"}]}',
+    assistant: '{"regions":[{"type":"image","label":"Full-page illustration: dungeon battle scene","bbox":{"x":0,"y":0,"w":100,"h":92}},{"type":"caption","label":"Illustration credit text","bbox":{"x":5,"y":93,"w":90,"h":4}}]}',
+  },
+  {
+    user: "Identify all distinct content regions on this page. Reply with ONLY a JSON object — start with { and end with }.",
+    assistant: '{"regions":[{"type":"header","label":"Player\'s Handbook","bbox":{"x":0,"y":0,"w":100,"h":4}},{"type":"heading","label":"Ability Scores","bbox":{"x":5,"y":6,"w":90,"h":5}},{"type":"paragraph","label":"Ability score description","bbox":{"x":5,"y":13,"w":44,"h":35}},{"type":"stat_block","label":"Strength stat block","bbox":{"x":51,"y":13,"w":44,"h":35}},{"type":"table","label":"Ability modifier table","bbox":{"x":5,"y":52,"w":44,"h":42}},{"type":"sidebar","label":"Variant: Customizing ability scores","bbox":{"x":51,"y":52,"w":44,"h":42}},{"type":"page_number","label":"12","bbox":{"x":90,"y":96,"w":8,"h":3}}]}',
   },
 ];
 

@@ -7,6 +7,7 @@ import {
   Loader2, ClipboardList, FileText, Layout, BoxSelect, ListTree, Braces, BookOpen,
   Trash2, ChevronLeft, Download, RefreshCw,
 } from "lucide-react";
+import { BboxOverlayToggle } from "@/components/BboxOverlay";
 import { trpc } from "@/lib/trpc";
 import { useToast } from "@/hooks/use-toast";
 
@@ -442,10 +443,10 @@ function HitlCard({ item, onResolved, isSelected, onToggle }: {
             <div>
               <p className="text-xs text-muted-foreground uppercase tracking-wide mb-2">Page Image</p>
               {pageImagePath ? (
-                <img
-                  src={pageImagePath}
-                  alt={`Page ${item.page?.pageNumber}`}
-                  className="w-full rounded border border-border/50 object-contain max-h-[600px]"
+                <BboxOverlayToggle
+                  imageUrl={pageImagePath}
+                  regions={(item.page?.contentRegions as any[]) ?? []}
+                  imageClassName="w-full rounded border border-border/50 object-contain max-h-[600px]"
                 />
               ) : (
                 <div className="h-48 flex items-center justify-center rounded border border-dashed border-border/50 bg-muted/10 text-muted-foreground text-sm">

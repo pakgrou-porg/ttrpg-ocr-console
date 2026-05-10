@@ -9,6 +9,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ConfidenceBadge } from "@/components/ConfidenceBadge";
+import { BboxOverlay } from "@/components/BboxOverlay";
 import { fmtMs } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 import { useState, useMemo } from "react";
@@ -180,7 +181,7 @@ function PageCard({ page, jobId, onFlagged, timing }: {
       </div>
 
       {/* Body: image + tabs */}
-      <div className="flex gap-0">
+      <Tabs defaultValue="text" className="flex gap-0">
         {/* Thumbnail */}
         <div className="w-40 flex-shrink-0 border-r border-border/40 bg-muted/10 flex items-start justify-center p-2">
           {page.rawPngUrl ? (
@@ -198,11 +199,14 @@ function PageCard({ page, jobId, onFlagged, timing }: {
           )}
         </div>
 
-        <Tabs defaultValue="text" className="flex-1 min-w-0 p-3">
+        <div className="flex-1 min-w-0 p-3">
           <TabsList className="h-7 mb-2">
-            <TabsTrigger value="text" className="text-xs h-6 px-2">OCR Text</TabsTrigger>
+            <TabsTrigger value="text"    className="text-xs h-6 px-2">OCR Text</TabsTrigger>
             <TabsTrigger value="regions" className="text-xs h-6 px-2">Regions</TabsTrigger>
-            <TabsTrigger value="json" className="text-xs h-6 px-2">Raw JSON</TabsTrigger>
+            <TabsTrigger value="json"    className="text-xs h-6 px-2">Raw JSON</TabsTrigger>
+            {page.rawPngUrl && (
+              <TabsTrigger value="overlay" className="text-xs h-6 px-2">Overlay</TabsTrigger>
+            )}
           </TabsList>
 
           <TabsContent value="text">
@@ -223,11 +227,21 @@ function PageCard({ page, jobId, onFlagged, timing }: {
             </pre>
           </TabsContent>
 
+          {page.rawPngUrl && (
+            <TabsContent value="overlay">
+              <BboxOverlay
+                imageUrl={page.rawPngUrl}
+                regions={Array.isArray(regions) ? regions : []}
+                className="max-h-96 overflow-y-auto rounded border border-border/30"
+              />
+            </TabsContent>
+          )}
+
           {ocr?.pass1Model && (
             <p className="text-xs text-muted-foreground mt-1.5">Model: {ocr.pass1Model}</p>
           )}
-        </Tabs>
-      </div>
+        </div>
+      </Tabs>
     </div>
   );
 }
