@@ -57,6 +57,13 @@
       "when": 1747166400000,
       "tag": "0007_content_breaks_summaries",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1747253100000,
+      "tag": "0008_markdown_text",
+      "breakpoints": true
     }
   ]
 }
