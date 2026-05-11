@@ -20,7 +20,9 @@ import TheConclave from "@/pages/TheConclave";
 import TheArtificers from "@/pages/TheArtificers";
 import TheAssignments from "@/pages/TheAssignments";
 import TheVaultNexus from "@/pages/TheVaultNexus";
+import TheChronicles from "@/pages/TheChronicles";
 import ArchivistsDesk from "@/pages/ArchivistsDesk";
+import TrialsOfTruth from "@/pages/TrialsOfTruth";
 import NotFound from "@/pages/NotFound";
 
 function Router() {
@@ -73,6 +75,11 @@ function Router() {
             <IncantationsRunes />
           </PermissionGate>
         </Route>
+        <Route path="/inner-sanctum/trials-of-truth">
+          <AdminGate>
+            <TrialsOfTruth />
+          </AdminGate>
+        </Route>
         <Route path="/inner-sanctum/the-artificers">
           <AdminGate>
             <TheArtificers />
@@ -86,6 +93,11 @@ function Router() {
         <Route path="/inner-sanctum/vault-nexus">
           <AdminGate>
             <TheVaultNexus />
+          </AdminGate>
+        </Route>
+        <Route path="/inner-sanctum/the-chronicles">
+          <AdminGate>
+            <TheChronicles />
           </AdminGate>
         </Route>
         <Route path="/inner-sanctum/the-conclave">

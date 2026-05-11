@@ -7,6 +7,8 @@ function buildRuntimeConfigScript(): string {
   const config = {
     VITE_APP_ID: ENV.appId,
     VITE_OAUTH_PORTAL_URL: ENV.oAuthPortalUrl,
+    GOOGLE_CLIENT_ID: ENV.googleClientId,
+    GOOGLE_API_KEY: ENV.googleApiKey,
   };
   return `<script>window.__RUNTIME_CONFIG__=${JSON.stringify(config)}</script>`;
 }

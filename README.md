@@ -14,14 +14,17 @@ The console provides a human-facing interface for every stage of the pipeline:
 | **Enter the Arkanum** | Browse extracted lore; Library Shelves for raw image + OCR comparison |
 | **Listen to Ramblings** | LLM-powered lore generation from the extracted dataset |
 | **Tome of Knowledge** | Pipeline documentation and integration reference |
-| **Oversee the Scribes** | Ingestion job monitoring and management |
 | **Divination & Omens** | Telemetry, cost tracking, and usage analytics |
+| **Archivist's Desk** | HITL review queue — low-confidence pages auto-flagged for re-check |
+| **Oversee the Scribes** | Ingestion job monitoring with per-page progress and LLM timing |
 | **Arcane Mechanisms** | System configuration (providers, stage inscriptions, DB connections) |
-| **The Artificers** | LLM provider management with test-connection and model discovery |
-| **Summoning Rituals** | Ingestion job creation and pipeline triggering |
-| **Incantations & Runes** | System prompt management for all pipeline stages |
-| **Archivist's Desk** | HITL (Human-in-the-Loop) review queue for low-confidence OCR pages |
-| **The Conclave** | Admin panel — user management, roles, invitations |
+| **Summoning Rituals** | PDF upload and ingestion job creation |
+| **Trials of Truth** | Admin: per-item HITL review with bbox overlay and one-click retry |
+| **Incantations & Runes** | System prompt management with version history for all pipeline stages |
+| **The Artificers** | Admin: LLM provider registry with test-connection and model discovery |
+| **The Assignments** | Admin: stage inscription management — provider, fallback, temperature, max tokens |
+| **The Vault Nexus** | Admin: external database connection management |
+| **The Conclave** | Admin: user management, roles, and invitations |
 
 ---
 
@@ -30,8 +33,9 @@ The console provides a human-facing interface for every stage of the pipeline:
 ```
 client/          React 19 + Tailwind 4 + shadcn/ui
 server/          Express 4 + tRPC 11 + Drizzle ORM
-drizzle/         MySQL schema + migrations
+drizzle/         PostgreSQL schema + migrations
 server/_core/    Auth, OAuth, LLM, S3, crypto helpers
+server/pipeline/ Internal OCR pipeline runner (runner.ts, invoke.ts, stages)
 ```
 
 ### Key Security Properties
@@ -54,7 +58,7 @@ server/_core/    Auth, OAuth, LLM, S3, crypto helpers
 
 - Node.js 22+
 - pnpm
-- MySQL-compatible database (TiDB or MySQL 8)
+- PostgreSQL 15+
 
 ### Setup
 
@@ -66,8 +70,8 @@ pnpm install
 cp .env.example .env
 # Edit .env with your credentials
 
-# Push schema to database
-pnpm db:push
+# Apply pending schema migrations
+node migrate.mjs
 
 # Start development server
 pnpm dev
@@ -79,7 +83,7 @@ See `.env.example` for the full list. The critical ones:
 
 | Variable | Description |
 |---|---|
-| `DATABASE_URL` | MySQL connection string |
+| `DATABASE_URL` | PostgreSQL connection string (`postgres://user:pass@host/db`) |
 | `JWT_SECRET` | Session cookie signing secret (min 32 chars) |
 | `CREDENTIAL_ENCRYPTION_KEY` | AES-256-GCM key for stored API keys (min 32 chars, different from JWT_SECRET) |
 | `VITE_APP_ID` | Manus OAuth application ID |
@@ -92,14 +96,16 @@ See `.env.example` for the full list. The critical ones:
 
 ## Pipeline Integration
 
-The Python OCR pipeline communicates with the console via tRPC HTTP endpoints. All pipeline calls require a valid session cookie (use the `SCHEDULED_TASK_COOKIE` environment variable in scheduled task contexts).
+The OCR pipeline runs internally as a Node.js process (`server/pipeline/runner.ts`). Jobs are triggered from the console UI (Summoning Rituals) or via the `pipeline.triggerJob` tRPC procedure. The runner processes each page through the full stage sequence — layout analysis, bbox detection, OCR extraction, quality validation, and structured assembly — invoking LLMs via the configured stage inscriptions.
+
+The tRPC pipeline endpoints (`pipeline.ingestPage`, `pipeline.submitOcrResult`, `pipeline.flagPage`) remain available for external callers. All pipeline calls require a valid session cookie (use the `SCHEDULED_TASK_COOKIE` environment variable in scheduled task contexts).
 
 ### Provider & Stage Configuration
 
 Before running the pipeline, configure providers and stage inscriptions:
 
 1. **The Artificers** — add one row per LLM provider instance. Paste a full URL (e.g. `http://10.0.0.1:1234/v1`) into Base URL and it auto-decomposes into host, port, and API prefix. Click **Discover Models** to fetch the model list from the provider and auto-fill `contextLength` and `maxTokens`. Use the **Vision only** toggle to filter to vision-capable models for OCR stages.
-2. **The Assignments** — inscribe each pipeline stage with a primary provider and optional fallback. Each inscription carries its own `systemPrompt`, `temperature`, and `maxTokens` overrides independent of the provider defaults.
+2. **The Assignments** — inscribe each pipeline stage with a primary provider and optional fallback. Each inscription references a named system prompt from Incantations & Runes and carries its own `temperature` and `maxTokens` overrides independent of the provider defaults.
 
 ### Register a Page (after PDF-to-PNG conversion)
 
@@ -191,17 +197,18 @@ Key tables:
 |---|---|
 | `users` | Authenticated users with role (`admin` / `user`) |
 | `llm_providers` | Cloud/local LLM provider registry. Key columns: `displayName`, `modelId`, `baseUrl`, `port`, `apiPrefix`, `supportsChat`, `supportsVision`, `supportsEmbedding`, `defaultTemperature`, `contextLength`, `maxTokens`, `isDefault`, `encryptedApiKey` |
-| `stage_inscriptions` | Maps each pipeline stage to a primary + fallback provider with per-stage `systemPrompt`, `temperature`, `maxTokens`, and `llmSettings` JSON |
-| `db_connections` | External database connection configs |
-| `system_prompts` | Versioned prompts for all pipeline stages |
+| `stage_inscriptions` | Maps each pipeline stage to a primary + fallback provider with per-stage `promptName`, `temperature`, `maxTokens`, and `llmSettings` JSON |
+| `system_prompts` | Versioned prompts for all pipeline stages (referenced by `stage_inscriptions.promptName`) |
+| `prompt_versions` | Version history for each system prompt (last 3 versions retained) |
 | `ingestion_jobs` | PDF ingestion job tracking (phase 1/2/3 status) |
 | `telemetry_events` | Pipeline cost and usage events |
 | `documents` | Source PDF metadata with ownership, document type, summary, game version |
 | `document_pages` | Per-page raw + preprocessed PNG URLs, layout type, content regions JSON, continuity flags, assembled page JSON output |
 | `ocr_results` | Extracted text + structured data per page (pass number, attempt score, comparison notes) |
-| `hitl_queue` | Pages flagged for human review |
-| `pipeline_jobs` | Per-document pipeline execution tracking (phase, stage, retry counts) |
-| `page_processing_attempts` | Each OCR pass (1–4) per page: model used, output, score, comparison notes |
+| `page_processing_attempts` | Each OCR pass (1–4) per page: model used, raw output, attempt score, comparison notes |
+| `hitl_queue` | Pages flagged for human review with reason, priority, and resolution tracking |
+| `llm_timing_metrics` | Per-call LLM timing and token usage (stage, provider, model, duration, tokens, job/page FK) |
+| `supabase_instances` | External Supabase connection configs |
 
 ---
 
@@ -210,7 +217,7 @@ Key tables:
 ```bash
 pnpm dev          # Start dev server (port 3000)
 pnpm test         # Run all vitest tests
-pnpm db:push      # Generate + apply schema migrations
+node migrate.mjs  # Apply pending schema migrations
 pnpm build        # Production build
 ```
 
@@ -230,9 +237,18 @@ pnpm build        # Production build
 
 ## Deployment
 
-This project is designed for deployment on the Manus platform. Click the **Publish** button in the Management UI after creating a checkpoint. Custom domains can be configured in Settings > Domains.
+The project ships as a Docker image built and pushed to GHCR on every push to `main` via `.github/workflows/release.yml`.
 
-For external deployments, ensure all environment variables from `.env.example` are set in your hosting environment.
+```bash
+# Pull and run the latest image
+docker pull ghcr.io/pakgrou-porg/ttrpg-ocr-console:latest
+```
+
+A Portainer-ready stack file is provided at `portainer-stack.yml`. The container entrypoint runs `node migrate.mjs` (applies any pending migrations) then starts the Express server.
+
+See `DOCKER_DEPLOY.md` for the full deployment guide covering Portainer stack setup, environment variables, update/rollback, and backup procedures.
+
+Ensure all environment variables from `.env.example` are set in your hosting environment before starting the container.
 
 ---
 

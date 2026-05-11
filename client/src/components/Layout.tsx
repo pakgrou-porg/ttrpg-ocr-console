@@ -4,7 +4,7 @@ import {
   BookOpen, Settings, Activity, Edit3, Moon, Sun, Search,
   HelpCircle, BarChart2, Database, Terminal, ChevronDown,
   ChevronRight, User, Scroll, Shield, LogOut, UserCircle,
-  Cpu, GitBranch, ClipboardCheck, ChevronLeft,
+  Cpu, GitBranch, ClipboardCheck, ClipboardList, ChevronLeft, ScrollText,
 } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { Button } from "@/components/ui/button";
@@ -59,10 +59,12 @@ const innerSanctumChildren: NavItem[] = [
   { href: "/inner-sanctum/oversee-scribes", label: "Oversee the Scribes", icon: Activity },
   { href: "/inner-sanctum/arcane-mechanisms", label: "Arcane Mechanisms", icon: Settings },
   { href: "/inner-sanctum/summoning-rituals", label: "Summoning Rituals", icon: Database },
+  { href: "/inner-sanctum/trials-of-truth", label: "Trials of Truth", icon: ClipboardList, adminOnly: true },
   { href: "/inner-sanctum/incantations-runes", label: "Incantations & Runes", icon: Terminal },
   { href: "/inner-sanctum/the-artificers", label: "The Artificers", icon: Cpu, adminOnly: true },
   { href: "/inner-sanctum/the-assignments", label: "The Assignments", icon: GitBranch, adminOnly: true },
   { href: "/inner-sanctum/vault-nexus", label: "The Vault Nexus", icon: Database, adminOnly: true },
+  { href: "/inner-sanctum/the-chronicles", label: "The Chronicles", icon: ScrollText, adminOnly: true },
   { href: "/inner-sanctum/the-conclave", label: "The Conclave", icon: Shield, adminOnly: true },
 ];
 

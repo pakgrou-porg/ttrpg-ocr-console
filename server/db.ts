@@ -19,6 +19,9 @@ import {
   stageInscriptions, InsertStageInscription,
   supabaseInstances, InsertSupabaseInstance,
   promptVersions, InsertPromptVersion,
+  gameSystems, InsertGameSystem,
+  llmTimingMetrics, InsertLlmTimingMetric,
+  contentSummaries, InsertContentSummary,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
@@ -715,6 +718,78 @@ export async function getIngestionJobStats() {
   };
 }
 
+export async function deleteIngestionJob(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(ingestionJobs).where(eq(ingestionJobs.id, id));
+}
+
+export async function clearIngestionJobsByStatus(statuses: string[]) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const { inArray } = await import("drizzle-orm");
+  await db.delete(ingestionJobs).where(inArray(ingestionJobs.status, statuses));
+}
+
+export async function clearHitlItems(statuses: string[]) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const { inArray } = await import("drizzle-orm");
+  if (statuses.length === 0) {
+    await db.delete(hitlQueue);
+  } else {
+    await db.delete(hitlQueue).where(inArray(hitlQueue.status, statuses));
+  }
+}
+
+export async function purgeJobPages(jobId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const { inArray } = await import("drizzle-orm");
+
+  const docs = await db.select({ id: documents.id })
+    .from(documents)
+    .where(eq(documents.ingestionJobId, jobId));
+
+  for (const doc of docs) {
+    const pages = await db.select({ id: documentPages.id })
+      .from(documentPages)
+      .where(eq(documentPages.documentId, doc.id));
+    const pageIds = pages.map(p => p.id);
+
+    if (pageIds.length > 0) {
+      await db.delete(hitlQueue).where(inArray(hitlQueue.pageId, pageIds));
+      await db.delete(ocrResults).where(inArray(ocrResults.pageId, pageIds));
+      await db.delete(documentPages).where(inArray(documentPages.id, pageIds));
+    }
+
+    await db.update(documents)
+      .set({ processedPages: 0, totalPages: 0, status: "phase1_non_ocr" })
+      .where(eq(documents.id, doc.id));
+  }
+}
+
+export async function cancelIngestionJobChain(sourceFile: string, driveFileId: string | null) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  // Mark all queued/converting/processing jobs for this source as cancelled
+  const cancellable = ["queued", "converting", "pass1_ocr", "pass2_ocr", "enriching"];
+  const { inArray } = await import("drizzle-orm");
+  const matches = await db.select({ id: ingestionJobs.id })
+    .from(ingestionJobs)
+    .where(
+      and(
+        eq(ingestionJobs.sourceFile, sourceFile),
+        inArray(ingestionJobs.status, cancellable),
+      ),
+    );
+  for (const { id } of matches) {
+    await db.update(ingestionJobs)
+      .set({ status: "failed", errorMessage: "Cancelled by user", completedAt: new Date() })
+      .where(eq(ingestionJobs.id, id));
+  }
+}
+
 // ─── Telemetry Events ─────────────────────────────────────────────────────────
 
 export async function recordTelemetryEvent(event: InsertTelemetryEvent) {
@@ -999,6 +1074,15 @@ export async function searchDocuments(query: string) {
     .limit(50);
 }
 
+// ─── Document helpers ─────────────────────────────────────────────────────────
+
+export async function getDocumentByJobId(jobId: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(documents).where(eq(documents.ingestionJobId, jobId)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
 // ─── Document Pages ───────────────────────────────────────────────────────────
 
 export async function getPagesByDocumentId(documentId: number) {
@@ -1009,10 +1093,38 @@ export async function getPagesByDocumentId(documentId: number) {
     .orderBy(documentPages.pageNumber);
 }
 
+export async function getPagesByDocumentIdPaginated(documentId: number, offset: number, limit: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(documentPages)
+    .where(eq(documentPages.documentId, documentId))
+    .orderBy(documentPages.pageNumber)
+    .offset(offset)
+    .limit(limit);
+}
+
+export async function getDocumentPageCount(documentId: number) {
+  const db = await getDb();
+  if (!db) return 0;
+  const { count: countFn } = await import("drizzle-orm");
+  const [row] = await db.select({ count: countFn() }).from(documentPages)
+    .where(eq(documentPages.documentId, documentId));
+  return Number(row?.count ?? 0);
+}
+
 export async function getPageById(id: number) {
   const db = await getDb();
   if (!db) return undefined;
   const result = await db.select().from(documentPages).where(eq(documentPages.id, id)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
+export async function getPageByDocumentAndNumber(documentId: number, pageNumber: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(documentPages)
+    .where(and(eq(documentPages.documentId, documentId), eq(documentPages.pageNumber, pageNumber)))
+    .limit(1);
   return result.length > 0 ? result[0] : undefined;
 }
 
@@ -1053,6 +1165,27 @@ export async function getOcrResultById(id: number) {
   return result.length > 0 ? result[0] : undefined;
 }
 
+export async function getPagesByIds(ids: number[]) {
+  const db = await getDb();
+  if (!db || ids.length === 0) return [];
+  const { inArray } = await import("drizzle-orm");
+  return db.select().from(documentPages).where(inArray(documentPages.id, ids));
+}
+
+export async function getDocumentsByIds(ids: number[]) {
+  const db = await getDb();
+  if (!db || ids.length === 0) return [];
+  const { inArray } = await import("drizzle-orm");
+  return db.select().from(documents).where(inArray(documents.id, ids));
+}
+
+export async function getOcrResultsByPageIds(pageIds: number[]) {
+  const db = await getDb();
+  if (!db || pageIds.length === 0) return [];
+  const { inArray } = await import("drizzle-orm");
+  return db.select().from(ocrResults).where(inArray(ocrResults.pageId, pageIds));
+}
+
 export async function createOcrResult(ocrResult: InsertOcrResult & Record<string, unknown>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -1069,32 +1202,25 @@ export async function updateOcrResult(id: number, updates: Partial<InsertOcrResu
 
 // ─── HITL Queue ───────────────────────────────────────────────────────────────
 
-const PRIORITY_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+const priorityRank = sql`CASE ${hitlQueue.priority} WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 99 END`;
 
-export async function getAllHitlItems(options?: { status?: string; priority?: string; limit?: number; orderByPriority?: boolean }) {
+export async function getAllHitlItems(options?: { status?: string; priority?: string; limit?: number; offset?: number; orderByPriority?: boolean }) {
   const db = await getDb();
   if (!db) return [];
   const conditions = [];
   if (options?.status) conditions.push(eq(hitlQueue.status, options.status as any));
   if (options?.priority) conditions.push(eq(hitlQueue.priority, options.priority as any));
 
-  const query = db.select().from(hitlQueue);
-  let results: any[];
-  if (conditions.length > 0) {
-    results = await query.where(and(...conditions)).orderBy(asc(hitlQueue.createdAt)).limit(options?.limit ?? 100);
-  } else {
-    results = await query.orderBy(desc(hitlQueue.createdAt)).limit(options?.limit ?? 100);
-  }
-  if (options?.orderByPriority) {
-    results = results.sort((a, b) => {
-      const pa = PRIORITY_ORDER[a.priority] ?? 99;
-      const pb = PRIORITY_ORDER[b.priority] ?? 99;
-      if (pa !== pb) return pa - pb;
-      return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-    });
-    if (options.limit) results = results.slice(0, options.limit);
-  }
-  return results;
+  const order = options?.orderByPriority
+    ? [asc(priorityRank), asc(hitlQueue.createdAt)]
+    : [desc(hitlQueue.createdAt)];
+
+  const baseQuery = db.select().from(hitlQueue);
+  const filtered = conditions.length > 0 ? baseQuery.where(and(...conditions)) : baseQuery;
+  return filtered
+    .orderBy(...order)
+    .limit(options?.limit ?? 100)
+    .offset(options?.offset ?? 0);
 }
 
 export async function getHitlItemById(id: number) {
@@ -1102,6 +1228,13 @@ export async function getHitlItemById(id: number) {
   if (!db) return undefined;
   const result = await db.select().from(hitlQueue).where(eq(hitlQueue.id, id)).limit(1);
   return result.length > 0 ? result[0] : undefined;
+}
+
+export async function getHitlItemsByIds(ids: number[]) {
+  const db = await getDb();
+  if (!db || ids.length === 0) return [];
+  const { inArray } = await import("drizzle-orm");
+  return db.select().from(hitlQueue).where(inArray(hitlQueue.id, ids));
 }
 
 export async function getHitlItemsByPageId(pageId: number) {
@@ -1172,4 +1305,218 @@ export async function updatePageProcessingAttempt(id: number, updates: Partial<I
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.update(pageProcessingAttempts).set(updates).where(eq(pageProcessingAttempts.id, id));
+}
+
+// ─── Game Systems ─────────────────────────────────────────────────────────────
+
+export async function getAllGameSystems(activeOnly = true) {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select().from(gameSystems)
+    .orderBy(gameSystems.sortOrder, gameSystems.name);
+  return activeOnly ? rows.filter(r => r.isActive) : rows;
+}
+
+export async function createGameSystem(data: Omit<InsertGameSystem, "id" | "createdAt" | "updatedAt">) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [row] = await db.insert(gameSystems).values(data).returning();
+  return row!;
+}
+
+export async function updateGameSystem(id: number, updates: Partial<InsertGameSystem>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(gameSystems).set(updates).where(eq(gameSystems.id, id));
+}
+
+export async function deleteGameSystem(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(gameSystems).where(eq(gameSystems.id, id));
+}
+
+// ─── LLM Timing Metrics ───────────────────────────────────────────────────────
+
+export async function insertLlmTimingMetric(data: InsertLlmTimingMetric) {
+  const db = await getDb();
+  if (!db) return;
+  await db.insert(llmTimingMetrics).values(data);
+}
+
+/** All metric rows for a single page, ordered by time. */
+export async function getLlmMetricsByPage(pageId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(llmTimingMetrics)
+    .where(eq(llmTimingMetrics.pageId, pageId))
+    .orderBy(llmTimingMetrics.createdAt);
+}
+
+/** Per-stage aggregates for a job — total calls, avg/total duration, total tokens, failures. */
+export async function getLlmMetricsJobSummary(jobId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.execute(sql`
+    SELECT
+      stage,
+      COUNT(*)::int                                           AS call_count,
+      ROUND(AVG(duration_ms))::int                           AS avg_duration_ms,
+      SUM(duration_ms)::int                                  AS total_duration_ms,
+      SUM(tokens_used)::int                                  AS total_tokens,
+      COUNT(*) FILTER (WHERE success = false)::int           AS failure_count,
+      COUNT(*) FILTER (WHERE is_fallback = true)::int        AS fallback_count,
+      provider_name
+    FROM llm_timing_metrics
+    WHERE job_id = ${jobId}
+    GROUP BY stage, provider_name
+    ORDER BY total_duration_ms DESC
+  `);
+  return rows as unknown as Array<{
+    stage: string; call_count: number; avg_duration_ms: number;
+    total_duration_ms: number; total_tokens: number;
+    failure_count: number; fallback_count: number; provider_name: string | null;
+  }>;
+}
+
+/** Per-page summary for a job — total LLM time and call count per page. */
+export async function getLlmMetricsPageSummary(jobId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.execute(sql`
+    SELECT
+      page_id,
+      COUNT(*)::int        AS call_count,
+      SUM(duration_ms)::int AS total_duration_ms,
+      SUM(tokens_used)::int AS total_tokens
+    FROM llm_timing_metrics
+    WHERE job_id = ${jobId} AND page_id IS NOT NULL
+    GROUP BY page_id
+  `);
+  return rows as unknown as Array<{
+    page_id: number; call_count: number; total_duration_ms: number; total_tokens: number;
+  }>;
+}
+
+// ─── Content Summaries ────────────────────────────────────────────────────────
+
+export async function createContentSummary(data: InsertContentSummary) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [row] = await db.insert(contentSummaries).values(data).returning({ id: contentSummaries.id });
+  return row;
+}
+
+export async function updateContentSummary(id: number, updates: Partial<InsertContentSummary>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(contentSummaries)
+    .set({ ...updates, updatedAt: new Date() })
+    .where(eq(contentSummaries.id, id));
+}
+
+export async function getContentSummariesByDocument(documentId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(contentSummaries)
+    .where(eq(contentSummaries.documentId, documentId))
+    .orderBy(asc(contentSummaries.startPageNumber), asc(contentSummaries.id));
+}
+
+export async function getPendingSummariesByDocument(documentId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(contentSummaries)
+    .where(and(
+      eq(contentSummaries.documentId, documentId),
+      eq(contentSummaries.summaryStatus, "pending"),
+    ))
+    .orderBy(asc(contentSummaries.startPageNumber));
+}
+
+/**
+ * After all pages in a document are processed, resolve section boundaries and
+ * parent–child relationships for all content_summaries records.
+ *
+ * Algorithm:
+ *   - Sort all records by startPageNumber, then by level depth (chapter < section < subsection).
+ *   - For each record, endPageNumber = startPageNumber of the next record at the same or higher
+ *     level (lower depth number), minus 1.  Last record of its level spans to document end.
+ *   - parentId = the most recently opened record at the next-higher level.
+ */
+export async function resolveContentSummaryBoundaries(documentId: number, totalPages: number) {
+  const db = await getDb();
+  if (!db) return;
+
+  const LEVEL_DEPTH: Record<string, number> = { chapter: 1, section: 2, subsection: 3, page: 4 };
+
+  const all = await db.select().from(contentSummaries)
+    .where(eq(contentSummaries.documentId, documentId))
+    .orderBy(asc(contentSummaries.startPageNumber), asc(contentSummaries.id));
+
+  for (let i = 0; i < all.length; i++) {
+    const cur = all[i];
+    const curDepth = LEVEL_DEPTH[cur.levelType] ?? 5;
+
+    // End page: next record at same or higher level (lower depth number)
+    let endPage = totalPages;
+    let endPageId: number | null = null;
+    for (let j = i + 1; j < all.length; j++) {
+      const next = all[j];
+      if ((LEVEL_DEPTH[next.levelType] ?? 5) <= curDepth) {
+        endPage = next.startPageNumber - 1;
+        endPageId = null; // we don't have a prior-page id, null is fine
+        break;
+      }
+    }
+
+    // Parent: nearest preceding record at one level higher
+    let parentId: number | null = null;
+    for (let j = i - 1; j >= 0; j--) {
+      const prev = all[j];
+      if ((LEVEL_DEPTH[prev.levelType] ?? 5) === curDepth - 1) {
+        parentId = prev.id;
+        break;
+      }
+    }
+
+    if (cur.endPageNumber !== endPage || cur.parentId !== parentId) {
+      await db.update(contentSummaries)
+        .set({ endPageNumber: endPage, endPageId, parentId, updatedAt: new Date() })
+        .where(eq(contentSummaries.id, cur.id));
+    }
+  }
+}
+
+/** Per-provider summary over the last N days. */
+export async function getLlmProviderMetricsSummary(days = 7) {
+  const db = await getDb();
+  if (!db) return [];
+  const since = new Date();
+  since.setDate(since.getDate() - days);
+  const rows = await db.execute(sql`
+    SELECT
+      provider_id,
+      provider_name,
+      COUNT(*)::int                                             AS total_calls,
+      ROUND(AVG(duration_ms))::int                             AS avg_duration_ms,
+      MIN(duration_ms)::int                                    AS min_duration_ms,
+      MAX(duration_ms)::int                                    AS max_duration_ms,
+      SUM(tokens_used)::int                                    AS total_tokens,
+      COUNT(*) FILTER (WHERE success = false)::int             AS failure_count,
+      COUNT(*) FILTER (WHERE is_fallback = true)::int          AS fallback_count,
+      ROUND(
+        100.0 * COUNT(*) FILTER (WHERE success = true) / NULLIF(COUNT(*), 0),
+        1
+      )::float                                                 AS success_rate
+    FROM llm_timing_metrics
+    WHERE created_at >= ${since}
+    GROUP BY provider_id, provider_name
+    ORDER BY total_calls DESC
+  `);
+  return rows as unknown as Array<{
+    provider_id: number | null; provider_name: string | null;
+    total_calls: number; avg_duration_ms: number; min_duration_ms: number; max_duration_ms: number;
+    total_tokens: number; failure_count: number; fallback_count: number; success_rate: number;
+  }>;
 }

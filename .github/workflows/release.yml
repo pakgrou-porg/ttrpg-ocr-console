@@ -62,23 +62,25 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Enable corepack and install pnpm
-        run: |
-          corepack enable
-          corepack prepare pnpm@${{ env.PNPM_VERSION }} --activate
+      - name: Install pnpm
+        run: npm install -g pnpm@${{ env.PNPM_VERSION }}
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
 
       - name: Apply database migrations
         env:
           DATABASE_URL: postgresql://test_user:testpass@127.0.0.1:5432/ttrpg_test
+          JWT_SECRET: test-jwt-secret-for-ci-only-not-production
         run: node migrate.mjs
 
       - name: Run tests
         env:
           DATABASE_URL: postgresql://test_user:testpass@127.0.0.1:5432/ttrpg_test
           JWT_SECRET: test-jwt-secret-for-ci-only-not-production
+          CREDENTIAL_ENCRYPTION_KEY: ci_encryption_key_minimum_32_chars_long
+          OWNER_OPEN_ID: ci_owner_open_id
+          OWNER_NAME: CI Runner
           NODE_ENV: test
         run: pnpm test
 

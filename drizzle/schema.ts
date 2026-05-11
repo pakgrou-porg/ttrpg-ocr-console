@@ -131,7 +131,11 @@ export type InsertSystemConfig = typeof systemConfig.$inferInsert;
 export const ingestionJobs = pgTable("ingestion_jobs", {
   id: serial("id").primaryKey(),
   sourceFile: varchar("source_file", { length: 512 }).notNull(),
+  storageProvider: varchar("storage_provider", { length: 32 }).default("local").notNull(),
+  driveFileId: varchar("drive_file_id", { length: 512 }),
   gameSystem: varchar("game_system", { length: 128 }),
+  pageOffset: integer("page_offset").default(0).notNull(),
+  blockSize: integer("block_size").default(10).notNull(),
   status: varchar("status", { length: 32 }).default("queued").notNull(),
   currentPhase: integer("current_phase").default(1),
   currentStage: varchar("current_stage", { length: 64 }),
@@ -303,7 +307,7 @@ export type InsertModelAssignment = InsertStageInscription;
 // Supports primary/secondary roles, mirroring, and bootstrap state tracking.
 // The console's own DATABASE_URL is separate (set via environment variable).
 
-export const SUPABASE_CONNECTION_TYPES = ["supabase_local", "supabase_cloud"] as const;
+export const SUPABASE_CONNECTION_TYPES = ["supabase_local", "supabase_cloud", "postgres_docker"] as const;
 export type SupabaseConnectionType = (typeof SUPABASE_CONNECTION_TYPES)[number];
 
 export const SUPABASE_ROLES = ["primary", "secondary"] as const;
@@ -370,6 +374,20 @@ export const supabaseInstances = pgTable("supabase_instances", {
 
 export type SupabaseInstance = typeof supabaseInstances.$inferSelect;
 export type InsertSupabaseInstance = typeof supabaseInstances.$inferInsert;
+
+// ─── Game Systems ─────────────────────────────────────────────────────────────
+
+export const gameSystems = pgTable("game_systems", {
+  id: serial("id").primaryKey(),
+  name: varchar("name", { length: 128 }).notNull(),
+  abbreviation: varchar("abbreviation", { length: 32 }),
+  sortOrder: integer("sort_order").default(0).notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export type GameSystem = typeof gameSystems.$inferSelect;
+export type InsertGameSystem = typeof gameSystems.$inferInsert;
 
 // ─── Library Shelves: Documents ───────────────────────────────────────────────
 
@@ -460,11 +478,18 @@ export const documentPages = pgTable("document_pages", {
     midSentenceBreakAtEnd: boolean;
     sectionContinuesFromPreviousPage: boolean;
   }>(),
+  structuralBreaks: jsonb("structural_breaks").$type<Array<{
+    breakType: "chapter" | "section" | "subsection" | "appendix";
+    headingText: string;
+    position: number;
+  }>>(),
   pageJsonOutput: jsonb("page_json_output").$type<Record<string, unknown>>(),
   phaseStatus: varchar("phase_status", { length: 64 }),
   isFlagged: boolean("is_flagged").default(false).notNull(),
   ocrCompleted: boolean("ocr_completed").default(false).notNull(),
   ocrConfidence: integer("ocr_confidence"),
+  /** Page label as printed on the page (e.g. "i", "42") — differs from the sequential PDF pageNumber */
+  printedPageLabel: varchar("printed_page_label", { length: 32 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (t) => ({
@@ -550,6 +575,7 @@ export type HitlStatus = (typeof HITL_STATUSES)[number];
 export const HITL_FLAG_CATEGORIES = [
   "doc_type_unknown",
   "ocr_quality_failed",
+  "low_confidence",
   "layout_ambiguous",
   "content_type_conflict",
   "continuity_error",
@@ -579,3 +605,119 @@ export const hitlQueue = pgTable("hitl_queue", {
 
 export type HitlQueueItem = typeof hitlQueue.$inferSelect;
 export type InsertHitlQueueItem = typeof hitlQueue.$inferInsert;
+
+// ─── Google OAuth Tokens ───────────────────────────────────────────────────────
+//
+// Stores a single system-wide Google OAuth token set (for the admin's personal
+// Google Drive account). Access token is encrypted at rest.
+
+export const googleOAuthTokens = pgTable("google_oauth_tokens", {
+  id: serial("id").primaryKey(),
+  encryptedAccessToken: text("encrypted_access_token"),
+  accessTokenIv: varchar("access_token_iv", { length: 64 }),
+  accessTokenAuthTag: varchar("access_token_auth_tag", { length: 64 }),
+  encryptedRefreshToken: text("encrypted_refresh_token"),
+  refreshTokenIv: varchar("refresh_token_iv", { length: 64 }),
+  refreshTokenAuthTag: varchar("refresh_token_auth_tag", { length: 64 }),
+  expiresAt: timestamp("expires_at"),
+  scope: text("scope"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export type GoogleOAuthToken = typeof googleOAuthTokens.$inferSelect;
+export type InsertGoogleOAuthToken = typeof googleOAuthTokens.$inferInsert;
+
+// ─── LLM Timing Metrics ───────────────────────────────────────────────────────
+//
+// Append-only log of every LLM call made by the pipeline.
+// Aggregated at query time for per-page, per-job, per-batch, and per-provider views.
+
+export const llmTimingMetrics = pgTable("llm_timing_metrics", {
+  id: serial("id").primaryKey(),
+  /** Ingestion job that triggered this call (nullable for one-off calls). */
+  jobId: integer("job_id"),
+  /** Document page being processed (nullable for doc-level calls like document_intelligence). */
+  pageId: integer("page_id"),
+  /** Pipeline stage name (e.g. "ocr_extraction"). */
+  stage: varchar("stage", { length: 64 }).notNull(),
+  /** Provider record ID used for this call. */
+  providerId: integer("provider_id"),
+  /** Provider display name (denormalised for cheap GROUP BY queries). */
+  providerName: varchar("provider_name", { length: 128 }),
+  /** Model identifier returned in the LLM response. */
+  model: varchar("model", { length: 256 }),
+  /** Wall-clock milliseconds from first byte sent to last byte received (includes retries). */
+  durationMs: integer("duration_ms").notNull(),
+  /** Total tokens consumed (prompt + completion). */
+  tokensUsed: integer("tokens_used").default(0).notNull(),
+  /** True when the fallback provider handled the call (primary failed). */
+  isFallback: boolean("is_fallback").default(false).notNull(),
+  /** Whether the call completed without an error. */
+  success: boolean("success").default(true).notNull(),
+  /** Short error description when success = false. */
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  jobIdIdx:      index("llm_timing_job_id_idx").on(t.jobId),
+  pageIdIdx:     index("llm_timing_page_id_idx").on(t.pageId),
+  providerIdx:   index("llm_timing_provider_id_idx").on(t.providerId),
+  stageIdx:      index("llm_timing_stage_idx").on(t.stage),
+  createdAtIdx:  index("llm_timing_created_at_idx").on(t.createdAt),
+}));
+
+export type LlmTimingMetric = typeof llmTimingMetrics.$inferSelect;
+export type InsertLlmTimingMetric = typeof llmTimingMetrics.$inferInsert;
+
+// ─── Content Summaries ────────────────────────────────────────────────────────
+//
+// Hierarchical summaries for chapters, sections, subsections, and pages.
+// These are the "big chunks" for Small-to-Big Retrieval in the RAG layer.
+// Structural breaks detected by content_break_detect are used to define
+// the page-range boundaries for each summary.
+// Parent–child hierarchy: subsection → section → chapter → document.
+
+export const SUMMARY_LEVELS = ["chapter", "section", "subsection", "page"] as const;
+export type SummaryLevel = (typeof SUMMARY_LEVELS)[number];
+
+export const SUMMARY_STATUSES = ["pending", "generating", "generated", "approved", "failed"] as const;
+export type SummaryStatus = (typeof SUMMARY_STATUSES)[number];
+
+export const EMBEDDING_STATUSES = ["pending", "embedded", "failed"] as const;
+export type EmbeddingStatus = (typeof EMBEDDING_STATUSES)[number];
+
+export const contentSummaries = pgTable("content_summaries", {
+  id: serial("id").primaryKey(),
+  documentId: integer("document_id").notNull(),
+  /** Hierarchy level: chapter > section > subsection > page */
+  levelType: varchar("level_type", { length: 32 }).notNull(),
+  /** Heading text as extracted by content_break_detect */
+  headingText: varchar("heading_text", { length: 512 }),
+  /** FK to the document_pages row where this section begins */
+  startPageId: integer("start_page_id").notNull(),
+  /** FK to the document_pages row where this section ends (null until resolved) */
+  endPageId: integer("end_page_id"),
+  startPageNumber: integer("start_page_number").notNull(),
+  endPageNumber: integer("end_page_number"),
+  /** 1–2 sentence summary for vector store metadata (embedding key chunk) */
+  shortSummary: text("short_summary"),
+  /** Full section summary for Small-to-Big retrieval context */
+  longSummary: text("long_summary"),
+  keyTerms: jsonb("key_terms").$type<string[]>().default([]),
+  keyEntities: jsonb("key_entities").$type<string[]>().default([]),
+  /** Parent summary ID — null for top-level chapters */
+  parentId: integer("parent_id"),
+  summaryStatus: varchar("summary_status", { length: 32 }).default("pending").notNull(),
+  embeddingStatus: varchar("embedding_status", { length: 32 }).default("pending").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  documentIdIdx: index("content_summaries_document_id_idx").on(t.documentId),
+  levelTypeIdx:  index("content_summaries_level_type_idx").on(t.documentId, t.levelType),
+  startPageIdx:  index("content_summaries_start_page_idx").on(t.startPageId),
+  parentIdx:     index("content_summaries_parent_idx").on(t.parentId),
+  statusIdx:     index("content_summaries_status_idx").on(t.summaryStatus),
+}));
+
+export type ContentSummary = typeof contentSummaries.$inferSelect;
+export type InsertContentSummary = typeof contentSummaries.$inferInsert;

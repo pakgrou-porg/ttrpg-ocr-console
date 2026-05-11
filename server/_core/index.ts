@@ -2,12 +2,14 @@ import "dotenv/config";
 import express from "express";
 import { createServer } from "http";
 import net from "net";
+import path from "path";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
-import { registerOAuthRoutes } from "./oauth";
+import { registerOAuthRoutes, registerGoogleOAuthRoutes } from "./oauth";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic } from "./static";
 import { uploadRouter } from "../uploadRoutes";
+import { uploadIngestRouter } from "../uploadIngestRoute";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -35,10 +37,16 @@ async function startServer() {
   // File uploads use the /api/upload/* routes which have their own multer limits.
   app.use(express.json({ limit: "1mb" }));
   app.use(express.urlencoded({ limit: "1mb", extended: true }));
-  // OAuth callback under /api/oauth/callback
+  // Manus OAuth callback
   registerOAuthRoutes(app);
+  // Google Drive OAuth routes (/api/auth/google, /api/auth/google/callback)
+  registerGoogleOAuthRoutes(app);
+  // Serve pipeline page PNGs for HITL review
+  const pipelineWorkspace = process.env.PIPELINE_WORKSPACE ?? "/app/workspace";
+  app.use("/api/pipeline/pages", express.static(pipelineWorkspace, { index: false, dotfiles: "deny" }));
   // File upload REST endpoints
   app.use(uploadRouter);
+  app.use(uploadIngestRouter);
   // tRPC API
   app.use(
     "/api/trpc",

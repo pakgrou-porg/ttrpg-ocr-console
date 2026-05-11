@@ -13,20 +13,26 @@ import {
   getUserPermissions, setUserPermission, deleteUserPermission, getAllPermissionsForAllUsers,
   createInvitation, getAllInvitations, revokeInvitation,
   getAllSystemConfig, getSystemConfigByCategory, upsertSystemConfig, deleteSystemConfig,
-  getAllIngestionJobs, getActiveIngestionJobs, getIngestionJobById, createIngestionJob, updateIngestionJobStatus, getIngestionJobStats,
+  getAllIngestionJobs, getActiveIngestionJobs, getIngestionJobById, createIngestionJob, updateIngestionJobStatus, getIngestionJobStats, deleteIngestionJob, clearIngestionJobsByStatus, cancelIngestionJobChain, purgeJobPages, clearHitlItems,
   recordTelemetryEvent, getTelemetryEvents, getTelemetrySummary,
   pingDatabase,
   getAllLlmProviders, getLlmProviderById, createLlmProvider, updateLlmProvider, deleteLlmProvider,
   getAllStageInscriptions, getStageInscriptionByStage, upsertStageInscription, updateStageInscription, deleteStageInscription,
   getAllSupabaseInstances, getSupabaseInstanceById, createSupabaseInstance, updateSupabaseInstance, deleteSupabaseInstance, setActiveSupabaseInstance, testSupabaseInstanceConnection,
   getDocumentById, getAllDocuments, createDocument, updateDocument, deleteDocument, searchDocuments,
-  getPagesByDocumentId, getPageById, getPageByPhash, createDocumentPage, updateDocumentPage,
+  getDocumentByJobId, getPagesByDocumentId, getPagesByDocumentIdPaginated, getDocumentPageCount,
+  getPageById, getPageByPhash, createDocumentPage, updateDocumentPage,
+  getPagesByIds, getDocumentsByIds, getOcrResultsByPageIds,
   getOcrResultByPageId, getOcrResultById, createOcrResult, updateOcrResult,
-  getHitlItemById, getHitlItemsByPageId, getAllHitlItems, createHitlItem, updateHitlItem, getHitlStats,
+  getHitlItemById, getHitlItemsByIds, getHitlItemsByPageId, getAllHitlItems, createHitlItem, updateHitlItem, getHitlStats,
+  getAllGameSystems, createGameSystem, updateGameSystem, deleteGameSystem,
+  getLlmMetricsByPage, getLlmMetricsJobSummary, getLlmMetricsPageSummary, getLlmProviderMetricsSummary,
+  getContentSummariesByDocument, updateContentSummary,
 } from "./db";
 import { encryptSecret, decryptSecret, storeSecretHint, renderMaskedSecret } from "./crypto";
+import { startJob, retryPageStages, RetryStage } from "./pipeline/runner";
 import { ENV } from "./_core/env";
-import { FEATURE_AREAS, PROVIDER_TYPES, PIPELINE_STAGES, SUPABASE_CONNECTION_TYPES, SUPABASE_ROLES, SUPABASE_SYNC_MODES, DOCUMENT_STATUSES, OCR_RESULT_STATUSES, HITL_PRIORITIES, HITL_STATUSES } from "../drizzle/schema";
+import { FEATURE_AREAS, PROVIDER_TYPES, PIPELINE_STAGES, SUPABASE_CONNECTION_TYPES, SUPABASE_ROLES, SUPABASE_SYNC_MODES, DOCUMENT_STATUSES, OCR_RESULT_STATUSES, HITL_PRIORITIES, HITL_STATUSES, type LlmProvider } from "../drizzle/schema";
 
 /** Admin-only guard — throws FORBIDDEN if the caller is not an admin. */
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -35,6 +41,109 @@ const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   }
   return next({ ctx });
 });
+
+// ─── Health helpers ───────────────────────────────────────────────────────────
+
+// Provider types that are local / LAN-hosted (not metered cloud APIs)
+const LOCAL_PROVIDER_TYPES = new Set(["lm_studio", "openai_compatible", "custom"]);
+
+function buildProviderBase(p: Pick<LlmProvider, "baseUrl" | "port" | "apiPrefix">): string {
+  return `${p.baseUrl.replace(/\/$/, "")}${p.port ? `:${p.port}` : ""}${(p.apiPrefix ?? "/v1").replace(/\/$/, "")}`;
+}
+
+/**
+ * Two-phase probe for a single local/LAN LLM provider:
+ *  1. GET /models — proves the server is reachable and returns the loaded model list.
+ *  2. POST /chat/completions (max_tokens:1) — proves inference is actually working.
+ */
+async function probeSingleLocalProvider(p: LlmProvider): Promise<{ ok: boolean; latencyMs: number; label: string }> {
+  const base = buildProviderBase(p);
+  const start = Date.now();
+
+  // Phase 1: /models
+  let modelId = p.modelId ?? undefined;
+  try {
+    const res = await fetch(`${base}/models`, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return { ok: false, latencyMs: Date.now() - start, label: `${p.displayName}: HTTP ${res.status} on /models` };
+    const body = await res.json() as { data?: Array<{ id: string }> };
+    const loaded = (body.data ?? []).map(m => m.id);
+    if (loaded.length === 0) return { ok: false, latencyMs: Date.now() - start, label: `${p.displayName}: online but no models loaded` };
+    // Prefer the configured model; fall back to whatever is loaded
+    modelId = (modelId && loaded.includes(modelId)) ? modelId : loaded[0];
+  } catch (err: any) {
+    return { ok: false, latencyMs: Date.now() - start, label: `${p.displayName}: ${err?.message?.slice(0, 60) ?? "unreachable"}` };
+  }
+
+  // Phase 2: minimal chat completion to verify inference
+  try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (p.encryptedApiKey) {
+      try {
+        headers["Authorization"] = `Bearer ${decryptSecret({ ciphertext: p.encryptedApiKey, iv: p.keyIv ?? "", authTag: p.keyAuthTag ?? "" })}`;
+      } catch { /* proceed without auth — some local deployments don't require it */ }
+    }
+    const res = await fetch(`${base}/chat/completions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: modelId,
+        messages: [{ role: "user", content: "ping" }],
+        max_tokens: 1,
+        temperature: 0,
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+    const latencyMs = Date.now() - start;
+    if (!res.ok) return { ok: false, latencyMs, label: `${p.displayName} (${modelId}): HTTP ${res.status}` };
+    return { ok: true, latencyMs, label: `${p.displayName} (${modelId})` };
+  } catch (err: any) {
+    return { ok: false, latencyMs: Date.now() - start, label: `${p.displayName}/${modelId}: ${err?.message?.slice(0, 50) ?? "inference failed"}` };
+  }
+}
+
+async function pingLocalAgents(providers: LlmProvider[]): Promise<{ ok: boolean; latencyMs: number; detail: string }> {
+  if (providers.length === 0) return { ok: false, latencyMs: 0, detail: "No local providers configured" };
+  const results = await Promise.all(providers.map(probeSingleLocalProvider));
+  const ok = results.some(r => r.ok);
+  const latencyMs = Math.max(...results.map(r => r.latencyMs));
+  const good = results.filter(r => r.ok);
+  const bad  = results.filter(r => !r.ok);
+  const detail = ok
+    ? good.map(r => `${r.label} — ${r.latencyMs}ms`).join(" · ")
+    : bad.map(r => r.label).join(" · ");
+  return { ok, latencyMs, detail };
+}
+
+/**
+ * Cloud conduit health check.
+ * For OpenRouter: uses /api/v1/auth/key which returns account status and usage
+ * without fetching the full model catalogue — faster and shows useful billing info.
+ */
+async function pingCloudConduit(provider: LlmProvider | undefined): Promise<{ ok: boolean; latencyMs: number; detail: string }> {
+  if (!provider) return { ok: false, latencyMs: 0, detail: "No cloud provider configured" };
+  const start = Date.now();
+  const headers: Record<string, string> = {};
+  if (provider.encryptedApiKey) {
+    try {
+      headers["Authorization"] = `Bearer ${decryptSecret({ ciphertext: provider.encryptedApiKey, iv: provider.keyIv ?? "", authTag: provider.keyAuthTag ?? "" })}`;
+    } catch { /* proceed unauthenticated — will expose the real error */ }
+  }
+  try {
+    const res = await fetch("https://openrouter.ai/api/v1/auth/key", { headers, signal: AbortSignal.timeout(8000) });
+    const latencyMs = Date.now() - start;
+    if (!res.ok) return { ok: false, latencyMs, detail: `OpenRouter: HTTP ${res.status}` };
+    const body = await res.json() as { data?: { label?: string; usage?: number; limit?: number | null } };
+    const d = body.data;
+    if (!d) return { ok: true, latencyMs, detail: `OpenRouter reachable (${latencyMs}ms)` };
+    const usage  = typeof d.usage  === "number" ? `$${d.usage.toFixed(3)}` : null;
+    const limit  = typeof d.limit  === "number" ? `/$${d.limit}` : "";
+    const label  = d.label ? `${d.label} — ` : "";
+    const credit = usage ? `${usage}${limit} used — ` : "";
+    return { ok: true, latencyMs, detail: `OpenRouter — ${label}${credit}${latencyMs}ms` };
+  } catch (err: any) {
+    return { ok: false, latencyMs: Date.now() - start, detail: err?.message?.slice(0, 80) ?? "Connection failed" };
+  }
+}
 
 export const appRouter = router({
   system: systemRouter,
@@ -61,19 +170,30 @@ export const appRouter = router({
 
     // P1: Full service status is behind authentication — exposes service topology.
     all: protectedProcedure.query(async () => {
-      const [dbResult, activeJobs] = await Promise.all([
+      const [dbResult, activeJobs, allProviders] = await Promise.all([
         pingDatabase(),
         getActiveIngestionJobs(),
+        getAllLlmProviders(),
       ]);
+
+      const localAgents = allProviders.filter(p => p.isActive && LOCAL_PROVIDER_TYPES.has(p.providerType));
+      const orProvider  = allProviders.find(p => p.isActive && p.providerType === "openrouter");
+
+      const [agentsResult, cloudResult] = await Promise.all([
+        pingLocalAgents(localAgents),
+        pingCloudConduit(orProvider),
+      ]);
+
       const jobCount = activeJobs.length;
       const scribesDetail = jobCount === 0
         ? "Idle — No Active Jobs"
         : `${jobCount} Active Job${jobCount === 1 ? "" : "s"}`;
+
       return {
-        database: dbResult,
-        agents: { ok: true, latencyMs: 0, detail: "Available & Ready" },
-        scribes: { ok: jobCount === 0, latencyMs: 0, detail: scribesDetail },
-        cloudConduit: { ok: true, latencyMs: 0, detail: "OpenRouter Active" },
+        database:     dbResult,
+        agents:       agentsResult,
+        scribes:      { ok: jobCount === 0, latencyMs: 0, detail: scribesDetail },
+        cloudConduit: cloudResult,
       };
     }),
   }),
@@ -265,20 +385,61 @@ export const appRouter = router({
       return getIngestionJobStats();
     }),
 
-    /** Create a new ingestion job */
+    /** Create a new ingestion job and start the pipeline */
     create: adminProcedure
       .input(z.object({
         sourceFile: z.string().max(512),
         gameSystem: z.string().max(128).optional(),
-        totalPages: z.number().int().min(0).default(0),
+        storageProvider: z.enum(["local", "google_drive"]).default("local"),
+        driveFileId: z.string().max(512).optional(),
+        pageOffset: z.number().int().min(0).default(0),
+        blockSize: z.number().int().min(1).max(50).default(10),
       }))
       .mutation(async ({ input }) => {
         const id = await createIngestionJob({
           sourceFile: input.sourceFile,
           gameSystem: input.gameSystem,
-          totalPages: input.totalPages,
-        });
+          storageProvider: input.storageProvider,
+          driveFileId: input.driveFileId,
+          pageOffset: input.pageOffset,
+          blockSize: input.blockSize,
+        } as any);
+        startJob(id);
         return { success: true, id };
+      }),
+
+    /** Delete a single job by ID */
+    delete: adminProcedure
+      .input(z.object({ id: z.number().int() }))
+      .mutation(async ({ input }) => {
+        await deleteIngestionJob(input.id);
+        return { success: true };
+      }),
+
+    /** Clear all jobs with the given statuses */
+    clear: adminProcedure
+      .input(z.object({ statuses: z.array(z.string()).min(1) }))
+      .mutation(async ({ input }) => {
+        await clearIngestionJobsByStatus(input.statuses);
+        return { success: true };
+      }),
+
+    /** Delete all pages, OCR results, and HITL items for a job's document */
+    purgePages: adminProcedure
+      .input(z.object({ id: z.number().int() }))
+      .mutation(async ({ input }) => {
+        await purgeJobPages(input.id);
+        return { success: true };
+      }),
+
+    /** Cancel a job and all pending follow-on blocks with the same sourceFile */
+    cancel: adminProcedure
+      .input(z.object({ id: z.number().int() }))
+      .mutation(async ({ input }) => {
+        const job = await getIngestionJobById(input.id);
+        if (!job) throw new TRPCError({ code: "NOT_FOUND", message: "Job not found." });
+        await cancelIngestionJobChain(job.sourceFile, (job as any).driveFileId ?? null);
+        return { success: true };
       }),
 
     /** Update job status (used by pipeline workers) */
@@ -760,8 +921,11 @@ export const appRouter = router({
 
           // ── OpenAI (no standalone "openai" type — handled via openai_compatible) ──
           if (input.providerType === "openai_compatible") {
-            const base = (input.baseUrl ?? "https://api.openai.com").replace(/\/$/, "");
-            const res = await fetch(`${base}/v1/models`, { headers, signal: AbortSignal.timeout(15000) });
+            const host = (input.baseUrl ?? "https://api.openai.com").replace(/\/$/, "");
+            const portSuffix = input.port ? `:${input.port}` : "";
+            const prefix = (input.apiPrefix ?? "/v1").replace(/\/$/, "");
+            const base = `${host}${portSuffix}`;
+            const res = await fetch(`${base}${prefix}/models`, { headers, signal: AbortSignal.timeout(15000) });
             if (!res.ok) return { ok: false, error: `HTTP ${res.status}`, models: [] };
             const data = await res.json() as any;
             // OpenAI vision models: gpt-4o, gpt-4-turbo, gpt-4-vision, o4-mini, o3
@@ -1253,21 +1417,16 @@ export const appRouter = router({
         return { success: true };
       }),
 
-    /** Get available types, roles, and sync modes */
-    types: adminProcedure.query(() => ({
-      connectionTypes: SUPABASE_CONNECTION_TYPES.map(t => ({
-        id: t,
-        label: t === "supabase_local" ? "Supabase Local" : "Supabase Cloud",
-      })),
-      roles: SUPABASE_ROLES.map(r => ({
-        id: r,
-        label: r.charAt(0).toUpperCase() + r.slice(1),
-      })),
-      syncModes: SUPABASE_SYNC_MODES.map(m => ({
-        id: m,
-        label: { primary_only: "Primary Only", mirror: "Mirror (Both)", failover: "Failover" }[m] ?? m,
-      })),
-    })),
+    /** Get available connection types */
+    types: adminProcedure.query(() => {
+      const labels: Record<string, string> = {
+        supabase_local: "Supabase Local",
+        supabase_cloud: "Supabase Cloud",
+        postgres_docker: "PostgreSQL (Docker)",
+      };
+      const connectionTypes = SUPABASE_CONNECTION_TYPES.map(t => ({ id: t, label: labels[t] ?? t }));
+      return { connectionTypes };
+    }),
   }),
 
   // ─── Library (Documents & Pages — Enter the Arkanum) ─────────────────────
@@ -1371,6 +1530,41 @@ export const appRouter = router({
         return { success: true };
       }),
 
+    /** Get the document created by a specific ingestion job */
+    getByJobId: protectedProcedure
+      .input(z.object({ jobId: z.number().int() }))
+      .query(async ({ input }) => {
+        return (await getDocumentByJobId(input.jobId)) ?? null;
+      }),
+
+    /** Browse pages for a document, enriched with OCR results, paginated */
+    browsePagesWithOcr: protectedProcedure
+      .input(z.object({
+        documentId: z.number().int(),
+        offset: z.number().int().min(0).default(0),
+        limit: z.number().int().min(1).max(50).default(10),
+      }))
+      .query(async ({ input }) => {
+        const [pages, total] = await Promise.all([
+          getPagesByDocumentIdPaginated(input.documentId, input.offset, input.limit),
+          getDocumentPageCount(input.documentId),
+        ]);
+        if (pages.length === 0) return { pages: [], total };
+        const pageIds = pages.map(p => p.id);
+        const ocrs = await getOcrResultsByPageIds(pageIds);
+        const ocrMap = new Map(ocrs.map(r => [r.pageId, r]));
+        return {
+          total,
+          pages: pages.map(page => ({
+            ...page,
+            rawPngUrl: page.rawPngUrl
+              ? `/api/pipeline/pages/${page.rawPngUrl.replace(/.*\/workspace\//, "")}`
+              : null,
+            ocr: ocrMap.get(page.id) ?? null,
+          })),
+        };
+      }),
+
     /** Add a page to a document (admin only — used by pipeline) */
     addPage: adminProcedure
       .input(z.object({
@@ -1439,33 +1633,42 @@ export const appRouter = router({
       .input(z.object({
         status: z.enum(HITL_STATUSES).optional(),
         priority: z.enum(HITL_PRIORITIES).optional(),
-        limit: z.number().int().min(1).max(500).optional(),
+        limit: z.number().int().min(1).max(2000).optional(),
+        offset: z.number().int().min(0).optional(),
       }).optional())
       .query(async ({ input }) => {
         const items = await getAllHitlItems({
           status: input?.status,
           priority: input?.priority,
-          limit: input?.limit,
+          limit: input?.limit ?? 50,
+          offset: input?.offset ?? 0,
         });
-        // Enrich with page and document info
-        const enriched = await Promise.all(items.map(async (item) => {
-          const page = await getPageById(item.pageId);
-          let documentTitle = "Unknown";
-          let documentId: number | null = null;
-          if (page) {
-            const doc = await getDocumentById(page.documentId);
-            documentTitle = doc?.title ?? doc?.filename ?? "Unknown";
-            documentId = page.documentId;
-          }
+        if (items.length === 0) return [];
+
+        // Batch-fetch pages, documents, and OCR results in 3 queries
+        const pageIds = [...new Set(items.map(i => i.pageId))];
+        const pages = await getPagesByIds(pageIds);
+        const pageMap = new Map(pages.map(p => [p.id, p]));
+
+        const documentIds = [...new Set(pages.map(p => p.documentId))];
+        const docs = await getDocumentsByIds(documentIds);
+        const docMap = new Map(docs.map(d => [d.id, d]));
+
+        const ocrByPage = await getOcrResultsByPageIds(pageIds);
+        const ocrMap = new Map(ocrByPage.map(r => [r.pageId, r]));
+
+        return items.map(item => {
+          const page = pageMap.get(item.pageId) ?? null;
+          const doc = page ? docMap.get(page.documentId) ?? null : null;
+          const ocr = page ? ocrMap.get(page.id) ?? null : null;
           return {
             ...item,
-            pageNumber: page?.pageNumber ?? null,
-            thumbnailUrl: page?.thumbnailUrl ?? null,
-            documentTitle,
-            documentId,
+            page: page ?? null,
+            ocr: ocr ?? null,
+            documentTitle: doc?.title ?? doc?.filename ?? "Unknown",
+            documentId: page?.documentId ?? null,
           };
-        }));
-        return enriched;
+        });
       }),
 
     /** Get a single HITL item with full context (page, OCR, document) */
@@ -1498,10 +1701,14 @@ export const appRouter = router({
         priority: z.enum(HITL_PRIORITIES).default("medium"),
       }))
       .mutation(async ({ input }) => {
+        // Prevent duplicate: if any open item already exists for this page, return it
+        const existing = await getHitlItemsByPageId(input.pageId);
+        const open = existing.find(i => i.status === "queued" || i.status === "in_progress" || i.status === "escalated");
+        if (open) return { success: true, id: open.id, alreadyQueued: true };
+
         const item = await createHitlItem(input);
-        // Also mark the page as flagged
         await updateDocumentPage(input.pageId, { isFlagged: true });
-        return { success: true, id: item.id };
+        return { success: true, id: item.id, alreadyQueued: false };
       }),
 
     /** Assign a HITL item to a reviewer */
@@ -1585,6 +1792,77 @@ export const appRouter = router({
         return { success: true };
       }),
 
+    /** Save a correction for a single tab without resolving the HITL item */
+    saveCorrection: protectedProcedure
+      .input(z.object({
+        pageId: z.number().int(),
+        field: z.enum(["text", "layout", "regions", "structure", "json"]),
+        value: z.string(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const ocr = await getOcrResultByPageId(input.pageId);
+        if (!ocr) throw new TRPCError({ code: "NOT_FOUND", message: "No OCR result found for this page." });
+        if (input.field === "text") {
+          await updateOcrResult(ocr.id, {
+            correctedText: input.value || null,
+            correctedBy: ctx.user.id,
+            correctedAt: new Date(),
+          });
+        } else {
+          const existing = (ocr.correctedStructuredData as Record<string, unknown>) ?? {};
+          const key = `${input.field}_correction`;
+          const updated = input.value
+            ? { ...existing, [key]: input.value }
+            : Object.fromEntries(Object.entries(existing).filter(([k]) => k !== key));
+          await updateOcrResult(ocr.id, {
+            correctedStructuredData: updated,
+            correctedBy: ctx.user.id,
+            correctedAt: new Date(),
+          });
+        }
+        return { success: true };
+      }),
+
+    /** Re-run one or more pipeline stages for a page, with surrounding-page context */
+    retryPage: protectedProcedure
+      .input(z.object({
+        pageId: z.number().int(),
+        hitlId: z.number().int().optional(),
+        stages: z.array(z.enum(["layout_analysis", "bbox_detection", "ocr_extraction"] as const))
+          .min(1)
+          .default(["layout_analysis", "bbox_detection", "ocr_extraction"]),
+      }))
+      .mutation(async ({ input }) => {
+        const result = await retryPageStages(
+          input.pageId,
+          input.stages as RetryStage[],
+          input.hitlId,
+        );
+        return { success: true, ...result };
+      }),
+
+    /** Clear (delete) HITL items by status — useful during test cycles */
+    clear: adminProcedure
+      .input(z.object({
+        statuses: z.array(z.enum(HITL_STATUSES)).optional(),
+      }))
+      .mutation(async ({ input }) => {
+        await clearHitlItems(input.statuses ?? []);
+        return { success: true };
+      }),
+
+    /** Bulk-approve a list of HITL items with no corrections */
+    bulkResolve: protectedProcedure
+      .input(z.object({ ids: z.array(z.number().int()).min(1) }))
+      .mutation(async ({ ctx, input }) => {
+        await Promise.all(input.ids.map(id => updateHitlItem(id, {
+          status: "resolved",
+          resolvedBy: ctx.user.id,
+          resolvedAt: new Date(),
+        })));
+        return { success: true, count: input.ids.length };
+      }),
+
     /** Get the next unreviewed item (oldest critical/high/medium/low queued or in_progress) */
     nextUnreviewed: protectedProcedure
       .input(z.object({
@@ -1605,6 +1883,69 @@ export const appRouter = router({
           orderByPriority: true,
         });
         return inProgress[0] ?? null;
+      }),
+
+    /** Export OCR results as structured records for model fine-tuning.
+     *  Pass specific `ids` for selected items, or `status` to bulk-export
+     *  an entire status bucket (up to 10 000 records). */
+    exportOcr: protectedProcedure
+      .input(z.object({
+        ids: z.array(z.number().int()).optional(),
+        status: z.enum(HITL_STATUSES).optional(),
+      }).optional())
+      .query(async ({ input }) => {
+        const items = input?.ids?.length
+          ? await getHitlItemsByIds(input.ids)
+          : await getAllHitlItems({ status: input?.status, limit: 10_000 });
+
+        if (items.length === 0) return [];
+
+        const pageIds = [...new Set(items.map(i => i.pageId))];
+        const pages = await getPagesByIds(pageIds);
+        const pageMap = new Map(pages.map(p => [p.id, p]));
+
+        const documentIds = [...new Set(pages.map(p => p.documentId))];
+        const docs = await getDocumentsByIds(documentIds);
+        const docMap = new Map(docs.map(d => [d.id, d]));
+
+        const ocrByPage = await getOcrResultsByPageIds(pageIds);
+        const ocrMap = new Map(ocrByPage.map(r => [r.pageId, r]));
+
+        return items.map(item => {
+          const page = pageMap.get(item.pageId) ?? null;
+          const doc = page ? docMap.get(page.documentId) ?? null : null;
+          const ocr = page ? ocrMap.get(page.id) ?? null : null;
+          const imageUrl = page?.rawPngUrl
+            ? `/api/pipeline/pages/${page.rawPngUrl.replace(/.*\/workspace\//, "")}`
+            : null;
+
+          return {
+            hitl_id: item.id,
+            hitl_status: item.status,
+            hitl_reason: item.reason,
+            document: {
+              title: doc?.title ?? doc?.filename ?? "Unknown",
+              publisher: doc?.publisher ?? null,
+              type: doc?.documentType ?? null,
+              game_system: doc?.gameSystem ?? null,
+              summary: doc?.documentSummary ?? null,
+            },
+            page: {
+              number: page?.pageNumber ?? null,
+              image_url: imageUrl,
+              layout_type: page?.layoutType ?? null,
+              ocr_confidence: ocr?.confidence ?? null,
+              model: ocr?.pass1Model ?? null,
+              extracted_at: ocr?.createdAt ?? null,
+            },
+            regions: page?.contentRegions ?? [],
+            ocr_output: ocr?.structuredData ?? null,
+            raw_text: ocr?.rawText ?? null,
+            human_corrections: (ocr?.correctedStructuredData || ocr?.correctedText)
+              ? { corrected_text: ocr?.correctedText ?? null, corrected_data: ocr?.correctedStructuredData ?? null }
+              : null,
+          };
+        });
       }),
   }),
 
@@ -1840,6 +2181,132 @@ export const appRouter = router({
           flaggedCount: flaggedPages.filter(Boolean).length,
           percentComplete: pages.length > 0 ? Math.round((ocrCompleteCount / pages.length) * 100) : 0,
         };
+      }),
+  }),
+
+  // ─── Google Drive ─────────────────────────────────────────────────────────────
+  google: router({
+    status: protectedProcedure.query(async () => {
+      const { isGoogleConnected } = await import("./pipeline/drive");
+      const connected = await isGoogleConnected();
+      return { connected, clientId: ENV.googleClientId || null };
+    }),
+
+    getAccessToken: adminProcedure.query(async () => {
+      const { getGoogleAccessToken } = await import("./pipeline/drive");
+      try {
+        const accessToken = await getGoogleAccessToken();
+        return { accessToken };
+      } catch {
+        return { accessToken: null };
+      }
+    }),
+
+    disconnect: adminProcedure.mutation(async () => {
+      const { clearGoogleTokens } = await import("./pipeline/drive");
+      await clearGoogleTokens();
+      return { success: true };
+    }),
+  }),
+
+  // ─── LLM Timing Metrics ───────────────────────────────────────────────────────
+  metrics: router({
+    /** All LLM call records for a single page. */
+    byPage: protectedProcedure
+      .input(z.object({ pageId: z.number().int() }))
+      .query(({ input }) => getLlmMetricsByPage(input.pageId)),
+
+    /** Per-stage aggregates (calls, avg/total ms, tokens) for one job. */
+    jobSummary: protectedProcedure
+      .input(z.object({ jobId: z.number().int() }))
+      .query(({ input }) => getLlmMetricsJobSummary(input.jobId)),
+
+    /** Per-page totals (total LLM ms, call count) for one job — used by the page browser. */
+    pageSummary: protectedProcedure
+      .input(z.object({ jobId: z.number().int() }))
+      .query(({ input }) => getLlmMetricsPageSummary(input.jobId)),
+
+    /** Per-provider aggregates over the last N days (default 7). */
+    providerSummary: protectedProcedure
+      .input(z.object({ days: z.number().int().min(1).max(90).default(7) }))
+      .query(({ input }) => getLlmProviderMetricsSummary(input.days)),
+  }),
+
+  // ─── Game Systems ─────────────────────────────────────────────────────────────
+  gameSystems: router({
+    list: protectedProcedure.query(() => getAllGameSystems(true)),
+
+    listAll: adminProcedure.query(() => getAllGameSystems(false)),
+
+    create: adminProcedure
+      .input(z.object({
+        name: z.string().min(1).max(128),
+        abbreviation: z.string().max(32).optional(),
+        sortOrder: z.number().int().default(0),
+      }))
+      .mutation(async ({ input }) => {
+        return createGameSystem({ ...input, isActive: true });
+      }),
+
+    update: adminProcedure
+      .input(z.object({
+        id: z.number().int(),
+        name: z.string().min(1).max(128).optional(),
+        abbreviation: z.string().max(32).nullable().optional(),
+        sortOrder: z.number().int().optional(),
+        isActive: z.boolean().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const { id, ...updates } = input;
+        await updateGameSystem(id, updates as any);
+        return { success: true };
+      }),
+
+    delete: adminProcedure
+      .input(z.object({ id: z.number().int() }))
+      .mutation(async ({ input }) => {
+        await deleteGameSystem(input.id);
+        return { success: true };
+      }),
+  }),
+
+  // ─── Content Summaries (The Chronicles) ──────────────────────────────────
+  summaries: router({
+    listByDocument: adminProcedure
+      .input(z.object({ documentId: z.number().int() }))
+      .query(async ({ input }) => {
+        return getContentSummariesByDocument(input.documentId);
+      }),
+
+    update: adminProcedure
+      .input(z.object({
+        id: z.number().int(),
+        shortSummary: z.string().nullable().optional(),
+        longSummary: z.string().nullable().optional(),
+        keyTerms: z.array(z.string()).optional(),
+        keyEntities: z.array(z.string()).optional(),
+        summaryStatus: z.enum(["pending", "generating", "generated", "approved", "failed"]).optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const { id, ...updates } = input;
+        await updateContentSummary(id, updates as any);
+        return { success: true };
+      }),
+
+    approve: adminProcedure
+      .input(z.object({ id: z.number().int() }))
+      .mutation(async ({ input }) => {
+        await updateContentSummary(input.id, { summaryStatus: "approved" });
+        return { success: true };
+      }),
+
+    approveAll: adminProcedure
+      .input(z.object({ documentId: z.number().int() }))
+      .mutation(async ({ input }) => {
+        const all = await getContentSummariesByDocument(input.documentId);
+        const generated = all.filter(s => s.summaryStatus === "generated");
+        await Promise.all(generated.map(s => updateContentSummary(s.id, { summaryStatus: "approved" })));
+        return { count: generated.length };
       }),
   }),
 });
