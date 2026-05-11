@@ -442,7 +442,15 @@ async function _runJob(jobId: number): Promise<void> {
   }
 
   // ── Stage: preprocess (binarize/denoise) — optional ──────────────────────
-  // Replaces raw PNGs with preprocessed versions fed to all subsequent stages.
+  // rawPageFiles = original full-colour PNGs (always preserved).
+  // pageFiles    = preprocessed versions after this block (used for all text/OCR/tabular stages).
+  //
+  // IMPORTANT: stages that extract or describe visual content (illustrations,
+  // maps, photographs) MUST use rawPageFiles paths, not pageFiles, so that colour
+  // information and image quality are preserved. Text-extraction stages (layout,
+  // bbox, OCR, tabular) benefit from the cleaner binarized versions.
+  const rawPageFiles = [...pageFiles]; // snapshot originals before possible reassignment
+
   if (pipelineConfig.binarize.enabled) {
     await updateIngestionJobStatus(jobId, { currentStage: "preprocess" });
     const preprocessDir = join(jobWorkspace, "preprocessed");
@@ -468,13 +476,15 @@ async function _runJob(jobId: number): Promise<void> {
   }
 
   // ── Stage: document_intelligence (first block only) ───────────────────────
+  // Uses ORIGINAL images: cover art, publisher logos, and background colours
+  // are lost in binarized versions and are needed for accurate metadata extraction.
   if (pageOffset === 0) {
     await updateIngestionJobStatus(jobId, {
       status: "pass1_ocr",
       currentStage: "document_intelligence",
     });
 
-    const sampleFiles = pageFiles.slice(0, Math.min(2, pageFiles.length));
+    const sampleFiles = rawPageFiles.slice(0, Math.min(2, rawPageFiles.length));
     try {
       const sampleContent: UserContentPart[] = [];
       for (const f of sampleFiles) sampleContent.push(await imageContent(f));
@@ -504,10 +514,14 @@ async function _runJob(jobId: number): Promise<void> {
   let processedPages = 0;
   let prevRawText: string | null = null; // tail of previous page — fed to content_break_detect
 
+  // Region types that contain visual content — original image must be used for these.
+  const VISUAL_REGION_TYPES = new Set(["illustration", "image", "map", "graphic", "advertisement"]);
+
   for (let i = 0; i < pageFiles.length; i++) {
     const pageNum = pageOffset + i + 1;
     const pageId = pageIds[i];
-    const pagePath = pageFiles[i];
+    const pagePath = pageFiles[i];         // preprocessed (binarized/grayscale) — use for text stages
+    const rawPagePath = rawPageFiles[i];   // original full-colour — use for visual content stages
     const stagesFailed: string[] = [];
     let ocrConfidence = 0;
     let ocrResultId: number | null = null;
@@ -515,7 +529,10 @@ async function _runJob(jobId: number): Promise<void> {
 
     await updateIngestionJobStatus(jobId, { currentStage: "layout_analysis", processedPages });
 
+    // Preprocessed image: used for layout, bbox, OCR, tabular (text clarity wins)
     const imgPart = await imageContent(pagePath);
+    // Original image: lazily resolved below only when visual regions are detected
+    let origImgPart: Awaited<ReturnType<typeof imageContent>> | null = null;
 
     await PAGE_LLM_SEMAPHORE.acquire();
     console.log(`[Pipeline] Job ${jobId}: page ${pageNum} acquired LLM slot`);
@@ -549,6 +566,18 @@ async function _runJob(jobId: number): Promise<void> {
       if (isConfigError(err)) throw err; // fatal — halt job (bbox stage explicitly configured but broken)
       console.warn(`[Pipeline] Job ${jobId} p${pageNum} bbox_detection: ${err.message}`);
     }
+
+    // Lazily load the original full-colour image when the page contains visual
+    // content regions (illustrations, maps, etc.).  Any future stage that
+    // describes, captions, or extracts these regions MUST use origImgPart instead
+    // of imgPart so colour and fine detail are preserved.
+    // origImgPart is intentionally unused here — it is the pre-loaded handle for
+    // the upcoming image_extraction stage (see TODO: add image captioning stage).
+    const hasVisualRegions = regions.some((r: any) => VISUAL_REGION_TYPES.has(r.type));
+    if (hasVisualRegions && rawPagePath !== pagePath) {
+      origImgPart = await imageContent(rawPagePath);
+    }
+    void origImgPart; // acknowledged — consumed by future image_extraction stage
 
     // ocr_extraction
     try {
@@ -802,7 +831,11 @@ export async function retryPageStages(
     ctxParts.push(`Next page begins with:\n${nextOcr.rawText.slice(0, 200).trim()}`);
   const surroundingContext = ctxParts.length > 0 ? ctxParts.join("\n\n") : undefined;
 
-  const imgPart = await imageContent(page.rawPngUrl);
+  // For text/OCR stages use the preprocessed image when available — binarization
+  // yields cleaner text extraction. rawPngUrl is always the fallback (and is the
+  // correct choice for any future visual-content stages in retry).
+  const ocrImgPath = (page.wasPreprocessed && page.preprocessedPngUrl) ? page.preprocessedPngUrl : page.rawPngUrl!;
+  const imgPart = await imageContent(ocrImgPath);
   const stagesFailed: string[] = [];
   let ocrConfidence = 0;
 
