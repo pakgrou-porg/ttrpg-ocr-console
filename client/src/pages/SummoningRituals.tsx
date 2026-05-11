@@ -2,7 +2,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Database, Save, Plus, Trash2, UploadCloud, Loader2, CheckCircle2, HardDrive, FolderOpen, Link2Off, Link2, X } from "lucide-react";
+import { Database, Save, Plus, Trash2, UploadCloud, Loader2, CheckCircle2, HardDrive, FolderOpen, Link2Off, Link2, X, Folder, FileText, RefreshCw } from "lucide-react";
 import { useState, useRef } from "react";
 import { trpc } from "@/lib/trpc";
 import { useToast } from "@/hooks/use-toast";
@@ -28,10 +28,39 @@ export default function SummoningRituals() {
   const [gameSystem, setGameSystem] = useState("");
   const [localPath, setLocalPath] = useState("");
   const [driveFiles, setDriveFiles] = useState<DriveFile[]>([]);
-  const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [blockSize, setBlockSize] = useState(10);
   const [lastJobIds, setLastJobIds] = useState<number[]>([]);
+
+  // Upload-mode state
+  type UploadMode = "file" | "folder";
+  const [uploadMode, setUploadMode] = useState<UploadMode>("file");
+  const [uploadFiles, setUploadFiles] = useState<File[]>([]);
+  const [recursive, setRecursive] = useState(true);
+  const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
+
+  const ACCEPTED_MIMES = /^(application\/pdf|image\/(png|jpe?g|webp|tiff?))$/;
+
+  function pickFiles(raw: FileList | null) {
+    if (!raw) return;
+    const all = Array.from(raw);
+    const filtered = all.filter(f => {
+      if (!ACCEPTED_MIMES.test(f.type)) return false;
+      // For folder picks: respect recursive toggle by checking path depth
+      // webkitRelativePath = "FolderName/sub/file.pdf" → depth 2 means nested
+      if (f.webkitRelativePath) {
+        const depth = f.webkitRelativePath.split("/").length - 1; // segments after folder root
+        if (!recursive && depth > 1) return false;
+      }
+      return true;
+    });
+    setUploadFiles(prev => {
+      const existing = new Set(prev.map(f => `${f.name}|${f.size}`));
+      const added = filtered.filter(f => !existing.has(`${f.name}|${f.size}`));
+      return [...prev, ...added];
+    });
+  }
 
   const effectiveGameSystem = gameSystem || gameSystems[0] || "Dungeons & Dragons 5e";
 
@@ -70,30 +99,50 @@ export default function SummoningRituals() {
         toast({ title: "Ritual begun", description: `${ids.length} job(s) started — ${blockSize} pages per block, auto-continuing until complete.` });
       }
     } else if (inputMode === "upload") {
-      if (!uploadFile) {
-        toast({ title: "No file selected", description: "Choose a PDF to upload.", variant: "destructive" });
+      if (!uploadFiles.length) {
+        toast({ title: "No files selected", description: "Choose a PDF or image file to upload.", variant: "destructive" });
         return;
       }
       setUploading(true);
-      try {
-        const formData = new FormData();
-        formData.append("file", uploadFile);
-        formData.append("gameSystem", effectiveGameSystem);
-        const res = await fetch("/api/upload/ingest", { method: "POST", body: formData });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ error: res.statusText }));
-          throw new Error(err.error ?? "Upload failed");
+      setUploadProgress({ done: 0, total: uploadFiles.length });
+      const ids: number[] = [];
+      const failed: string[] = [];
+      for (let i = 0; i < uploadFiles.length; i++) {
+        const file = uploadFiles[i];
+        setUploadProgress({ done: i, total: uploadFiles.length });
+        try {
+          const formData = new FormData();
+          formData.append("file", file);
+          formData.append("gameSystem", effectiveGameSystem);
+          const res = await fetch("/api/upload/ingest", { method: "POST", body: formData });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({ error: res.statusText }));
+            throw new Error(err.error ?? "Upload failed");
+          }
+          const data = await res.json();
+          ids.push(data.jobId);
+        } catch (err: any) {
+          failed.push(file.name);
         }
-        const data = await res.json();
-        setLastJobIds([data.jobId]);
-        setUploadFile(null);
-        if (fileInputRef.current) fileInputRef.current.value = "";
-        toast({ title: "Ritual begun", description: `Job #${data.jobId} is processing ${blockSize} pages per block, auto-continuing until complete.` });
-      } catch (err: any) {
-        toast({ title: "Upload failed", description: err.message, variant: "destructive" });
-      } finally {
-        setUploading(false);
       }
+      setUploadProgress(null);
+      setUploadFiles([]);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      if (folderInputRef.current) folderInputRef.current.value = "";
+      if (ids.length > 0) {
+        setLastJobIds(ids);
+        toast({
+          title: "Ritual begun",
+          description: failed.length > 0
+            ? `${ids.length} job(s) started; ${failed.length} failed: ${failed.slice(0, 3).join(", ")}`
+            : ids.length === 1
+              ? `Job #${ids[0]} is processing ${blockSize} pages per block.`
+              : `${ids.length} jobs started (${ids.map(id => `#${id}`).join(", ")}).`,
+        });
+      } else {
+        toast({ title: "Upload failed", description: `All ${failed.length} file(s) failed.`, variant: "destructive" });
+      }
+      setUploading(false);
     } else {
       const trimmed = localPath.trim();
       if (!trimmed) {
@@ -246,17 +295,106 @@ export default function SummoningRituals() {
             )}
 
             {inputMode === "upload" && (
-              <div className="space-y-2">
-                <Label htmlFor="file-upload">PDF File</Label>
+              <div className="space-y-3">
+                {/* File vs Folder toggle */}
+                <div className="flex gap-1 p-1 rounded-md bg-muted/30 border border-border/40">
+                  {([
+                    { key: "file",   label: "File",   icon: FileText },
+                    { key: "folder", label: "Folder", icon: Folder },
+                  ] as const).map(({ key, label, icon: Icon }) => (
+                    <button
+                      key={key}
+                      onClick={() => { setUploadMode(key); setUploadFiles([]); }}
+                      className={`flex-1 flex items-center justify-center gap-1.5 py-1 px-2 rounded text-xs font-medium transition-colors ${
+                        uploadMode === key ? "bg-background shadow text-foreground" : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      <Icon className="w-3 h-3" />
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Hidden inputs */}
                 <input
                   ref={fileInputRef}
-                  id="file-upload"
                   type="file"
-                  accept="application/pdf"
-                  onChange={e => setUploadFile(e.target.files?.[0] ?? null)}
-                  className="w-full text-sm file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-primary file:text-primary-foreground hover:file:bg-primary/90 cursor-pointer"
+                  accept="application/pdf,image/png,image/jpeg,image/webp,image/tiff"
+                  multiple
+                  className="hidden"
+                  onChange={e => pickFiles(e.target.files)}
                 />
-                {uploadFile && <p className="text-xs text-muted-foreground">{uploadFile.name} ({(uploadFile.size / 1024 / 1024).toFixed(1)} MB)</p>}
+                {/* webkitdirectory must be set via attribute, not prop */}
+                <input
+                  ref={folderInputRef}
+                  type="file"
+                  {...{ webkitdirectory: "" } as any}
+                  className="hidden"
+                  onChange={e => pickFiles(e.target.files)}
+                />
+
+                {uploadMode === "file" ? (
+                  <Button variant="outline" size="sm" className="w-full gap-2"
+                    onClick={() => fileInputRef.current?.click()} disabled={isPending}>
+                    <FileText className="w-3.5 h-3.5" />
+                    Choose File{uploadFiles.length > 0 ? "s" : ""}…
+                  </Button>
+                ) : (
+                  <div className="space-y-2">
+                    <Button variant="outline" size="sm" className="w-full gap-2"
+                      onClick={() => folderInputRef.current?.click()} disabled={isPending}>
+                      <Folder className="w-3.5 h-3.5" />
+                      Choose Folder…
+                    </Button>
+                    <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={recursive}
+                        onChange={e => setRecursive(e.target.checked)}
+                        className="rounded"
+                      />
+                      Include files in subfolders (recursive)
+                    </label>
+                  </div>
+                )}
+
+                {/* File list */}
+                {uploadFiles.length > 0 && (
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between text-xs text-muted-foreground">
+                      <span>{uploadFiles.length} file{uploadFiles.length !== 1 ? "s" : ""} selected
+                        ({(uploadFiles.reduce((a, f) => a + f.size, 0) / 1024 / 1024).toFixed(1)} MB total)
+                      </span>
+                      <button onClick={() => setUploadFiles([])} className="hover:text-destructive">
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                    <div className="max-h-32 overflow-y-auto border border-border/40 rounded-md p-2 bg-muted/10 space-y-0.5">
+                      {uploadFiles.map((f, i) => (
+                        <div key={i} className="flex items-center justify-between gap-2 text-xs">
+                          <span className="truncate text-muted-foreground" title={f.webkitRelativePath || f.name}>
+                            {f.webkitRelativePath || f.name}
+                          </span>
+                          <span className="flex-shrink-0 text-muted-foreground/60">
+                            {(f.size / 1024 / 1024).toFixed(1)}MB
+                          </span>
+                          <button onClick={() => setUploadFiles(prev => prev.filter((_, j) => j !== i))}
+                            className="flex-shrink-0 text-muted-foreground hover:text-destructive">
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Upload progress */}
+                {uploadProgress && (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <RefreshCw className="w-3 h-3 animate-spin" />
+                    Uploading {uploadProgress.done + 1} / {uploadProgress.total}…
+                  </div>
+                )}
               </div>
             )}
 
