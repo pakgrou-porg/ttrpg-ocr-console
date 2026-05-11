@@ -32,7 +32,7 @@ import {
 import { encryptSecret, decryptSecret, storeSecretHint, renderMaskedSecret } from "./crypto";
 import { startJob, retryPageStages, RetryStage } from "./pipeline/runner";
 import { ENV } from "./_core/env";
-import { FEATURE_AREAS, PROVIDER_TYPES, PIPELINE_STAGES, SUPABASE_CONNECTION_TYPES, SUPABASE_ROLES, SUPABASE_SYNC_MODES, DOCUMENT_STATUSES, OCR_RESULT_STATUSES, HITL_PRIORITIES, HITL_STATUSES } from "../drizzle/schema";
+import { FEATURE_AREAS, PROVIDER_TYPES, PIPELINE_STAGES, SUPABASE_CONNECTION_TYPES, SUPABASE_ROLES, SUPABASE_SYNC_MODES, DOCUMENT_STATUSES, OCR_RESULT_STATUSES, HITL_PRIORITIES, HITL_STATUSES, type LlmProvider } from "../drizzle/schema";
 
 /** Admin-only guard — throws FORBIDDEN if the caller is not an admin. */
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -44,45 +44,102 @@ const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
 
 // ─── Health helpers ───────────────────────────────────────────────────────────
 
-async function pingLocalAgents(providers: Array<{ baseUrl: string; port: number | null; apiPrefix: string | null; displayName: string; name: string }>): Promise<{ ok: boolean; latencyMs: number; detail: string }> {
-  if (providers.length === 0) {
-    return { ok: false, latencyMs: 0, detail: "No local agent providers configured" };
-  }
+// Provider types that are local / LAN-hosted (not metered cloud APIs)
+const LOCAL_PROVIDER_TYPES = new Set(["lm_studio", "openai_compatible", "custom"]);
+
+function buildProviderBase(p: Pick<LlmProvider, "baseUrl" | "port" | "apiPrefix">): string {
+  return `${p.baseUrl.replace(/\/$/, "")}${p.port ? `:${p.port}` : ""}${(p.apiPrefix ?? "/v1").replace(/\/$/, "")}`;
+}
+
+/**
+ * Two-phase probe for a single local/LAN LLM provider:
+ *  1. GET /models — proves the server is reachable and returns the loaded model list.
+ *  2. POST /chat/completions (max_tokens:1) — proves inference is actually working.
+ */
+async function probeSingleLocalProvider(p: LlmProvider): Promise<{ ok: boolean; latencyMs: number; label: string }> {
+  const base = buildProviderBase(p);
   const start = Date.now();
-  const results = await Promise.all(providers.map(async p => {
-    const host = p.baseUrl.replace(/\/$/, "");
-    const portStr = p.port ? `:${p.port}` : "";
-    const prefix = (p.apiPrefix ?? "/v1").replace(/\/$/, "");
-    try {
-      const res = await fetch(`${host}${portStr}${prefix}/models`, { signal: AbortSignal.timeout(5000) });
-      return res.ok;
-    } catch { return false; }
-  }));
-  const ok = results.some(Boolean);
-  const count = results.filter(Boolean).length;
-  const latencyMs = Date.now() - start;
+
+  // Phase 1: /models
+  let modelId = p.modelId ?? undefined;
+  try {
+    const res = await fetch(`${base}/models`, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return { ok: false, latencyMs: Date.now() - start, label: `${p.displayName}: HTTP ${res.status} on /models` };
+    const body = await res.json() as { data?: Array<{ id: string }> };
+    const loaded = (body.data ?? []).map(m => m.id);
+    if (loaded.length === 0) return { ok: false, latencyMs: Date.now() - start, label: `${p.displayName}: online but no models loaded` };
+    // Prefer the configured model; fall back to whatever is loaded
+    modelId = (modelId && loaded.includes(modelId)) ? modelId : loaded[0];
+  } catch (err: any) {
+    return { ok: false, latencyMs: Date.now() - start, label: `${p.displayName}: ${err?.message?.slice(0, 60) ?? "unreachable"}` };
+  }
+
+  // Phase 2: minimal chat completion to verify inference
+  try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (p.encryptedApiKey) {
+      try {
+        headers["Authorization"] = `Bearer ${decryptSecret({ ciphertext: p.encryptedApiKey, iv: p.keyIv ?? "", authTag: p.keyAuthTag ?? "" })}`;
+      } catch { /* proceed without auth — some local deployments don't require it */ }
+    }
+    const res = await fetch(`${base}/chat/completions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: modelId,
+        messages: [{ role: "user", content: "ping" }],
+        max_tokens: 1,
+        temperature: 0,
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+    const latencyMs = Date.now() - start;
+    if (!res.ok) return { ok: false, latencyMs, label: `${p.displayName} (${modelId}): HTTP ${res.status}` };
+    return { ok: true, latencyMs, label: `${p.displayName} (${modelId})` };
+  } catch (err: any) {
+    return { ok: false, latencyMs: Date.now() - start, label: `${p.displayName}/${modelId}: ${err?.message?.slice(0, 50) ?? "inference failed"}` };
+  }
+}
+
+async function pingLocalAgents(providers: LlmProvider[]): Promise<{ ok: boolean; latencyMs: number; detail: string }> {
+  if (providers.length === 0) return { ok: false, latencyMs: 0, detail: "No local providers configured" };
+  const results = await Promise.all(providers.map(probeSingleLocalProvider));
+  const ok = results.some(r => r.ok);
+  const latencyMs = Math.max(...results.map(r => r.latencyMs));
+  const good = results.filter(r => r.ok);
+  const bad  = results.filter(r => !r.ok);
   const detail = ok
-    ? `${count}/${providers.length} agent${providers.length !== 1 ? "s" : ""} responding`
-    : `No agents responding (checked ${providers.length})`;
+    ? good.map(r => `${r.label} — ${r.latencyMs}ms`).join(" · ")
+    : bad.map(r => r.label).join(" · ");
   return { ok, latencyMs, detail };
 }
 
-async function pingCloudConduit(provider: { encryptedApiKey: string | null; keyIv: string | null; keyAuthTag: string | null } | undefined): Promise<{ ok: boolean; latencyMs: number; detail: string }> {
-  if (!provider) return { ok: false, latencyMs: 0, detail: "No OpenRouter provider configured" };
+/**
+ * Cloud conduit health check.
+ * For OpenRouter: uses /api/v1/auth/key which returns account status and usage
+ * without fetching the full model catalogue — faster and shows useful billing info.
+ */
+async function pingCloudConduit(provider: LlmProvider | undefined): Promise<{ ok: boolean; latencyMs: number; detail: string }> {
+  if (!provider) return { ok: false, latencyMs: 0, detail: "No cloud provider configured" };
   const start = Date.now();
+  const headers: Record<string, string> = {};
+  if (provider.encryptedApiKey) {
+    try {
+      headers["Authorization"] = `Bearer ${decryptSecret({ ciphertext: provider.encryptedApiKey, iv: provider.keyIv ?? "", authTag: provider.keyAuthTag ?? "" })}`;
+    } catch { /* proceed unauthenticated — will expose the real error */ }
+  }
   try {
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (provider.encryptedApiKey) {
-      try {
-        const key = decryptSecret({ ciphertext: provider.encryptedApiKey, iv: provider.keyIv ?? "", authTag: provider.keyAuthTag ?? "" });
-        headers["Authorization"] = `Bearer ${key}`;
-      } catch { /* proceed without key — will get 401 but still proves reachability */ }
-    }
-    const res = await fetch("https://openrouter.ai/api/v1/models", { headers, signal: AbortSignal.timeout(8000) });
+    const res = await fetch("https://openrouter.ai/api/v1/auth/key", { headers, signal: AbortSignal.timeout(8000) });
     const latencyMs = Date.now() - start;
-    return res.ok
-      ? { ok: true,  latencyMs, detail: "OpenRouter reachable" }
-      : { ok: false, latencyMs, detail: `HTTP ${res.status}` };
+    if (!res.ok) return { ok: false, latencyMs, detail: `OpenRouter: HTTP ${res.status}` };
+    const body = await res.json() as { data?: { label?: string; usage?: number; limit?: number | null } };
+    const d = body.data;
+    if (!d) return { ok: true, latencyMs, detail: `OpenRouter reachable (${latencyMs}ms)` };
+    const usage  = typeof d.usage  === "number" ? `$${d.usage.toFixed(3)}` : null;
+    const limit  = typeof d.limit  === "number" ? `/$${d.limit}` : "";
+    const label  = d.label ? `${d.label} — ` : "";
+    const credit = usage ? `${usage}${limit} used — ` : "";
+    return { ok: true, latencyMs, detail: `OpenRouter — ${label}${credit}${latencyMs}ms` };
   } catch (err: any) {
     return { ok: false, latencyMs: Date.now() - start, detail: err?.message?.slice(0, 80) ?? "Connection failed" };
   }
@@ -119,7 +176,7 @@ export const appRouter = router({
         getAllLlmProviders(),
       ]);
 
-      const localAgents = allProviders.filter(p => p.isActive && p.providerType === "lm_studio");
+      const localAgents = allProviders.filter(p => p.isActive && LOCAL_PROVIDER_TYPES.has(p.providerType));
       const orProvider  = allProviders.find(p => p.isActive && p.providerType === "openrouter");
 
       const [agentsResult, cloudResult] = await Promise.all([
