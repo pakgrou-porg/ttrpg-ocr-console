@@ -27,6 +27,7 @@ import {
   getHitlItemById, getHitlItemsByIds, getHitlItemsByPageId, getAllHitlItems, createHitlItem, updateHitlItem, getHitlStats,
   getAllGameSystems, createGameSystem, updateGameSystem, deleteGameSystem,
   getLlmMetricsByPage, getLlmMetricsJobSummary, getLlmMetricsPageSummary, getLlmProviderMetricsSummary,
+  getContentSummariesByDocument, updateContentSummary,
 } from "./db";
 import { encryptSecret, decryptSecret, storeSecretHint, renderMaskedSecret } from "./crypto";
 import { startJob, retryPageStages, RetryStage } from "./pipeline/runner";
@@ -2209,6 +2210,46 @@ export const appRouter = router({
       .mutation(async ({ input }) => {
         await deleteGameSystem(input.id);
         return { success: true };
+      }),
+  }),
+
+  // ─── Content Summaries (The Chronicles) ──────────────────────────────────
+  summaries: router({
+    listByDocument: adminProcedure
+      .input(z.object({ documentId: z.number().int() }))
+      .query(async ({ input }) => {
+        return getContentSummariesByDocument(input.documentId);
+      }),
+
+    update: adminProcedure
+      .input(z.object({
+        id: z.number().int(),
+        shortSummary: z.string().nullable().optional(),
+        longSummary: z.string().nullable().optional(),
+        keyTerms: z.array(z.string()).optional(),
+        keyEntities: z.array(z.string()).optional(),
+        summaryStatus: z.enum(["pending", "generating", "generated", "approved", "failed"]).optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const { id, ...updates } = input;
+        await updateContentSummary(id, updates as any);
+        return { success: true };
+      }),
+
+    approve: adminProcedure
+      .input(z.object({ id: z.number().int() }))
+      .mutation(async ({ input }) => {
+        await updateContentSummary(input.id, { summaryStatus: "approved" });
+        return { success: true };
+      }),
+
+    approveAll: adminProcedure
+      .input(z.object({ documentId: z.number().int() }))
+      .mutation(async ({ input }) => {
+        const all = await getContentSummariesByDocument(input.documentId);
+        const generated = all.filter(s => s.summaryStatus === "generated");
+        await Promise.all(generated.map(s => updateContentSummary(s.id, { summaryStatus: "approved" })));
+        return { count: generated.length };
       }),
   }),
 });

@@ -5,9 +5,116 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import { Terminal, Save, RefreshCw, Wand2, Database, Zap, Search, FileSearch, ScanLine, Table2, Gavel, History, RotateCcw } from "lucide-react";
+import { Terminal, Save, RefreshCw, Wand2, Database, Zap, Search, FileSearch, ScanLine, Table2, Gavel, History, RotateCcw, GitCompare } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { getLoginUrl } from "@/const";
+
+// ── Diff utilities ─────────────────────────────────────────────────────────────
+
+type DiffLine = { type: "equal" | "add" | "remove"; text: string };
+
+function diffLines(before: string, after: string): DiffLine[] {
+  const a = before.split("\n");
+  const b = after.split("\n");
+  // Guard against O(m·n) blow-up on very large prompts
+  if (a.length * b.length > 400_000) {
+    return [
+      ...a.map(text => ({ type: "remove" as const, text })),
+      ...b.map(text => ({ type: "add" as const, text })),
+    ];
+  }
+  const m = a.length, n = b.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0));
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      dp[i][j] = a[i - 1] === b[j - 1]
+        ? dp[i - 1][j - 1] + 1
+        : Math.max(dp[i - 1][j], dp[i][j - 1]);
+  const result: DiffLine[] = [];
+  let i = m, j = n;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && a[i - 1] === b[j - 1]) {
+      result.unshift({ type: "equal", text: a[i - 1] }); i--; j--;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      result.unshift({ type: "add", text: b[j - 1] }); j--;
+    } else {
+      result.unshift({ type: "remove", text: a[i - 1] }); i--;
+    }
+  }
+  return result;
+}
+
+const DIFF_CONTEXT = 3; // unchanged lines shown above/below each changed region
+
+function DiffView({ before, after, label }: { before: string; after: string; label: string }) {
+  const lines = diffLines(before, after);
+  const addCount    = lines.filter(l => l.type === "add").length;
+  const removeCount = lines.filter(l => l.type === "remove").length;
+
+  if (addCount + removeCount === 0) {
+    return (
+      <p className="text-xs text-muted-foreground italic py-2 text-center">
+        No differences — these versions are identical.
+      </p>
+    );
+  }
+
+  // Which line indices to display (changed ± context window)
+  const show = new Set<number>();
+  lines.forEach((l, i) => {
+    if (l.type !== "equal") {
+      for (let k = Math.max(0, i - DIFF_CONTEXT); k <= Math.min(lines.length - 1, i + DIFF_CONTEXT); k++)
+        show.add(k);
+    }
+  });
+
+  // Build run of visible lines interspersed with collapse markers
+  type Item = { kind: "line"; line: DiffLine; idx: number } | { kind: "collapse"; count: number };
+  const items: Item[] = [];
+  let gap = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (show.has(i)) {
+      if (gap > 0) { items.push({ kind: "collapse", count: gap }); gap = 0; }
+      items.push({ kind: "line", line: lines[i], idx: i });
+    } else { gap++; }
+  }
+  if (gap > 0) items.push({ kind: "collapse", count: gap });
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-3 text-xs text-muted-foreground">
+        <span className="font-mono">{label}</span>
+        <span className="text-green-400 font-mono">+{addCount}</span>
+        <span className="text-red-400 font-mono">−{removeCount}</span>
+      </div>
+      <div className="rounded border border-border/40 bg-background/50 overflow-auto max-h-80 font-mono text-xs">
+        {items.map((item, itemIdx) =>
+          item.kind === "collapse" ? (
+            <div key={`c${itemIdx}`}
+              className="px-3 py-1 text-muted-foreground/40 bg-muted/10 border-y border-border/20 text-center select-none">
+              ···  {item.count} unchanged {item.count === 1 ? "line" : "lines"}  ···
+            </div>
+          ) : (
+            <div key={`l${item.idx}`}
+              className={`flex gap-2 px-3 py-px break-all leading-5 ${
+                item.line.type === "add"    ? "bg-green-500/10 text-green-300" :
+                item.line.type === "remove" ? "bg-red-500/10 text-red-300"    :
+                                              "text-muted-foreground/70"
+              }`}
+            >
+              <span className="select-none opacity-60 flex-shrink-0 w-3 text-center">
+                {item.line.type === "add" ? "+" : item.line.type === "remove" ? "−" : " "}
+              </span>
+              <span className={`whitespace-pre-wrap ${item.line.type === "remove" ? "line-through opacity-60" : ""}`}>
+                {item.line.text || " "}
+              </span>
+            </div>
+          )
+        )}
+      </div>
+    </div>
+  );
+}
 
 interface PromptTab {
   name: string;
@@ -132,6 +239,12 @@ export default function IncantationsRunes() {
   const [activeTab, setActiveTab] = useState(PROMPT_TABS[0].name);
   const [editedText, setEditedText] = useState<Record<string, string>>({});
   const [isDirty, setIsDirty] = useState<Record<string, boolean>>({});
+  const [diffVersionId, setDiffVersionId] = useState<number | null>(null);
+
+  const switchTab = (name: string) => {
+    setActiveTab(name);
+    setDiffVersionId(null);
+  };
 
   const { data: prompts, isLoading, refetch } = trpc.prompts.list.useQuery(undefined, {
     enabled: isAuthenticated,
@@ -233,7 +346,7 @@ export default function IncantationsRunes() {
             return (
               <button
                 key={tab.name}
-                onClick={() => setActiveTab(tab.name)}
+                onClick={() => switchTab(tab.name)}
                 className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-md text-sm text-left transition-colors duration-200 ${
                   isActive
                     ? "bg-primary/15 border border-primary/40 text-foreground"
@@ -257,7 +370,7 @@ export default function IncantationsRunes() {
             return (
               <button
                 key={tab.name}
-                onClick={() => setActiveTab(tab.name)}
+                onClick={() => switchTab(tab.name)}
                 className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-md text-sm text-left transition-colors duration-200 ${
                   isActive
                     ? "bg-primary/15 border border-primary/40 text-foreground"
@@ -371,22 +484,46 @@ export default function IncantationsRunes() {
                       </span>
                     </div>
                     {idx > 0 && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="gap-1.5 text-xs flex-shrink-0"
-                        onClick={() => {
-                          handleTextChange(v.promptText);
-                          toast.info(`v${v.version} loaded into editor — click Save to apply.`);
-                        }}
-                      >
-                        <RotateCcw className="w-3 h-3" />
-                        Restore
-                      </Button>
+                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className={`gap-1.5 text-xs ${diffVersionId === v.id ? "border-primary/60 text-primary bg-primary/5" : ""}`}
+                          onClick={() => setDiffVersionId(prev => prev === v.id ? null : v.id)}
+                        >
+                          <GitCompare className="w-3 h-3" />
+                          {diffVersionId === v.id ? "Hide Diff" : "Diff"}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="gap-1.5 text-xs"
+                          onClick={() => {
+                            handleTextChange(v.promptText);
+                            toast.info(`v${v.version} loaded into editor — click Save to apply.`);
+                          }}
+                        >
+                          <RotateCcw className="w-3 h-3" />
+                          Restore
+                        </Button>
+                      </div>
                     )}
                   </div>
                 ))}
               </div>
+
+              {/* Diff panel — compares selected old version against current editor content */}
+              {diffVersionId !== null && (() => {
+                const oldVer = versionHistory.find(v => v.id === diffVersionId);
+                if (!oldVer) return null;
+                const latestVer = versionHistory[0];
+                const label = `v${oldVer.version} → v${latestVer.version}${isDirty[activeTab] ? " (unsaved edits)" : ""}`;
+                return (
+                  <div className="mt-4 pt-4 border-t border-border/30">
+                    <DiffView before={oldVer.promptText} after={currentText} label={label} />
+                  </div>
+                );
+              })()}
             </div>
           )}
         </div>

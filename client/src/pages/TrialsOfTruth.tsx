@@ -1,11 +1,11 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
   CheckCircle2, XCircle, ArrowUpCircle, ChevronDown, ChevronRight,
   Loader2, ClipboardList, FileText, Layout, BoxSelect, ListTree, Braces, BookOpen,
-  Trash2, ChevronLeft, Download, RefreshCw,
+  Trash2, ChevronLeft, Download, RefreshCw, Scissors,
 } from "lucide-react";
 import { BboxOverlayToggle } from "@/components/BboxOverlay";
 import { trpc } from "@/lib/trpc";
@@ -66,6 +66,26 @@ const EMPTY_TEMPLATES: Partial<Record<TabId, string>> = {
   json:      JSON.stringify({ layout_type: "", content_blocks: [], page_summary: "" }, null, 2),
 };
 
+// ── JSON pruning ──────────────────────────────────────────────────────────────
+
+/** Recursively remove object keys whose value is "", [], or {}. Arrays are traversed but not filtered. */
+function pruneEmpty(val: unknown): unknown {
+  if (Array.isArray(val)) return val.map(pruneEmpty);
+  if (val !== null && typeof val === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
+      const p = pruneEmpty(v);
+      const isEmpty =
+        p === "" ||
+        (Array.isArray(p) && p.length === 0) ||
+        (p !== null && typeof p === "object" && !Array.isArray(p) && Object.keys(p as object).length === 0);
+      if (!isEmpty) out[k] = p;
+    }
+    return out;
+  }
+  return val;
+}
+
 function StatusBadge({ status }: { status: string }) {
   const variants: Record<string, string> = {
     queued:      "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
@@ -108,17 +128,41 @@ function CorrectionField({ label, value, onChange, onSave, isSaving }: {
   onSave?: () => void;
   isSaving?: boolean;
 }) {
+  const trimmed = value.trim();
+  const looksLikeJson = trimmed.startsWith("{") || trimmed.startsWith("[");
+
+  const handlePrune = () => {
+    try {
+      const pruned = pruneEmpty(JSON.parse(value));
+      onChange(JSON.stringify(pruned, null, 2));
+    } catch {
+      // Invalid JSON — silently ignore; button is only shown when field looks like JSON
+    }
+  };
+
   return (
     <div className="space-y-1 mt-3">
-      <div className="flex items-center justify-between">
-        <p className="text-xs text-muted-foreground">{label} <span className="opacity-60">(leave blank to clear)</span></p>
-        {onSave && (
-          <button onClick={onSave} disabled={isSaving}
-            className="flex items-center gap-1 text-xs px-2 py-0.5 rounded border border-border/40 text-muted-foreground hover:text-foreground hover:border-border transition-colors disabled:opacity-50">
-            {isSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle2 className="w-3 h-3" />}
-            Save section
-          </button>
-        )}
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs text-muted-foreground min-w-0 truncate">
+          {label} <span className="opacity-60">(leave blank to clear)</span>
+        </p>
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {looksLikeJson && trimmed.length > 2 && (
+            <button onClick={handlePrune}
+              className="flex items-center gap-1 text-xs px-2 py-0.5 rounded border border-border/40 text-muted-foreground hover:text-foreground hover:border-border transition-colors"
+              title="Remove object keys with empty string, empty array, or empty object values">
+              <Scissors className="w-3 h-3" />
+              Prune empty
+            </button>
+          )}
+          {onSave && (
+            <button onClick={onSave} disabled={isSaving}
+              className="flex items-center gap-1 text-xs px-2 py-0.5 rounded border border-border/40 text-muted-foreground hover:text-foreground hover:border-border transition-colors disabled:opacity-50">
+              {isSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle2 className="w-3 h-3" />}
+              Save section
+            </button>
+          )}
+        </div>
       </div>
       <Textarea value={value} onChange={e => onChange(e.target.value)}
         placeholder="Enter correction here…"
@@ -271,14 +315,18 @@ const TABS: { id: TabId; label: string; icon: React.ElementType }[] = [
   { id: "document",  label: "Document",  icon: BookOpen  },
 ];
 
-function HitlCard({ item, onResolved, isSelected, onToggle }: {
+function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate, onNext }: {
   item: any;
   onResolved: () => void;
   isSelected: boolean;
   onToggle: () => void;
+  isActive: boolean;
+  onActivate: () => void;
+  onNext: () => void;
 }) {
   const { toast } = useToast();
   const [expanded, setExpanded] = useState(false);
+  const cardRef = useRef<HTMLDivElement>(null);
   const [activeTab, setActiveTab] = useState<TabId>("text");
   const [corrections, setCorrections] = useState<Record<TabId, string>>(() => {
     const sd = item.ocr?.structuredData as any;
@@ -344,6 +392,14 @@ function HitlCard({ item, onResolved, isSelected, onToggle }: {
     saveCorrectionMut.mutate({ pageId: item.page?.id ?? item.pageId, field, value: corrections[field] });
   };
 
+  // Auto-expand and scroll when this card becomes the active keyboard target
+  useEffect(() => {
+    if (isActive) {
+      setExpanded(true);
+      cardRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }, [isActive]);
+
   const isPending = resolveMut.isPending || skipMut.isPending || escalateMut.isPending || retryMut.isPending;
 
   const setCorrection = (tab: TabId) => (v: string) =>
@@ -371,6 +427,30 @@ function HitlCard({ item, onResolved, isSelected, onToggle }: {
     }
   };
 
+  // Stable refs — updated every render so the keyboard effect always calls the latest versions
+  // of submit/onNext without needing to re-register the listener.
+  const submitRef = useRef(submit);
+  submitRef.current = submit;
+  const onNextRef = useRef(onNext);
+  onNextRef.current = onNext;
+
+  // Keyboard shortcuts: A = approve, F = flag/escalate, N = next item
+  useEffect(() => {
+    if (!isActive || !expanded) return;
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.tagName === "TEXTAREA" || target.tagName === "INPUT" || target.isContentEditable) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      switch (e.key.toLowerCase()) {
+        case "a": e.preventDefault(); submitRef.current("resolved");  break;
+        case "f": e.preventDefault(); submitRef.current("escalated"); break;
+        case "n": e.preventDefault(); onNextRef.current();            break;
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [isActive, expanded]);
+
   const pageImagePath = item.page?.rawPngUrl
     ? `/api/pipeline/pages/${item.page.rawPngUrl.replace(/.*\/workspace\//, "")}`
     : null;
@@ -378,7 +458,8 @@ function HitlCard({ item, onResolved, isSelected, onToggle }: {
   const hasCorrections = Object.values(corrections).some(v => v.trim());
 
   return (
-    <Card className="bg-card/50 backdrop-blur-sm border-border/50">
+    <div ref={cardRef}>
+    <Card className={`bg-card/50 backdrop-blur-sm border-border/50 transition-colors ${isActive ? "border-primary/30" : ""}`}>
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-3 min-w-0">
@@ -389,7 +470,7 @@ function HitlCard({ item, onResolved, isSelected, onToggle }: {
               onClick={e => e.stopPropagation()}
               className="flex-shrink-0 accent-primary cursor-pointer w-4 h-4"
             />
-            <button onClick={() => setExpanded(!expanded)} className="text-muted-foreground hover:text-foreground flex-shrink-0">
+            <button onClick={() => { const next = !expanded; setExpanded(next); if (next) onActivate(); }} className="text-muted-foreground hover:text-foreground flex-shrink-0">
               {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
             </button>
             <CardTitle className="text-base truncate">
@@ -526,15 +607,24 @@ function HitlCard({ item, onResolved, isSelected, onToggle }: {
               </Button>
             </div>
 
-            <div className="flex items-center justify-between">
-              {hasCorrections ? (
-                <p className="text-xs text-orange-400">
-                  {Object.values(corrections).filter(v => v.trim()).length} tab(s) with corrections — will be saved on Approve.
-                </p>
-              ) : (
-                <p className="text-xs text-muted-foreground">No corrections — Approve accepts OCR output as-is.</p>
-              )}
-              <div className="flex gap-2">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div className="flex items-center gap-3 min-w-0">
+                {hasCorrections ? (
+                  <p className="text-xs text-orange-400">
+                    {Object.values(corrections).filter(v => v.trim()).length} tab(s) with corrections — will be saved on Approve.
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">No corrections — Approve accepts OCR output as-is.</p>
+                )}
+                {isActive && (
+                  <p className="text-[10px] font-mono text-muted-foreground/40 flex-shrink-0 hidden sm:block">
+                    <kbd className="px-0.5 border border-border/30 rounded">A</kbd> approve ·{" "}
+                    <kbd className="px-0.5 border border-border/30 rounded">F</kbd> flag ·{" "}
+                    <kbd className="px-0.5 border border-border/30 rounded">N</kbd> next
+                  </p>
+                )}
+              </div>
+              <div className="flex gap-2 flex-shrink-0">
                 <Button variant="outline" size="sm" className="gap-1.5 text-yellow-500 border-yellow-500/30 hover:bg-yellow-500/10"
                   onClick={() => submit("escalated")} disabled={isPending}>
                   <ArrowUpCircle className="w-4 h-4" /> Escalate
@@ -554,6 +644,7 @@ function HitlCard({ item, onResolved, isSelected, onToggle }: {
         </CardContent>
       )}
     </Card>
+    </div>
   );
 }
 
@@ -566,6 +657,7 @@ export default function TrialsOfTruth() {
   const [statusFilter, setStatusFilter] = useState<"queued" | "resolved" | "escalated" | "skipped">("queued");
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [activeItemId, setActiveItemId] = useState<number | null>(null);
 
   const { data: items, isLoading, refetch } = trpc.hitl.list.useQuery({
     status: statusFilter,
@@ -734,13 +826,19 @@ export default function TrialsOfTruth() {
       ) : (
         <>
           <div className="space-y-3">
-            {items?.map((item: any) => (
+            {items?.map((item: any, idx: number) => (
               <HitlCard
                 key={item.id}
                 item={item}
                 onResolved={onAction}
                 isSelected={selected.has(item.id)}
                 onToggle={() => toggleSelect(item.id)}
+                isActive={activeItemId === item.id}
+                onActivate={() => setActiveItemId(item.id)}
+                onNext={() => {
+                  const nextItem = (items as any[])[idx + 1];
+                  if (nextItem) setActiveItemId(nextItem.id);
+                }}
               />
             ))}
           </div>
