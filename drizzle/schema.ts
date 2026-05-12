@@ -221,6 +221,7 @@ export const PIPELINE_STAGES = [
   "document_registration",
   "document_intelligence",
   "pdf_to_png",
+  "pdf_text_extract",
   "layout_analysis",
   "layout_classification",
   "bbox_detection",
@@ -250,6 +251,7 @@ export const STAGE_PHASES: Record<PipelineStage, 1 | 2 | 3 | 0> = {
   document_registration: 1,
   document_intelligence: 1,
   pdf_to_png: 1,
+  pdf_text_extract: 1,
   layout_analysis: 1,
   layout_classification: 1,
   bbox_detection: 1,
@@ -490,6 +492,10 @@ export const documentPages = pgTable("document_pages", {
   ocrConfidence: integer("ocr_confidence"),
   /** Page label as printed on the page (e.g. "i", "42") — differs from the sequential PDF pageNumber */
   printedPageLabel: varchar("printed_page_label", { length: 32 }),
+  /** Raw text extracted directly from the PDF text layer by pdftotext (null for image-only pages). */
+  nativeText: text("native_text"),
+  /** True when pdftotext found a usable embedded text layer on this page. */
+  hasEmbeddedText: boolean("has_embedded_text").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (t) => ({
@@ -515,6 +521,9 @@ export const ocrResults = pgTable("ocr_results", {
   pageId: integer("page_id").notNull(),
   rawText: text("raw_text"),
   markdownText: text("markdown_text"),
+  /** Token-level F1 similarity (0–1) between OCR rawText and the native PDF text layer.
+   *  Null when no embedded text layer was present on this page. */
+  nativeSimilarity: real("native_similarity"),
   structuredData: jsonb("structured_data").$type<Record<string, unknown>>(),
   layoutMetadata: jsonb("layout_metadata").$type<Record<string, unknown>>(),
   confidence: integer("confidence").default(0),
@@ -580,6 +589,8 @@ export const HITL_FLAG_CATEGORIES = [
   "layout_ambiguous",
   "content_type_conflict",
   "continuity_error",
+  "stage_failure",
+  "native_text_divergence",
   "manual_flag",
 ] as const;
 export type HitlFlagCategory = (typeof HITL_FLAG_CATEGORIES)[number];

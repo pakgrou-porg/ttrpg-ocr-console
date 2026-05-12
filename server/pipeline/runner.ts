@@ -341,6 +341,9 @@ function mergeTabularExtraction(
 
 const HITL_CONFIDENCE_THRESHOLD = pipelineConfig.pipeline.hitlConfidenceThreshold;
 
+/** F1 score below this triggers HITL for pages that have a native PDF text layer. */
+const NATIVE_SIMILARITY_THRESHOLD = 0.75;
+
 // ── Public entry point ────────────────────────────────────────────────────────
 
 export function startJob(jobId: number): void {
@@ -424,6 +427,28 @@ async function _runJob(jobId: number): Promise<void> {
   let pageFiles = await convertToPages(sourceFile, pagesDir, firstPage, Math.min(lastPage, totalDocPages));
   if (pageFiles.length === 0) throw new Error("No pages produced from source file");
 
+  // ── Stage: pdf_text_extract ───────────────────────────────────────────────
+  // Must run while sourceFile is still on disk — Drive temp files are deleted
+  // immediately after this block. Non-fatal: image-only PDFs produce no usable
+  // text and simply leave every entry in nativePageTexts as null.
+  const nativePageTexts: Array<string | null> = new Array(pageFiles.length).fill(null);
+  if (/\.pdf$/i.test(sourceFile)) {
+    await updateIngestionJobStatus(jobId, { currentStage: "pdf_text_extract" });
+    try {
+      const rawTexts = await extractNativePdfTextBatch(
+        sourceFile, firstPage, Math.min(lastPage, totalDocPages),
+      );
+      for (let i = 0; i < pageFiles.length; i++) {
+        const t = rawTexts[i] ?? "";
+        nativePageTexts[i] = hasUsableEmbeddedText(t) ? t : null;
+      }
+      const embeddedCount = nativePageTexts.filter(t => t !== null).length;
+      console.log(`[Pipeline] Job ${jobId}: native PDF text — ${embeddedCount}/${pageFiles.length} pages have embedded text`);
+    } catch (err: any) {
+      console.warn(`[Pipeline] Job ${jobId}: pdf_text_extract failed (non-fatal): ${err.message}`);
+    }
+  }
+
   // Delete the Drive temp download now that pages are extracted
   if (tempDownloadPath) await deleteLocalFile(tempDownloadPath);
 
@@ -439,6 +464,14 @@ async function _runJob(jobId: number): Promise<void> {
       rawPngUrl: pageFiles[i],
     });
     pageIds.push(page.id);
+  }
+
+  // Persist native text and embedded-text flag now that page IDs are known
+  for (let i = 0; i < pageIds.length; i++) {
+    const nt = nativePageTexts[i];
+    if (nt !== null) {
+      await updateDocumentPage(pageIds[i], { nativeText: nt, hasEmbeddedText: true });
+    }
   }
 
   // ── Stage: preprocess (binarize/denoise) — optional ──────────────────────
@@ -524,6 +557,7 @@ async function _runJob(jobId: number): Promise<void> {
     const rawPagePath = rawPageFiles[i];   // original full-colour — use for visual content stages
     const stagesFailed: string[] = [];
     let ocrConfidence = 0;
+    let nativeSimilarity: number | null = null;
     let ocrResultId: number | null = null;
     let currentRawText: string | null = null; // set when OCR succeeds; used by content_break_detect
 
@@ -596,12 +630,18 @@ async function _runJob(jobId: number): Promise<void> {
       ocrConfidence = typeof data.confidence === "number" ? data.confidence : 0;
 
       currentRawText = buildRawText(data);
+      const nt = nativePageTexts[i];
+      nativeSimilarity = nt !== null ? nativeTextSimilarity(nt, currentRawText) : null;
+      if (nativeSimilarity !== null) {
+        console.log(`[Pipeline] Job ${jobId} p${pageNum} native similarity: ${Math.round(nativeSimilarity * 100)}%`);
+      }
       const ocrResult = await createOcrResult({
         pageId,
         structuredData: data,
         rawText: currentRawText,
         markdownText: buildMarkdownText(data),
         confidence: ocrConfidence,
+        nativeSimilarity,
         status: "pass1_complete",
         pass1Model: r.model,
         auditLog: [{ timestamp: new Date().toISOString(), action: "pass1", model: r.model }],
@@ -719,18 +759,24 @@ async function _runJob(jobId: number): Promise<void> {
       }
     }
 
-    // Queue for HITL review: always if a stage failed or confidence is below threshold
-    const needsHitl = stagesFailed.length > 0 || ocrConfidence < HITL_CONFIDENCE_THRESHOLD;
+    // Queue for HITL review: stage failure, low model confidence, or significant
+    // divergence from the embedded PDF text (ground truth for digital-native PDFs).
+    const poorNativeAlignment = nativeSimilarity !== null && nativeSimilarity < NATIVE_SIMILARITY_THRESHOLD;
+    const needsHitl = stagesFailed.length > 0 || ocrConfidence < HITL_CONFIDENCE_THRESHOLD || poorNativeAlignment;
     if (needsHitl) {
       const reasonParts: string[] = [`Page ${pageNum} of ${totalDocPages}`];
       if (stagesFailed.length > 0) reasonParts.push(`failed stages: ${stagesFailed.join(", ")}`);
       if (ocrConfidence < HITL_CONFIDENCE_THRESHOLD) reasonParts.push(`low confidence: ${ocrConfidence}%`);
+      if (poorNativeAlignment) reasonParts.push(`native text divergence: ${Math.round(nativeSimilarity! * 100)}% similarity`);
       await createHitlItem({
         pageId,
         ocrResultId: ocrResultId ?? undefined,
         reason: reasonParts.join(" — "),
-        flagCategory: stagesFailed.length > 0 ? "stage_failure" : "low_confidence",
-        priority: stagesFailed.includes("ocr_extraction") || ocrConfidence < 50 ? "high" : "medium",
+        flagCategory: stagesFailed.length > 0 ? "stage_failure"
+          : poorNativeAlignment ? "native_text_divergence"
+          : "low_confidence",
+        priority: stagesFailed.includes("ocr_extraction") || ocrConfidence < 50
+          || (poorNativeAlignment && nativeSimilarity! < 0.5) ? "high" : "medium",
       });
     }
 
@@ -984,6 +1030,58 @@ async function preprocessPageImages(
   }
 
   return results;
+}
+
+/**
+ * Extract embedded text from a block of PDF pages in a single pdftotext call.
+ * Pages are separated by form-feed (\f) in the output; returns one string per
+ * page. Empty strings indicate pages with no embedded text layer.
+ */
+async function extractNativePdfTextBatch(
+  pdfPath: string,
+  firstPage: number,
+  lastPage: number,
+): Promise<string[]> {
+  const { stdout } = await execFileAsync(
+    "pdftotext",
+    ["-f", String(firstPage), "-l", String(lastPage), "-layout", pdfPath, "-"],
+    { timeout: 60_000 },
+  );
+  // pdftotext terminates each page with \f, including the last one
+  const pages = stdout.split("\f");
+  if (pages.length > 0 && pages[pages.length - 1].trim() === "") pages.pop();
+  const count = lastPage - firstPage + 1;
+  while (pages.length < count) pages.push("");
+  return pages.slice(0, count);
+}
+
+/**
+ * Returns true when pdftotext output contains enough printable characters to
+ * be considered a real embedded text layer. Image-only pages produce empty or
+ * near-empty output (whitespace, stray control chars) and return false.
+ */
+function hasUsableEmbeddedText(raw: string): boolean {
+  return raw.replace(/[\s\x00-\x1F\x7F]/g, "").length >= 50;
+}
+
+/**
+ * Token-level F1 similarity between native PDF text and OCR output (0–1).
+ * Tokenises on word boundaries, deduplicates each side, then measures
+ * precision and recall of OCR tokens against the native token set.
+ * Returns 0 when either input produces no tokens.
+ */
+function nativeTextSimilarity(native: string, ocr: string): number {
+  const tokenize = (s: string): string[] => s.toLowerCase().match(/\b[a-z0-9']+\b/g) ?? [];
+  const tokNative = tokenize(native);
+  const tokOcr    = tokenize(ocr);
+  if (tokNative.length === 0 || tokOcr.length === 0) return 0;
+  const uniqNative = Array.from(new Set(tokNative));
+  const setOcr     = new Set(tokOcr);
+  const intersection = uniqNative.filter(t => setOcr.has(t)).length;
+  const precision = intersection / setOcr.size;
+  const recall    = intersection / uniqNative.length;
+  if (precision + recall === 0) return 0;
+  return Math.round((2 * precision * recall / (precision + recall)) * 100) / 100;
 }
 
 async function countPdfPages(pdfPath: string): Promise<number> {
