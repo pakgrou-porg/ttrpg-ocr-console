@@ -514,6 +514,7 @@ export const ocrResults = pgTable("ocr_results", {
   id: serial("id").primaryKey(),
   pageId: integer("page_id").notNull(),
   rawText: text("raw_text"),
+  markdownText: text("markdown_text"),
   structuredData: jsonb("structured_data").$type<Record<string, unknown>>(),
   layoutMetadata: jsonb("layout_metadata").$type<Record<string, unknown>>(),
   confidence: integer("confidence").default(0),

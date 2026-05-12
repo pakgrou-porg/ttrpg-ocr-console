@@ -46,7 +46,8 @@ RUN pnpm build
 FROM node:22-alpine AS runner
 
 # poppler-utils provides pdftoppm, used by the pipeline to convert PDFs to PNGs
-RUN apk add --no-cache poppler-utils
+# vips is the runtime library required by Sharp for image preprocessing
+RUN apk add --no-cache poppler-utils vips
 
 # Install the same pinned pnpm version
 RUN npm install -g pnpm@10.4.1
@@ -77,6 +78,11 @@ COPY --from=builder /app/drizzle ./drizzle
 # SQL migration files from the drizzle/ directory. It replaces `pnpm db:push`
 # (which requires drizzle-kit, a devDependency) entirely.
 COPY migrate.mjs ./migrate.mjs
+
+# Copy the default pipeline configuration.
+# Override at runtime by mounting your own file:
+#   docker run -v ./pipeline-config.yaml:/app/pipeline-config.yaml ...
+COPY pipeline-config.yaml ./pipeline-config.yaml
 
 # Expose the application port (default 3000; overridable via PORT env var)
 EXPOSE 3000

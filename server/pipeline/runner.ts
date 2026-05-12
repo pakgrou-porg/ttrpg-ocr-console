@@ -2,6 +2,8 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { readFile, mkdir, readdir } from "fs/promises";
 import { join, basename } from "path";
+import { pipelineConfig } from "./config";
+import type { BinarizeConfig } from "./config";
 import {
   getIngestionJobById, updateIngestionJobStatus,
   createIngestionJob,
@@ -223,7 +225,7 @@ class Semaphore {
   }
 }
 
-const PAGE_LLM_SEMAPHORE = new Semaphore(4);
+const PAGE_LLM_SEMAPHORE = new Semaphore(pipelineConfig.pipeline.maxLlmConcurrency);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -252,6 +254,42 @@ function buildRawText(data: Record<string, unknown>): string {
       return caption + headers + rows;
     }
     return b.text ?? "";
+  }).filter(Boolean).join("\n\n");
+}
+
+/**
+ * Build a layout-preserving Markdown string from OCR content blocks.
+ * Tables become GFM pipe tables; headings become # / ## / ###.
+ * Falls back to buildRawText when content_blocks is absent.
+ */
+function buildMarkdownText(data: Record<string, unknown>): string {
+  if (!Array.isArray(data.content_blocks)) return buildRawText(data);
+
+  return (data.content_blocks as any[]).map((b: any) => {
+    switch (b.type) {
+      case "heading":    return `## ${b.text ?? ""}`;
+      case "subheading": return `### ${b.text ?? ""}`;
+      case "table": {
+        const lines: string[] = [];
+        if (b.caption) lines.push(`**${b.caption}**`);
+        const headers: string[] = Array.isArray(b.headers) ? b.headers : [];
+        if (headers.length > 0) {
+          lines.push(`| ${headers.join(" | ")} |`);
+          lines.push(`| ${headers.map(() => "---").join(" | ")} |`);
+        }
+        if (Array.isArray(b.rows)) {
+          for (const row of b.rows as string[][]) {
+            const cells = headers.length > 0
+              ? row.slice(0, headers.length).concat(Array(Math.max(0, headers.length - row.length)).fill(""))
+              : row;
+            lines.push(`| ${cells.join(" | ")} |`);
+          }
+        }
+        return lines.join("\n");
+      }
+      default:
+        return b.text ?? "";
+    }
   }).filter(Boolean).join("\n\n");
 }
 
@@ -301,7 +339,7 @@ function mergeTabularExtraction(
   return { ...ocrData, content_blocks: merged };
 }
 
-const HITL_CONFIDENCE_THRESHOLD = 80;
+const HITL_CONFIDENCE_THRESHOLD = pipelineConfig.pipeline.hitlConfidenceThreshold;
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
@@ -403,14 +441,50 @@ async function _runJob(jobId: number): Promise<void> {
     pageIds.push(page.id);
   }
 
+  // ── Stage: preprocess (binarize/denoise) — optional ──────────────────────
+  // rawPageFiles = original full-colour PNGs (always preserved).
+  // pageFiles    = preprocessed versions after this block (used for all text/OCR/tabular stages).
+  //
+  // IMPORTANT: stages that extract or describe visual content (illustrations,
+  // maps, photographs) MUST use rawPageFiles paths, not pageFiles, so that colour
+  // information and image quality are preserved. Text-extraction stages (layout,
+  // bbox, OCR, tabular) benefit from the cleaner binarized versions.
+  const rawPageFiles = [...pageFiles]; // snapshot originals before possible reassignment
+
+  if (pipelineConfig.binarize.enabled) {
+    await updateIngestionJobStatus(jobId, { currentStage: "preprocess" });
+    const preprocessDir = join(jobWorkspace, "preprocessed");
+    const preprocessed = await preprocessPageImages(pageFiles, preprocessDir, pipelineConfig.binarize);
+
+    // Update DB records with the preprocessed URLs; pipeline uses preprocessed paths
+    for (let i = 0; i < preprocessed.length; i++) {
+      if (preprocessed[i] !== pageFiles[i]) {
+        await updateDocumentPage(pageIds[i], {
+          preprocessedPngUrl: preprocessed[i],
+          wasPreprocessed: true,
+          preprocessingApplied: [
+            pipelineConfig.binarize.grayscale ? "grayscale" : null,
+            pipelineConfig.binarize.sharpenSigma > 0 ? `sharpen(${pipelineConfig.binarize.sharpenSigma})` : null,
+            pipelineConfig.binarize.threshold > 0 ? `threshold(${pipelineConfig.binarize.threshold})` : "threshold(otsu)",
+            pipelineConfig.binarize.denoise ? "denoise" : null,
+          ].filter(Boolean).join("+"),
+        });
+      }
+    }
+    pageFiles = preprocessed;
+    console.log(`[Pipeline] Job ${jobId}: preprocessing applied to ${preprocessed.length} pages`);
+  }
+
   // ── Stage: document_intelligence (first block only) ───────────────────────
+  // Uses ORIGINAL images: cover art, publisher logos, and background colours
+  // are lost in binarized versions and are needed for accurate metadata extraction.
   if (pageOffset === 0) {
     await updateIngestionJobStatus(jobId, {
       status: "pass1_ocr",
       currentStage: "document_intelligence",
     });
 
-    const sampleFiles = pageFiles.slice(0, Math.min(2, pageFiles.length));
+    const sampleFiles = rawPageFiles.slice(0, Math.min(2, rawPageFiles.length));
     try {
       const sampleContent: UserContentPart[] = [];
       for (const f of sampleFiles) sampleContent.push(await imageContent(f));
@@ -440,10 +514,14 @@ async function _runJob(jobId: number): Promise<void> {
   let processedPages = 0;
   let prevRawText: string | null = null; // tail of previous page — fed to content_break_detect
 
+  // Region types that contain visual content — original image must be used for these.
+  const VISUAL_REGION_TYPES = new Set(["illustration", "image", "map", "graphic", "advertisement"]);
+
   for (let i = 0; i < pageFiles.length; i++) {
     const pageNum = pageOffset + i + 1;
     const pageId = pageIds[i];
-    const pagePath = pageFiles[i];
+    const pagePath = pageFiles[i];         // preprocessed (binarized/grayscale) — use for text stages
+    const rawPagePath = rawPageFiles[i];   // original full-colour — use for visual content stages
     const stagesFailed: string[] = [];
     let ocrConfidence = 0;
     let ocrResultId: number | null = null;
@@ -451,7 +529,10 @@ async function _runJob(jobId: number): Promise<void> {
 
     await updateIngestionJobStatus(jobId, { currentStage: "layout_analysis", processedPages });
 
+    // Preprocessed image: used for layout, bbox, OCR, tabular (text clarity wins)
     const imgPart = await imageContent(pagePath);
+    // Original image: lazily resolved below only when visual regions are detected
+    let origImgPart: Awaited<ReturnType<typeof imageContent>> | null = null;
 
     await PAGE_LLM_SEMAPHORE.acquire();
     console.log(`[Pipeline] Job ${jobId}: page ${pageNum} acquired LLM slot`);
@@ -486,6 +567,18 @@ async function _runJob(jobId: number): Promise<void> {
       console.warn(`[Pipeline] Job ${jobId} p${pageNum} bbox_detection: ${err.message}`);
     }
 
+    // Lazily load the original full-colour image when the page contains visual
+    // content regions (illustrations, maps, etc.).  Any future stage that
+    // describes, captions, or extracts these regions MUST use origImgPart instead
+    // of imgPart so colour and fine detail are preserved.
+    // origImgPart is intentionally unused here — it is the pre-loaded handle for
+    // the upcoming image_extraction stage (see TODO: add image captioning stage).
+    const hasVisualRegions = regions.some((r: any) => VISUAL_REGION_TYPES.has(r.type));
+    if (hasVisualRegions && rawPagePath !== pagePath) {
+      origImgPart = await imageContent(rawPagePath);
+    }
+    void origImgPart; // acknowledged — consumed by future image_extraction stage
+
     // ocr_extraction
     try {
       await updateIngestionJobStatus(jobId, { currentStage: "ocr_extraction" });
@@ -507,11 +600,12 @@ async function _runJob(jobId: number): Promise<void> {
         pageId,
         structuredData: data,
         rawText: currentRawText,
+        markdownText: buildMarkdownText(data),
         confidence: ocrConfidence,
         status: "pass1_complete",
         pass1Model: r.model,
         auditLog: [{ timestamp: new Date().toISOString(), action: "pass1", model: r.model }],
-      });
+      } as any);
       ocrResultId = ocrResult.id;
 
       const printedPageLabel = extractPrintedPageLabel(data);
@@ -613,9 +707,10 @@ async function _runJob(jobId: number): Promise<void> {
             await updateOcrResult(existing.id, {
               structuredData: mergedData,
               rawText: buildRawText(mergedData),
+              markdownText: buildMarkdownText(mergedData),
               auditLog: [...((existing.auditLog as any[]) ?? []),
                 { timestamp: new Date().toISOString(), action: "tabular_extraction", model: tabResult.model }],
-            });
+            } as any);
           }
         }
       } catch (err: any) {
@@ -736,7 +831,11 @@ export async function retryPageStages(
     ctxParts.push(`Next page begins with:\n${nextOcr.rawText.slice(0, 200).trim()}`);
   const surroundingContext = ctxParts.length > 0 ? ctxParts.join("\n\n") : undefined;
 
-  const imgPart = await imageContent(page.rawPngUrl);
+  // For text/OCR stages use the preprocessed image when available — binarization
+  // yields cleaner text extraction. rawPngUrl is always the fallback (and is the
+  // correct choice for any future visual-content stages in retry).
+  const ocrImgPath = (page.wasPreprocessed && page.preprocessedPngUrl) ? page.preprocessedPngUrl : page.rawPngUrl!;
+  const imgPart = await imageContent(ocrImgPath);
   const stagesFailed: string[] = [];
   let ocrConfidence = 0;
 
@@ -789,22 +888,23 @@ export async function retryPageStages(
         ocrConfidence = typeof data.confidence === "number" ? data.confidence : 0;
 
         const rawText = buildRawText(data);
+        const markdownText = buildMarkdownText(data);
         const printedPageLabel = extractPrintedPageLabel(data);
 
         const existing = await getOcrResultByPageId(pageId);
         if (existing) {
           await updateOcrResult(existing.id, {
-            structuredData: data, rawText, confidence: ocrConfidence,
+            structuredData: data, rawText, markdownText, confidence: ocrConfidence,
             status: "pass1_complete", pass1Model: r.model,
             auditLog: [...((existing.auditLog as any[]) ?? []),
               { timestamp: new Date().toISOString(), action: "retry", model: r.model }],
-          });
+          } as any);
         } else {
           await createOcrResult({
-            pageId, structuredData: data, rawText, confidence: ocrConfidence,
+            pageId, structuredData: data, rawText, markdownText, confidence: ocrConfidence,
             status: "pass1_complete", pass1Model: r.model,
             auditLog: [{ timestamp: new Date().toISOString(), action: "retry", model: r.model }],
-          });
+          } as any);
         }
         await updateDocumentPage(pageId, {
           ocrCompleted: true, ocrConfidence,
@@ -843,6 +943,49 @@ export async function retryPageStages(
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/**
+ * Apply binarization / denoising preprocessing to a set of page images using Sharp.
+ * Returns the preprocessed file paths (in a new outputDir) on success, or the
+ * original paths unchanged if Sharp is not installed or preprocessing fails.
+ */
+async function preprocessPageImages(
+  files: string[],
+  outputDir: string,
+  opts: BinarizeConfig,
+): Promise<string[]> {
+  // Dynamic import — graceful no-op if Sharp isn't installed
+  let sharpFn: ((input: string) => any) | null = null;
+  try {
+    const mod = await import("sharp");
+    sharpFn = (mod.default ?? mod) as (input: string) => any;
+  } catch {
+    console.warn("[Pipeline] Sharp not installed — skipping image preprocessing. Run: pnpm add sharp");
+    return files;
+  }
+
+  await mkdir(outputDir, { recursive: true });
+  const results: string[] = [];
+
+  for (const src of files) {
+    const dest = join(outputDir, basename(src));
+    try {
+      let img = sharpFn(src);
+      if (opts.grayscale) img = img.grayscale();
+      if (opts.denoise)   img = img.median(3);
+      if (opts.sharpenSigma > 0) img = img.sharpen({ sigma: opts.sharpenSigma });
+      // threshold(0) means Otsu automatic; Sharp's threshold() accepts 0–255
+      img = img.threshold(opts.threshold);
+      await img.png({ compressionLevel: 6 }).toFile(dest);
+      results.push(dest);
+    } catch (err: any) {
+      console.warn(`[Pipeline] Preprocessing failed for ${src}: ${err.message} — using original`);
+      results.push(src);
+    }
+  }
+
+  return results;
+}
+
 async function countPdfPages(pdfPath: string): Promise<number> {
   try {
     const { stdout } = await execFileAsync("pdfinfo", [pdfPath], { timeout: 30_000 });
@@ -866,7 +1009,7 @@ async function convertToPages(
     const outputPrefix = join(pagesDir, "page");
     await execFileAsync(
       "pdftoppm",
-      ["-png", "-r", "96", "-f", String(firstPage), "-l", String(lastPage), sourceFile, outputPrefix],
+      ["-png", "-r", String(pipelineConfig.pipeline.pdfDpi), "-f", String(firstPage), "-l", String(lastPage), sourceFile, outputPrefix],
       { timeout: 180_000 },
     );
     const files = await readdir(pagesDir);

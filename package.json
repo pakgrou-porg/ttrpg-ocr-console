@@ -1,6 +1,6 @@
 {
   "name": "ttrpg-ocr-console",
-  "version": "0.1.46",
+  "version": "0.1.56",
   "type": "module",
   "license": "MIT",
   "scripts": {
@@ -71,6 +71,7 @@
     "react-hook-form": "^7.64.0",
     "react-resizable-panels": "^3.0.6",
     "recharts": "^2.15.4",
+    "sharp": "^0.33.5",
     "sonner": "^2.0.7",
     "streamdown": "^1.4.0",
     "superjson": "^1.13.3",
@@ -78,6 +79,7 @@
     "tailwindcss-animate": "^1.0.7",
     "vaul": "^1.1.2",
     "wouter": "^3.3.5",
+    "yaml": "^2.7.0",
     "zod": "^4.1.12"
   },
   "devDependencies": {

@@ -1,0 +1,50 @@
+# ─── TTRPG OCR Pipeline Configuration ────────────────────────────────────────
+# This file controls pipeline-wide behaviour. Volume-mount it into the container
+# to override defaults without rebuilding the image:
+#
+#   docker run -v ./pipeline-config.yaml:/app/pipeline-config.yaml ...
+#
+# All fields are optional — omitted keys fall back to the built-in defaults
+# shown here. The file is re-read on each server startup; restart required for
+# changes to take effect.
+
+# ── PDF rendering ─────────────────────────────────────────────────────────────
+pipeline:
+  # DPI used when converting PDF pages to PNG images.
+  # Higher values produce larger, higher-quality images but use more memory.
+  # 96 is the old default. 150 is a good balance for OCR.
+  pdfDpi: 150
+
+  # Pages with OCR confidence below this percentage are queued for HITL review.
+  hitlConfidenceThreshold: 80
+
+  # Maximum number of pages that may be in LLM inference simultaneously.
+  # Lower this if the local inference server timeouts under load.
+  maxLlmConcurrency: 4
+
+# ── Image preprocessing (binarization / denoising) ───────────────────────────
+# Applied to page images after PDF→PNG conversion and before LLM OCR stages.
+# Binarization converts scanned pages to clean black-and-white, which
+# significantly improves OCR accuracy on low-quality or noisy scans.
+#
+# Requires Sharp to be installed: pnpm add sharp
+# On Alpine/Docker: apk add --no-cache vips
+binarize:
+  # Set to false to skip preprocessing entirely (e.g. for born-digital PDFs).
+  enabled: true
+
+  # Convert to grayscale before thresholding (almost always desirable).
+  grayscale: true
+
+  # Sharpening strength (sigma). 0 disables sharpening.
+  # Values 0.5–2.0 are reasonable; higher values can introduce halos.
+  sharpenSigma: 1.2
+
+  # Binarization threshold (0–255). 0 = Otsu automatic threshold.
+  # Otsu works well for most scanned documents. Set to e.g. 140 if auto-threshold
+  # is cutting off light text.
+  threshold: 0
+
+  # Apply 3×3 median filter before thresholding to reduce salt-and-pepper noise.
+  # Useful for very noisy scans but adds processing time.
+  denoise: false

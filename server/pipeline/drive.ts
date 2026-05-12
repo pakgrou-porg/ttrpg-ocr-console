@@ -3,6 +3,7 @@ import { unlink } from "fs/promises";
 import { pipeline } from "stream/promises";
 import { Readable } from "stream";
 import { ENV } from "../_core/env";
+import { fetchWithRetry, isNetworkError, sleep, NETWORK_RETRY_DELAYS_MS } from "../_core/fetch-retry";
 import { encryptSecret, decryptSecret } from "../crypto";
 import { getDb } from "../db";
 import { googleOAuthTokens } from "../../drizzle/schema";
@@ -21,7 +22,7 @@ interface TokenRow {
 }
 
 async function refreshAccessToken(refreshToken: string): Promise<{ accessToken: string; expiresAt: Date }> {
-  const res = await fetch("https://oauth2.googleapis.com/token", {
+  const res = await fetchWithRetry("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -128,22 +129,42 @@ export async function clearGoogleTokens(): Promise<void> {
 // ── File operations ───────────────────────────────────────────────────────────
 
 export async function downloadDriveFile(fileId: string, destPath: string): Promise<string> {
-  const token = await getGoogleAccessToken();
-  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
-    headers: { Authorization: `Bearer ${token}` },
-    signal: AbortSignal.timeout(300_000), // 5 min for large PDFs
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`Drive download failed: ${res.status} ${text.slice(0, 200)}`);
+  let networkAttempt = 0;
+  for (;;) {
+    // Re-fetch a fresh access token on every attempt — it may have been refreshed
+    // during a long network-down period, or the previous token may have expired.
+    const token = await getGoogleAccessToken();
+    try {
+      const res = await fetchWithRetry(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`Drive download failed: ${res.status} ${text.slice(0, 200)}`);
+      }
+      await pipeline(Readable.fromWeb(res.body as any), createWriteStream(destPath));
+      return destPath;
+    } catch (err: unknown) {
+      // fetchWithRetry already exhausted its network budget for the fetch phase;
+      // this outer loop handles stream-level failures (pipe broken mid-transfer).
+      if (isNetworkError(err)) {
+        const delay = NETWORK_RETRY_DELAYS_MS[networkAttempt++];
+        if (delay === undefined) throw err;
+        console.warn(
+          `[drive] Stream error on ${fileId} (${(err as any)?.message?.slice(0, 80)}), ` +
+          `waiting ${delay / 1_000}s before retry ${networkAttempt}/${NETWORK_RETRY_DELAYS_MS.length}…`,
+        );
+        await sleep(delay);
+      } else {
+        throw err;
+      }
+    }
   }
-  await pipeline(Readable.fromWeb(res.body as any), createWriteStream(destPath));
-  return destPath;
 }
 
 export async function getDriveFileName(fileId: string): Promise<string> {
   const token = await getGoogleAccessToken();
-  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=name`, {
+  const res = await fetchWithRetry(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=name`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) throw new Error(`Drive metadata fetch failed: ${res.status}`);
