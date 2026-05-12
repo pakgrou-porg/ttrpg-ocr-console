@@ -1,29 +1,6 @@
 import { getLlmProviderById, getStageInscriptionByStage, getSystemPromptByName, insertLlmTimingMetric } from "../db";
 import { decryptSecret } from "../crypto";
-
-const RETRYABLE_STATUS = new Set([429, 502, 503, 504]);
-const RETRY_DELAYS_MS = [1_000, 2_000, 4_000];
-
-async function fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < RETRY_DELAYS_MS.length + 1; attempt++) {
-    try {
-      const res = await fetch(url, init);
-      if (res.ok || !RETRYABLE_STATUS.has(res.status)) return res;
-      const errText = await res.text().catch(() => "");
-      lastError = new Error(`HTTP ${res.status}: ${errText.slice(0, 200)}`);
-      console.warn(`[invoke] attempt ${attempt + 1} got ${res.status}, retrying…`);
-    } catch (err: any) {
-      if (err?.name === "AbortError") throw err; // don't retry timeouts
-      lastError = err;
-      console.warn(`[invoke] attempt ${attempt + 1} network error: ${err?.message}`);
-    }
-    if (attempt < RETRY_DELAYS_MS.length) {
-      await new Promise(r => setTimeout(r, RETRY_DELAYS_MS[attempt]));
-    }
-  }
-  throw lastError;
-}
+import { fetchWithRetry, PER_ATTEMPT_TIMEOUT_MS } from "../_core/fetch-retry";
 
 export interface StageContent {
   type: "text";
@@ -107,15 +84,13 @@ async function dispatchToProvider(
   withRetry = true,
 ): Promise<StageInvokeResult> {
   const { url, headers, body } = await buildProviderCall(provider, messages, inscription, options);
-  const fetchFn = withRetry ? fetchWithRetry : fetch;
+  const init = { method: "POST", headers, body: JSON.stringify(body) };
 
   const startMs = Date.now();
-  const res = await fetchFn(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(300_000),
-  });
+  // fetchWithRetry manages its own per-attempt timeout; bare fetch gets one fixed timeout.
+  const res = withRetry
+    ? await fetchWithRetry(url, init)
+    : await fetch(url, { ...init, signal: AbortSignal.timeout(PER_ATTEMPT_TIMEOUT_MS) });
 
   if (!res.ok) {
     const errText = await res.text().catch(() => "");
