@@ -71,6 +71,13 @@
       "when": 1747339500000,
       "tag": "0009_native_pdf_text",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1747425900000,
+      "tag": "0010_normalised_text",
+      "breakpoints": true
     }
   ]
 }

@@ -23,6 +23,7 @@ import TheVaultNexus from "@/pages/TheVaultNexus";
 import TheChronicles from "@/pages/TheChronicles";
 import ArchivistsDesk from "@/pages/ArchivistsDesk";
 import TrialsOfTruth from "@/pages/TrialsOfTruth";
+import TheScrivenersLens from "@/pages/TheScrivenersLens";
 import NotFound from "@/pages/NotFound";
 
 function Router() {
@@ -78,6 +79,11 @@ function Router() {
         <Route path="/inner-sanctum/trials-of-truth">
           <AdminGate>
             <TrialsOfTruth />
+          </AdminGate>
+        </Route>
+        <Route path="/inner-sanctum/scriveners-lens">
+          <AdminGate>
+            <TheScrivenersLens />
           </AdminGate>
         </Route>
         <Route path="/inner-sanctum/the-artificers">

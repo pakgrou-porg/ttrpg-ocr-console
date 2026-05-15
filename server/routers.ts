@@ -1617,6 +1617,36 @@ export const appRouter = router({
         }
       }),
 
+    /** Per-page text quality data for the Scrivener's Lens review UI.
+     *  Returns every page in the document with its OCR texts and quality metrics. */
+    textQuality: protectedProcedure
+      .input(z.object({ documentId: z.number().int() }))
+      .query(async ({ input }) => {
+        const pages = await getPagesByDocumentId(input.documentId);
+        if (pages.length === 0) return [];
+        const pageIds = pages.map(p => p.id);
+        const ocrs = await getOcrResultsByPageIds(pageIds);
+        const ocrMap = new Map(ocrs.map(r => [r.pageId, r]));
+        return pages.map(page => {
+          const ocr = ocrMap.get(page.id) ?? null;
+          return {
+            pageId:           page.id,
+            pageNumber:       page.pageNumber,
+            printedPageLabel: page.printedPageLabel ?? null,
+            layoutType:       page.layoutType ?? null,
+            hasEmbeddedText:  page.hasEmbeddedText,
+            nativeText:       page.nativeText ?? null,
+            contentRegions:   (page.contentRegions ?? []) as any[],
+            isFlagged:        page.isFlagged,
+            ocrConfidence:    ocr?.confidence ?? null,
+            nativeSimilarity: ocr?.nativeSimilarity ?? null,
+            rawText:          ocr?.rawText ?? null,
+            normalisedText:   ocr?.normalisedText ?? null,
+            markdownText:     ocr?.markdownText ?? null,
+          };
+        });
+      }),
+
     /** Get available document statuses */
     documentStatuses: protectedProcedure.query(() => {
       return DOCUMENT_STATUSES.map(s => ({

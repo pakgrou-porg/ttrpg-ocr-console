@@ -241,7 +241,7 @@ function extractPrintedPageLabel(data: Record<string, unknown>): string | null {
   return label || null;
 }
 
-/** Build the rawText string from OCR content blocks (tables rendered as TSV). */
+/** Build the rawText string from OCR content blocks (tables rendered as TSV). Never modified. */
 function buildRawText(data: Record<string, unknown>): string {
   if (!Array.isArray(data.content_blocks)) return JSON.stringify(data);
   return (data.content_blocks as any[]).map((b: any) => {
@@ -258,14 +258,31 @@ function buildRawText(data: Record<string, unknown>): string {
 }
 
 /**
+ * Like buildRawText but strips page-furniture blocks (page_number etc.).
+ * Used as the input to normaliseText.
+ */
+function buildCleanText(data: Record<string, unknown>): string {
+  if (!Array.isArray(data.content_blocks)) return buildRawText(data);
+  return buildRawText({
+    ...data,
+    content_blocks: (data.content_blocks as any[]).filter(
+      (b: any) => !NOISE_BLOCK_TYPES.has(b.type),
+    ),
+  });
+}
+
+/**
  * Build a layout-preserving Markdown string from OCR content blocks.
  * Tables become GFM pipe tables; headings become # / ## / ###.
+ * Page-furniture blocks (page_number) are suppressed.
  * Falls back to buildRawText when content_blocks is absent.
  */
 function buildMarkdownText(data: Record<string, unknown>): string {
   if (!Array.isArray(data.content_blocks)) return buildRawText(data);
 
-  return (data.content_blocks as any[]).map((b: any) => {
+  return (data.content_blocks as any[])
+    .filter((b: any) => !NOISE_BLOCK_TYPES.has(b.type))
+    .map((b: any) => {
     switch (b.type) {
       case "heading":    return `## ${b.text ?? ""}`;
       case "subheading": return `### ${b.text ?? ""}`;
@@ -343,6 +360,9 @@ const HITL_CONFIDENCE_THRESHOLD = pipelineConfig.pipeline.hitlConfidenceThreshol
 
 /** F1 score below this triggers HITL for pages that have a native PDF text layer. */
 const NATIVE_SIMILARITY_THRESHOLD = 0.75;
+
+/** Content-block types that are page furniture, not body content. Suppressed in cleanText/markdown. */
+const NOISE_BLOCK_TYPES = new Set(["page_number"]);
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
@@ -640,6 +660,7 @@ async function _runJob(jobId: number): Promise<void> {
         structuredData: data,
         rawText: currentRawText,
         markdownText: buildMarkdownText(data),
+        normalisedText: normaliseText(buildCleanText(data)),
         confidence: ocrConfidence,
         nativeSimilarity,
         status: "pass1_complete",
@@ -748,6 +769,7 @@ async function _runJob(jobId: number): Promise<void> {
               structuredData: mergedData,
               rawText: buildRawText(mergedData),
               markdownText: buildMarkdownText(mergedData),
+              normalisedText: normaliseText(buildCleanText(mergedData)),
               auditLog: [...((existing.auditLog as any[]) ?? []),
                 { timestamp: new Date().toISOString(), action: "tabular_extraction", model: tabResult.model }],
             } as any);
@@ -935,19 +957,20 @@ export async function retryPageStages(
 
         const rawText = buildRawText(data);
         const markdownText = buildMarkdownText(data);
+        const normalisedText = normaliseText(buildCleanText(data));
         const printedPageLabel = extractPrintedPageLabel(data);
 
         const existing = await getOcrResultByPageId(pageId);
         if (existing) {
           await updateOcrResult(existing.id, {
-            structuredData: data, rawText, markdownText, confidence: ocrConfidence,
+            structuredData: data, rawText, markdownText, normalisedText, confidence: ocrConfidence,
             status: "pass1_complete", pass1Model: r.model,
             auditLog: [...((existing.auditLog as any[]) ?? []),
               { timestamp: new Date().toISOString(), action: "retry", model: r.model }],
           } as any);
         } else {
           await createOcrResult({
-            pageId, structuredData: data, rawText, markdownText, confidence: ocrConfidence,
+            pageId, structuredData: data, rawText, markdownText, normalisedText, confidence: ocrConfidence,
             status: "pass1_complete", pass1Model: r.model,
             auditLog: [{ timestamp: new Date().toISOString(), action: "retry", model: r.model }],
           } as any);
@@ -1030,6 +1053,47 @@ async function preprocessPageImages(
   }
 
   return results;
+}
+
+// ── Text normalisation ────────────────────────────────────────────────────────
+
+/** Unicode ligature → ASCII pairs that OCR engines and pdftotext commonly emit. */
+const LIGATURE_MAP: Array<[RegExp, string]> = [
+  [/ﬀ/g, "ff"],   // ﬀ
+  [/ﬁ/g, "fi"],   // ﬁ
+  [/ﬂ/g, "fl"],   // ﬂ
+  [/ﬃ/g, "ffi"],  // ﬃ
+  [/ﬄ/g, "ffl"],  // ﬄ
+  [/ﬅ/g, "st"],   // ﬅ
+  [/ﬆ/g, "st"],   // ﬆ
+  [/­/g, ""],     // soft hyphen — remove entirely
+];
+
+/**
+ * Produce a clean, normalised string suitable for chunking and embedding.
+ * Input should be the output of buildCleanText (noise blocks already filtered).
+ *
+ * Transformations (in order):
+ *   1. Unicode NFC
+ *   2. Ligature expansion + soft-hyphen removal
+ *   3. Dehyphenation: "charac-\nter" → "character"
+ *      Only fires when a letter precedes the hyphen-newline and a lowercase
+ *      letter follows — preserves intentional hyphenated compounds.
+ *   4. Horizontal whitespace collapse (tabs, multiple spaces → single space)
+ *   5. Trailing whitespace trimmed per line
+ *   6. Runs of 3+ blank lines collapsed to two
+ *
+ * rawText is NEVER passed through this function — it must remain verbatim.
+ */
+function normaliseText(text: string): string {
+  if (!text) return text;
+  let t = text.normalize("NFC");
+  for (const [re, rep] of LIGATURE_MAP) t = t.replace(re, rep);
+  t = t.replace(/([a-zA-Z])-\n[ \t]*([a-z])/g, "$1$2");
+  t = t.replace(/[ \t]{2,}/g, " ");
+  t = t.replace(/[ \t]+$/gm, "");
+  t = t.replace(/\n{3,}/g, "\n\n");
+  return t.trim();
 }
 
 /**

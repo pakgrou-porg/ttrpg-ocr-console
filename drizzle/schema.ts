@@ -521,6 +521,9 @@ export const ocrResults = pgTable("ocr_results", {
   pageId: integer("page_id").notNull(),
   rawText: text("raw_text"),
   markdownText: text("markdown_text"),
+  /** Cleaned + normalised text: page_number blocks suppressed, ligatures expanded,
+   *  line-break hyphens joined, whitespace collapsed. Derived from rawText; rawText is never modified. */
+  normalisedText: text("normalised_text"),
   /** Token-level F1 similarity (0–1) between OCR rawText and the native PDF text layer.
    *  Null when no embedded text layer was present on this page. */
   nativeSimilarity: real("native_similarity"),
