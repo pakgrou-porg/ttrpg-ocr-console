@@ -100,6 +100,46 @@ The OCR pipeline runs internally as a Node.js process (`server/pipeline/runner.t
 
 The tRPC pipeline endpoints (`pipeline.ingestPage`, `pipeline.submitOcrResult`, `pipeline.flagPage`) remain available for external callers. All pipeline calls require a valid session cookie (use the `SCHEDULED_TASK_COOKIE` environment variable in scheduled task contexts).
 
+### Pipeline Flow
+
+```mermaid
+flowchart TD
+    A([PDF Upload]) --> B[pdf_to_png\nConvert to page images]
+    B --> C[pdf_text_extract\nNative text · hasEmbeddedText]
+    B --> D[document_intelligence\nDoc type · title · summary]
+
+    D --> E[layout_analysis]
+    D --> F[bbox_detection]
+    D --> G[content_type_classify]
+
+    C -. "F1 baseline" .-> H
+
+    E --> H[ocr_extraction\nnormalisedText · nativeSimilarity]
+    F --> H
+    G --> H
+
+    H --> I[content_break_detect]
+    H -->|table pages| J[tabular_extraction]
+
+    I --> K{quality check}
+    J --> K
+
+    K -->|pass| L[artifact_storage]
+    K -->|low conf / divergence| O([HITL Queue])
+    K -->|fail| M[pass3 — cloud retry]
+    M -->|pass| L
+    M -->|fail| N[pass4 — cloud retry]
+    N -->|pass| L
+    N -->|irrecoverable| O
+
+    L --> P[embedding_generation]
+    P --> Q[(Database)]
+    Q --> R([Voice of Arkanum])
+    Q --> S([The Referee])
+```
+
+An interactive version of this diagram — with live provider assignments, fallback chains, and per-stage inscription details — is available at **Oversee the Scribes** in the admin console.
+
 ### Provider & Stage Configuration
 
 Before running the pipeline, configure providers and stage inscriptions:

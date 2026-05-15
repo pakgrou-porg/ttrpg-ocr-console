@@ -55,6 +55,16 @@ export const STAGE_META: Record<string, {
   phase: 1 | 2 | 3;
 }> = {
   // ── Phase 1: Ingestion & Layout ───────────────────────────────────────────
+  pdf_text_extract: {
+    label: "Native PDF Text",
+    description: "Phase 1 — extracts embedded text directly from the PDF using pdftotext; detects pages with a usable text layer (≥50 printable chars) and computes token-level F1 similarity against OCR output as an automated quality baseline",
+    icon: FileText,
+    color: "text-violet-300",
+    bgColor: "bg-violet-950/60",
+    borderColor: "border-violet-500/60",
+    group: "phase1",
+    phase: 1,
+  },
   document_intelligence: {
     label: "Document Intelligence",
     description: "Phase 1 — identifies document type, canonical title, publisher, and generates a summary from the first 10 pages; drives layout strategy for all subsequent pages",
@@ -235,8 +245,8 @@ export const STAGE_META: Record<string, {
 const PIPELINE_FLOW: string[][] = [
   // Col 0 — ingestion (virtual)
   ["__ingestion__"],
-  // Col 1 — Phase 1: document intelligence
-  ["document_intelligence"],
+  // Col 1 — Phase 1: batch pre-processing (whole-document, before per-page loop)
+  ["pdf_text_extract", "document_intelligence"],
   // Col 2 — Phase 1: layout
   ["layout_analysis", "bbox_detection", "content_type_classify"],
   // Col 3 — Phase 2: extraction
@@ -252,8 +262,11 @@ const PIPELINE_FLOW: string[][] = [
 ];
 
 const FLOW_EDGES: Array<{ from: string; to: string; style?: "normal" | "fallback" | "conditional" }> = [
-  // Ingestion → Document Intelligence
+  // Ingestion → batch pre-processing
+  { from: "__ingestion__", to: "pdf_text_extract" },
   { from: "__ingestion__", to: "document_intelligence" },
+  // Native text baseline feeds OCR quality scoring (conditional — only when embedded text found)
+  { from: "pdf_text_extract", to: "ocr_extraction", style: "conditional" },
   // Document Intelligence → Phase 1 layout
   { from: "document_intelligence", to: "layout_analysis" },
   { from: "document_intelligence", to: "bbox_detection" },
