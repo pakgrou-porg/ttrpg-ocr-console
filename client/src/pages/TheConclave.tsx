@@ -74,6 +74,11 @@ export default function TheConclave() {
     onError: (e) => toast.error(e.message),
   });
 
+  const deleteUser = trpc.admin.deleteUser.useMutation({
+    onSuccess: () => { utils.admin.listUsers.invalidate(); toast.success("Scholar removed from the Kodex."); },
+    onError: (e) => toast.error(e.message),
+  });
+
   const getPermission = (permissions: { featureArea: string; granted: boolean; restrictedGame?: string | null; restrictedVersion?: string | null }[], area: string) =>
     permissions.find((p) => p.featureArea === area);
 
@@ -187,20 +192,33 @@ export default function TheConclave() {
                       <p className="text-xs text-muted-foreground truncate">{u.email ?? "—"}</p>
                     </div>
 
-                    {/* Role toggle */}
+                    {/* Role toggle + delete */}
                     {!isOwner && (
-                      <Select
-                        value={u.role}
-                        onValueChange={(v) => setRole.mutate({ userId: u.id, role: v as "user" | "admin" })}
-                      >
-                        <SelectTrigger className="w-36 h-7 text-xs">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="user">Scholar</SelectItem>
-                          <SelectItem value="admin">Arch-Magister</SelectItem>
-                        </SelectContent>
-                      </Select>
+                      <>
+                        <Select
+                          value={u.role}
+                          onValueChange={(v) => setRole.mutate({ userId: u.id, role: v as "user" | "admin" })}
+                        >
+                          <SelectTrigger className="w-36 h-7 text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="user">Scholar</SelectItem>
+                            <SelectItem value="admin">Arch-Magister</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <button
+                          onClick={() => {
+                            if (confirm(`Remove ${u.name ?? u.email ?? "this scholar"} from the Kodex? This cannot be undone.`))
+                              deleteUser.mutate({ userId: u.id });
+                          }}
+                          disabled={deleteUser.isPending}
+                          className="p-1.5 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                          title="Remove scholar"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </>
                     )}
 
                     {/* Expand permissions */}

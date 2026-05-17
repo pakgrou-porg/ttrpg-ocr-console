@@ -9,7 +9,7 @@ import { invokeLLM } from "./_core/llm";
 import {
   getUserProfile, upsertUserProfile,
   getAllSystemPrompts, getSystemPromptByName, upsertSystemPrompt, seedDefaultPrompts, getPromptVersionHistory,
-  getAllUsers, getUserById, updateUserRole,
+  getAllUsers, getUserById, updateUserRole, deleteUser,
   getUserPermissions, setUserPermission, deleteUserPermission, getAllPermissionsForAllUsers,
   createInvitation, getAllInvitations, revokeInvitation,
   getAllSystemConfig, getSystemConfigByCategory, upsertSystemConfig, deleteSystemConfig,
@@ -538,6 +538,14 @@ export const appRouter = router({
       }))
       .mutation(async ({ input }) => {
         await updateUserRole(input.userId, input.role);
+        return { success: true };
+      }),
+
+    deleteUser: adminProcedure
+      .input(z.object({ userId: z.number().int() }))
+      .mutation(async ({ ctx, input }) => {
+        if (input.userId === ctx.user.id) throw new Error("You cannot delete your own account.");
+        await deleteUser(input.userId);
         return { success: true };
       }),
 

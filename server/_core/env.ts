@@ -65,4 +65,7 @@ export const ENV = {
   googleApiKey: optionalEnv("GOOGLE_API_KEY"),
   // Canonical public URL — must match the Google OAuth redirect URI
   appUrl: optionalEnv("APP_URL", "http://localhost:3000"),
+  // Bootstrap admin — any user whose email matches this is automatically promoted
+  // to admin on first (and every subsequent) login. Set to the deployer's email.
+  adminEmail: optionalEnv("ADMIN_EMAIL"),
 };

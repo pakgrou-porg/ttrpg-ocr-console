@@ -91,6 +91,7 @@ See `.env.example` for the full list. The critical ones:
 | `VITE_OAUTH_PORTAL_URL` | Manus login portal URL |
 | `BUILT_IN_FORGE_API_KEY` | Manus built-in API key (server-side) |
 | `BUILT_IN_FORGE_API_URL` | Manus built-in API URL |
+| `ADMIN_EMAIL` | Bootstrap admin — any user who logs in with this email is automatically promoted to `admin` on every login. Set to the deployer's Google account email (e.g. `karl.miller@gmail.com`). |
 
 ---
 
