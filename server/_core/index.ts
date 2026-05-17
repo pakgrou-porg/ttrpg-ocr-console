@@ -4,7 +4,7 @@ import { createServer } from "http";
 import net from "net";
 import path from "path";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
-import { registerOAuthRoutes, registerGoogleOAuthRoutes } from "./oauth";
+import { registerOAuthRoutes, registerGoogleOAuthRoutes, registerLoginRoutes } from "./oauth";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic } from "./static";
@@ -37,7 +37,9 @@ async function startServer() {
   // File uploads use the /api/upload/* routes which have their own multer limits.
   app.use(express.json({ limit: "1mb" }));
   app.use(express.urlencoded({ limit: "1mb", extended: true }));
-  // Manus OAuth callback
+  // Direct Google login (/api/auth/login, /api/auth/login/callback)
+  registerLoginRoutes(app);
+  // Manus OAuth callback (/api/oauth/callback) — kept for legacy deployments
   registerOAuthRoutes(app);
   // Google Drive OAuth routes (/api/auth/google, /api/auth/google/callback)
   registerGoogleOAuthRoutes(app);

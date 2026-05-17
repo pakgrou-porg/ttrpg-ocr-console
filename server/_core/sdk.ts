@@ -171,7 +171,7 @@ class SDKServer {
     return this.signSession(
       {
         openId,
-        appId: ENV.appId,
+        appId: ENV.appId || "kodex", // fallback for self-hosted deployments without Manus
         name: options.name || "",
       },
       options
@@ -270,21 +270,27 @@ class SDKServer {
     const signedInAt = new Date();
     let user = await db.getUserByOpenId(sessionUserId);
 
-    // If user not in DB, sync from OAuth server automatically
+    // If user not in DB — try to re-sync from Manus when configured, otherwise
+    // the session is stale (account deleted) and the user must sign in again.
     if (!user) {
-      try {
-        const userInfo = await this.getUserInfoWithJwt(sessionCookie ?? "");
-        await db.upsertUser({
-          openId: userInfo.openId,
-          name: userInfo.name || null,
-          email: userInfo.email ?? null,
-          loginMethod: userInfo.loginMethod ?? userInfo.platform ?? null,
-          lastSignedIn: signedInAt,
-        });
-        user = await db.getUserByOpenId(userInfo.openId);
-      } catch (error) {
-        console.error("[Auth] Failed to sync user from OAuth:", error);
-        throw ForbiddenError("Failed to sync user info");
+      if (ENV.oAuthServerUrl) {
+        try {
+          const userInfo = await this.getUserInfoWithJwt(sessionCookie ?? "");
+          await db.upsertUser({
+            openId: userInfo.openId,
+            name: userInfo.name || null,
+            email: userInfo.email ?? null,
+            loginMethod: userInfo.loginMethod ?? userInfo.platform ?? null,
+            lastSignedIn: signedInAt,
+          });
+          user = await db.getUserByOpenId(userInfo.openId);
+        } catch (error) {
+          console.error("[Auth] Failed to sync user from OAuth:", error);
+          throw ForbiddenError("Failed to sync user info");
+        }
+      } else {
+        // Self-hosted without Manus — session token is valid but account is gone.
+        throw ForbiddenError("Session is valid but account not found. Please sign in again.");
       }
     }
 
