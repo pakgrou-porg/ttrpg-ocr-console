@@ -4,7 +4,7 @@ import { createServer } from "http";
 import net from "net";
 import path from "path";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
-import { registerOAuthRoutes, registerGoogleOAuthRoutes, registerLoginRoutes } from "./oauth";
+import { registerGoogleOAuthRoutes, registerLoginRoutes } from "./oauth";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic } from "./static";
@@ -39,8 +39,6 @@ async function startServer() {
   app.use(express.urlencoded({ limit: "1mb", extended: true }));
   // Direct Google login (/api/auth/login, /api/auth/login/callback)
   registerLoginRoutes(app);
-  // Manus OAuth callback (/api/oauth/callback) — kept for legacy deployments
-  registerOAuthRoutes(app);
   // Google Drive OAuth routes (/api/auth/google, /api/auth/google/callback)
   registerGoogleOAuthRoutes(app);
   // Serve pipeline page PNGs for HITL review

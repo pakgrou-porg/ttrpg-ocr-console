@@ -7,6 +7,7 @@ import {
   BookOpen, Flag, Eye, ImageOff, ChevronLeft, Timer, BarChart2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { ConfidenceBadge } from "@/components/ConfidenceBadge";
 import { BboxOverlay } from "@/components/BboxOverlay";
@@ -394,6 +395,7 @@ export default function OverseeScribes() {
   const [expandedJobId, setExpandedJobId]   = useState<number | null>(null);
   const [browsingJobId, setBrowsingJobId]   = useState<number | null>(null);
   const [metricsJobId, setMetricsJobId]     = useState<number | null>(null);
+  const [selectedJobIds, setSelectedJobIds] = useState<Set<number>>(new Set());
 
   const deleteMut = trpc.jobs.delete.useMutation({
     onSuccess: () => { refetch(); toast.success("Job removed."); },
@@ -411,6 +413,44 @@ export default function OverseeScribes() {
     onSuccess: () => { refetch(); toast.success("Pages purged."); },
     onError: (e) => toast.error(e.message),
   });
+
+  const visibleJobIds: number[] = (jobs as any[] ?? []).map((j: any) => j.id);
+  const allSelected = visibleJobIds.length > 0 && visibleJobIds.every(id => selectedJobIds.has(id));
+  const someSelected = !allSelected && visibleJobIds.some(id => selectedJobIds.has(id));
+
+  const toggleSelectAll = () => {
+    if (allSelected) {
+      setSelectedJobIds(new Set());
+    } else {
+      setSelectedJobIds(new Set(visibleJobIds));
+    }
+  };
+
+  const toggleSelectJob = (id: number) => {
+    setSelectedJobIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const handleClearSelected = () => {
+    if (selectedJobIds.size === 0) return;
+    if (!confirm(`Delete ${selectedJobIds.size} selected job${selectedJobIds.size === 1 ? "" : "s"}? This cannot be undone.`)) return;
+    const ids = Array.from(selectedJobIds);
+    let completed = 0;
+    for (const id of ids) {
+      deleteMut.mutate({ id }, {
+        onSuccess: () => {
+          completed++;
+          if (completed === ids.length) {
+            setSelectedJobIds(new Set());
+            toast.success(`${ids.length} job${ids.length === 1 ? "" : "s"} removed.`);
+          }
+        },
+      });
+    }
+  };
 
   const statusColors: Record<string, { bg: string; text: string; dot?: boolean }> = {
     queued:            { bg: "bg-muted/50",          text: "text-muted-foreground" },
@@ -498,7 +538,20 @@ export default function OverseeScribes() {
             <CardTitle className="text-2xl">Transcription Queue</CardTitle>
             <CardDescription>Current status of PDF processing batches. Click Browse Pages to inspect any job's output.</CardDescription>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap items-center">
+            {selectedJobIds.size > 0 && (
+              <>
+                <span className="text-sm text-muted-foreground">{selectedJobIds.size} selected</span>
+                <Button variant="outline" size="sm" className="gap-2 text-destructive border-destructive/30 hover:bg-destructive/10"
+                  onClick={handleClearSelected} disabled={deleteMut.isPending}>
+                  <Trash2 className="w-4 h-4" /> Clear Selected
+                </Button>
+                <Button variant="ghost" size="sm" className="gap-2 text-muted-foreground"
+                  onClick={() => setSelectedJobIds(new Set())}>
+                  Deselect All
+                </Button>
+              </>
+            )}
             {hasFailed && (
               <Button variant="outline" size="sm" className="gap-2 text-red-400 border-red-500/30 hover:bg-red-500/10"
                 onClick={() => clearMut.mutate({ statuses: ["failed"] })} disabled={clearMut.isPending}>
@@ -529,6 +582,16 @@ export default function OverseeScribes() {
             </div>
           ) : (
             <div className="divide-y divide-border/50">
+              {/* Select-all header row */}
+              <div className="flex items-center gap-3 px-4 py-2 bg-muted/10 border-b border-border/50">
+                <Checkbox
+                  checked={allSelected ? true : someSelected ? "indeterminate" : false}
+                  onCheckedChange={toggleSelectAll}
+                  aria-label="Select all jobs"
+                  className="flex-shrink-0"
+                />
+                <span className="text-xs text-muted-foreground">Select all</span>
+              </div>
               {(jobs as any[]).map((job: any) => {
                 const style       = getStatusStyle(job.status);
                 const progress    = job.totalPages > 0 ? Math.round((job.processedPages / job.totalPages) * 100) : 0;
@@ -539,10 +602,17 @@ export default function OverseeScribes() {
                 const pageOffset  = job.pageOffset ?? 0;
                 const blockSize   = job.blockSize  ?? 10;
                 const blockLabel  = `pp. ${pageOffset + 1}–${pageOffset + blockSize}`;
+                const isChecked   = selectedJobIds.has(job.id);
 
                 return (
                   <div key={job.id}>
                     <div className="flex items-center gap-3 px-4 py-3 hover:bg-muted/10 transition-colors">
+                      <Checkbox
+                        checked={isChecked}
+                        onCheckedChange={() => toggleSelectJob(job.id)}
+                        aria-label={`Select JOB-${job.id}`}
+                        className="flex-shrink-0"
+                      />
                       <span className="font-mono text-sm w-20 flex-shrink-0">JOB-{job.id}</span>
 
                       <div className="flex-1 min-w-0">

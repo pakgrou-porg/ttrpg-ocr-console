@@ -465,7 +465,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         {/* Page content */}
         <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-primary/40 to-transparent" />
         <div className="flex-1 overflow-y-auto p-8">
-          <div className="max-w-6xl mx-auto">{children}</div>
+          <div className="w-full max-w-[1800px] mx-auto">{children}</div>
         </div>
       </main>
     </div>

@@ -2316,6 +2316,13 @@ export const appRouter = router({
         return getContentSummariesByDocument(input.documentId);
       }),
 
+    listByDocumentIds: adminProcedure
+      .input(z.object({ documentIds: z.array(z.number().int()).min(1).max(100) }))
+      .query(async ({ input }) => {
+        const all = await Promise.all(input.documentIds.map(id => getContentSummariesByDocument(id)));
+        return all.flat();
+      }),
+
     update: adminProcedure
       .input(z.object({
         id: z.number().int(),

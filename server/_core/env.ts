@@ -45,13 +45,9 @@ if (process.env.CREDENTIAL_ENCRYPTION_KEY && process.env.CREDENTIAL_ENCRYPTION_K
 }
 
 export const ENV = {
-  appId: optionalEnv("VITE_APP_ID"),
   cookieSecret,
   credentialEncryptionKey,
   databaseUrl: optionalEnv("DATABASE_URL"),
-  oAuthServerUrl: optionalEnv("OAUTH_SERVER_URL"),
-  oAuthPortalUrl: optionalEnv("VITE_OAUTH_PORTAL_URL", "https://manus.im"),
-  ownerOpenId: optionalEnv("OWNER_OPEN_ID"),
   isProduction: process.env.NODE_ENV === "production",
   forgeApiUrl: optionalEnv("BUILT_IN_FORGE_API_URL"),
   forgeApiKey: optionalEnv("BUILT_IN_FORGE_API_KEY"),
