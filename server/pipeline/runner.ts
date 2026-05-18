@@ -201,9 +201,10 @@ const JSON_INVOKE_OPTS: Partial<InvokeOptions> = {
 };
 
 // ── Concurrency limiter ───────────────────────────────────────────────────────
-// Shared across all concurrent jobs — at most 4 pages may be in the LLM-call
-// stages (layout → bbox → OCR) simultaneously to avoid overwhelming the local
-// inference server and triggering 5-minute timeouts.
+// Limits the number of pages processed simultaneously across all active jobs.
+// Within each page, layout_analysis and bbox_detection run concurrently (2 LLM
+// calls in parallel), so maxLlmConcurrency=1 already saturates a 2-slot local
+// model. Set to 2 in pipeline-config.yaml for a 4-slot model.
 
 class Semaphore {
   private slots: number;
@@ -592,33 +593,50 @@ async function _runJob(jobId: number): Promise<void> {
     console.log(`[Pipeline] Job ${jobId}: page ${pageNum} acquired LLM slot`);
     try {
 
-    // layout_analysis
+    // layout_analysis + bbox_detection — run concurrently.
+    // Both stages read the same page image and are fully independent of each
+    // other, so they can occupy both Artificer slots simultaneously.  OCR then
+    // receives both results as context, improving multi-column extraction quality.
     let layoutData: Record<string, unknown> = {};
-    try {
-      const layoutContent: UserContentPart[] = [imgPart, { type: "text", text: "Classify the layout type and structure of this page. Reply with ONLY a JSON object — start with { and end with }." }];
-      const r = await invokeStage("layout_analysis", layoutContent, undefined, PROMPT_LAYOUT_ANALYSIS,
-        { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_LAYOUT }, { pageId, jobId });
-      layoutData = parseJsonResponse(r.content);
-      await updateDocumentPage(pageId, { layoutType: (layoutData.layout_type as string) || undefined });
-    } catch (err: any) {
-      if (isConfigError(err)) throw err; // fatal — halt job
-      stagesFailed.push("layout_analysis");
-      console.warn(`[Pipeline] Job ${jobId} p${pageNum} layout_analysis: ${err.message}`);
+    let regions: any[] = [];
+
+    const layoutContent: UserContentPart[] = [imgPart, { type: "text", text: "Classify the layout type and structure of this page. Reply with ONLY a JSON object — start with { and end with }." }];
+    const bboxContent: UserContentPart[] = [imgPart, { type: "text", text: "Identify all distinct content regions on this page. Reply with ONLY a JSON object — start with { and end with }." }];
+
+    const [layoutSettled, bboxSettled] = await Promise.allSettled([
+      invokeStage("layout_analysis", layoutContent, undefined, PROMPT_LAYOUT_ANALYSIS,
+        { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_LAYOUT }, { pageId, jobId })
+        .then(async r => {
+          const data = parseJsonResponse(r.content);
+          await updateDocumentPage(pageId, { layoutType: (data.layout_type as string) || undefined });
+          return data;
+        }),
+      invokeStage("bbox_detection", bboxContent, undefined, PROMPT_BBOX_DETECTION,
+        { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_BBOX }, { pageId, jobId })
+        .then(async r => {
+          const data = parseJsonResponse(r.content);
+          const regs: any[] = Array.isArray(data.regions) ? data.regions : [];
+          await updateDocumentPage(pageId, { contentRegions: regs });
+          return regs;
+        }),
+    ]);
+
+    // Re-throw config errors (fatal — no provider or broken config)
+    for (const result of [layoutSettled, bboxSettled]) {
+      if (result.status === "rejected" && isConfigError(result.reason)) throw result.reason;
     }
 
-    // bbox_detection (optional — no provider is acceptable, any other config error is fatal)
-    let regions: any[] = [];
-    try {
-      await updateIngestionJobStatus(jobId, { currentStage: "bbox_detection" });
-      const bboxContent: UserContentPart[] = [imgPart, { type: "text", text: "Identify all distinct content regions on this page. Reply with ONLY a JSON object — start with { and end with }." }];
-      const r = await invokeStage("bbox_detection", bboxContent, undefined, PROMPT_BBOX_DETECTION,
-        { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_BBOX }, { pageId, jobId });
-      const data = parseJsonResponse(r.content);
-      regions = Array.isArray(data.regions) ? data.regions : [];
-      await updateDocumentPage(pageId, { contentRegions: regions });
-    } catch (err: any) {
-      if (isConfigError(err)) throw err; // fatal — halt job (bbox stage explicitly configured but broken)
-      console.warn(`[Pipeline] Job ${jobId} p${pageNum} bbox_detection: ${err.message}`);
+    if (layoutSettled.status === "fulfilled") {
+      layoutData = layoutSettled.value;
+    } else {
+      stagesFailed.push("layout_analysis");
+      console.warn(`[Pipeline] Job ${jobId} p${pageNum} layout_analysis: ${layoutSettled.reason?.message}`);
+    }
+
+    if (bboxSettled.status === "fulfilled") {
+      regions = bboxSettled.value;
+    } else {
+      console.warn(`[Pipeline] Job ${jobId} p${pageNum} bbox_detection: ${bboxSettled.reason?.message}`);
     }
 
     // Lazily load the original full-colour image when the page contains visual
