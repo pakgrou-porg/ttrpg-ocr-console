@@ -748,6 +748,40 @@ export async function clearHitlItems(statuses: string[]) {
   }
 }
 
+/**
+ * Wipe all processing data: jobs, documents, pages, OCR results, HITL items,
+ * content summaries, processing attempts, and LLM timing metrics.
+ * Preserves users, LLM providers, stage inscriptions, game systems, system
+ * config, and Google OAuth tokens — i.e. configuration is untouched.
+ */
+export async function wipeProcessingData(): Promise<{ deletedCounts: Record<string, number> }> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  // Delete in FK dependency order: leaf tables first, then parents.
+  const [hitl]     = await db.delete(hitlQueue).returning({ id: hitlQueue.id });
+  const [ocr]      = await db.delete(ocrResults).returning({ id: ocrResults.id });
+  const [attempts] = await db.delete(pageProcessingAttempts).returning({ id: pageProcessingAttempts.id });
+  const [metrics]  = await db.delete(llmTimingMetrics).returning({ id: llmTimingMetrics.id });
+  const [summaries]= await db.delete(contentSummaries).returning({ id: contentSummaries.id });
+  const [pages]    = await db.delete(documentPages).returning({ id: documentPages.id });
+  const [docs]     = await db.delete(documents).returning({ id: documents.id });
+  const [jobs]     = await db.delete(ingestionJobs).returning({ id: ingestionJobs.id });
+
+  return {
+    deletedCounts: {
+      hitlQueue:               Array.isArray(hitl)     ? hitl.length     : 0,
+      ocrResults:              Array.isArray(ocr)      ? ocr.length      : 0,
+      pageProcessingAttempts:  Array.isArray(attempts) ? attempts.length : 0,
+      llmTimingMetrics:        Array.isArray(metrics)  ? metrics.length  : 0,
+      contentSummaries:        Array.isArray(summaries)? summaries.length: 0,
+      documentPages:           Array.isArray(pages)    ? pages.length    : 0,
+      documents:               Array.isArray(docs)     ? docs.length     : 0,
+      ingestionJobs:           Array.isArray(jobs)     ? jobs.length     : 0,
+    },
+  };
+}
+
 export async function purgeJobPages(jobId: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");

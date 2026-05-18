@@ -13,7 +13,7 @@ import {
   getUserPermissions, setUserPermission, deleteUserPermission, getAllPermissionsForAllUsers,
   createInvitation, getAllInvitations, revokeInvitation,
   getAllSystemConfig, getSystemConfigByCategory, upsertSystemConfig, deleteSystemConfig,
-  getAllIngestionJobs, getActiveIngestionJobs, getIngestionJobById, createIngestionJob, updateIngestionJobStatus, getIngestionJobStats, deleteIngestionJob, clearIngestionJobsByStatus, cancelIngestionJobChain, purgeJobPages, clearHitlItems,
+  getAllIngestionJobs, getActiveIngestionJobs, getIngestionJobById, createIngestionJob, updateIngestionJobStatus, getIngestionJobStats, deleteIngestionJob, clearIngestionJobsByStatus, cancelIngestionJobChain, purgeJobPages, clearHitlItems, wipeProcessingData,
   recordTelemetryEvent, getTelemetryEvents, getTelemetrySummary,
   pingDatabase,
   getAllLlmProviders, getLlmProviderById, createLlmProvider, updateLlmProvider, deleteLlmProvider,
@@ -621,6 +621,14 @@ export const appRouter = router({
           .join(" "),
       }));
     }),
+
+    /** Wipe all processing data (jobs, docs, pages, OCR, HITL, summaries, metrics).
+     *  Preserves users, providers, inscriptions, game systems, and system config. */
+    wipeProcessingData: adminProcedure
+      .mutation(async () => {
+        const result = await wipeProcessingData();
+        return result;
+      }),
   }),
 
   // ─── LLM Providers (The Artificers) ───────────────────────────────────────
