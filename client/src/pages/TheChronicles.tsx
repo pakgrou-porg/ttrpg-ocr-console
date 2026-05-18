@@ -2,15 +2,16 @@ import { useState, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { toast } from "sonner";
 import {
   ScrollText, ChevronRight, ChevronDown, Check, Edit, Loader2,
-  BookOpen, Layers, RefreshCw,
+  BookOpen, Layers, RefreshCw, ChevronsUpDown,
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -332,15 +333,19 @@ function SummaryNode({
 
 export default function TheChronicles() {
   const [selectedLabel, setSelectedLabel] = useState<string | null>(null);
+  const [selectorOpen, setSelectorOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<SummaryRecord | null>(null);
   const [approving, setApproving] = useState<number | null>(null);
 
   const { data: docs = [] } = trpc.library.listDocuments.useQuery(undefined);
 
-  // Deduplicate docs by title/filename — one PDF may produce many batch rows
+  // Deduplicate docs by title/filename — one PDF may produce many batch rows.
+  // Exclude docs with totalPages=0: these have been purged (pages deleted) or
+  // were never fully ingested, so they won't have any summaries to review.
   const groupMap = useMemo(() => {
     const map = new Map<string, { label: string; ids: number[] }>();
     for (const d of docs) {
+      if ((d.totalPages ?? 0) === 0) continue;
       const label = d.title ?? d.filename ?? `Document #${d.id}`;
       const existing = map.get(label);
       if (existing) {
@@ -432,24 +437,59 @@ export default function TheChronicles() {
           <CardTitle className="text-base flex items-center gap-2">
             <BookOpen className="w-4 h-4 text-primary" />
             Select a Document
+            <span className="ml-auto text-xs font-normal text-muted-foreground">
+              {groupMap.size} document{groupMap.size !== 1 ? "s" : ""}
+            </span>
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <Select
-            value={selectedLabel ?? ""}
-            onValueChange={v => setSelectedLabel(v || null)}
-          >
-            <SelectTrigger className="w-full max-w-lg">
-              <SelectValue placeholder="Choose a document to review…" />
-            </SelectTrigger>
-            <SelectContent>
-              {Array.from(groupMap.entries()).map(([label, group]) => (
-                <SelectItem key={label} value={label}>
-                  {group.ids.length > 1 ? `${label} (${group.ids.length} batches)` : label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <Popover open={selectorOpen} onOpenChange={setSelectorOpen}>
+            <PopoverTrigger asChild>
+              <Button
+                variant="outline"
+                role="combobox"
+                aria-expanded={selectorOpen}
+                className="w-full max-w-lg justify-between font-normal text-left h-auto min-h-9 py-2"
+              >
+                <span className="truncate flex-1">
+                  {selectedLabel
+                    ? (groupMap.get(selectedLabel)?.ids.length ?? 0) > 1
+                      ? `${selectedLabel} (${groupMap.get(selectedLabel)!.ids.length} batches)`
+                      : selectedLabel
+                    : <span className="text-muted-foreground">Choose a document to review…</span>}
+                </span>
+                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent
+              className="w-[var(--radix-popover-trigger-width)] max-w-lg p-0"
+              align="start"
+            >
+              <Command>
+                <CommandInput placeholder="Search documents…" />
+                <CommandList className="max-h-72">
+                  <CommandEmpty>No documents found.</CommandEmpty>
+                  <CommandGroup>
+                    {Array.from(groupMap.entries()).map(([label, group]) => (
+                      <CommandItem
+                        key={label}
+                        value={label}
+                        onSelect={() => {
+                          setSelectedLabel(label === selectedLabel ? null : label);
+                          setSelectorOpen(false);
+                        }}
+                      >
+                        <Check className={`mr-2 h-4 w-4 flex-shrink-0 ${label === selectedLabel ? "opacity-100" : "opacity-0"}`} />
+                        <span className="flex-1 truncate">
+                          {group.ids.length > 1 ? `${label} (${group.ids.length} batches)` : label}
+                        </span>
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                </CommandList>
+              </Command>
+            </PopoverContent>
+          </Popover>
         </CardContent>
       </Card>
 

@@ -475,10 +475,10 @@ const nodeTypes = { stage: StageNode };
 
 // ─── Layout helpers ──────────────────────────────────────────────────────────
 
-const COL_X_START = 40;
-const COL_X_GAP = 290;
-const ROW_Y_START = 40;
-const ROW_Y_GAP = 170;
+const COL_X_START = 60;
+const COL_X_GAP = 360;   // nodes are ~240px wide; 120px breathing room between columns
+const ROW_Y_START = 180; // raised so 4-node columns don't clip off the top of the canvas
+const ROW_Y_GAP = 160;
 
 function buildNodesAndEdges(topology: TopologyStage[]): { nodes: Node[]; edges: Edge[] } {
   const topologyMap = new Map<string, TopologyStage>();
@@ -503,7 +503,7 @@ function buildNodesAndEdges(topology: TopologyStage[]): { nodes: Node[]; edges: 
         nodes.push({
           id: stage,
           type: "stage",
-          position: { x, y: 180 },
+          position: { x, y: ROW_Y_START + 200 }, // centre of a 1-node column
           data: { stage, isIngestion: true, assignments: [] },
         });
       } else {
@@ -531,7 +531,7 @@ function buildNodesAndEdges(topology: TopologyStage[]): { nodes: Node[]; edges: 
       type: "stage",
       position: {
         x: COL_X_START + pass4Col * COL_X_GAP,
-        y: ROW_Y_START + 3 * ROW_Y_GAP + 200,
+        y: ROW_Y_START + 200 + 3 * ROW_Y_GAP, // below the lowest fallback node
       },
       data: { stage: "__hitl__", isHitl: true, inscription: null, primaryProvider: null, fallbackProvider: null },
     });
