@@ -51,7 +51,13 @@ ${STRICT_RULES}
 Required output schema (fill every field with real values from the page):
 {"layout_type":"…","columns":1,"has_table":false,"has_image_or_art":false,"has_list":false}
 
-layout_type must be one of: cover, title_page, toc, chapter_header, body_text, stat_block, table, illustration_full, illustration_with_text, index, appendix, mixed`;
+layout_type must be one of: cover, title_page, toc, chapter_header, body_text, stat_block, table, illustration_full, illustration_with_text, index, appendix, mixed
+
+CRITICAL layout type rules:
+- title_page: the page bearing the book/product title, author, publisher, edition, and/or copyright notice — even if it has no other body text
+- toc: a Table of Contents page — a list of chapter/section names paired with page numbers, regardless of column count
+- cover: the front or back cover image
+- Do NOT use "two_column" or any column count as a layout_type — "columns" is a separate numeric field`;
 
 const PROMPT_BBOX_DETECTION = `You are a document content-region detector for TTRPG publications.
 Identify distinct content regions in the page image and estimate each region's bounding box.
@@ -102,6 +108,16 @@ const FEW_SHOT_LAYOUT: InvokeOptions["fewShotExamples"] = [
   {
     user: "Classify the layout type and structure of this page. Reply with ONLY a JSON object — start with { and end with }.",
     assistant: '{"layout_type":"body_text","columns":2,"has_table":true,"has_image_or_art":false,"has_list":true}',
+  },
+  {
+    // Table of Contents — two columns of entries with page numbers; still layout_type "toc"
+    user: "Classify the layout type and structure of this page. Reply with ONLY a JSON object — start with { and end with }.",
+    assistant: '{"layout_type":"toc","columns":2,"has_table":false,"has_image_or_art":false,"has_list":true}',
+  },
+  {
+    // Title page — title, subtitle, author, publisher, edition, copyright
+    user: "Classify the layout type and structure of this page. Reply with ONLY a JSON object — start with { and end with }.",
+    assistant: '{"layout_type":"title_page","columns":1,"has_table":false,"has_image_or_art":false,"has_list":false}',
   },
 ];
 
@@ -242,20 +258,36 @@ function extractPrintedPageLabel(data: Record<string, unknown>): string | null {
   return label || null;
 }
 
-/** Build the rawText string from OCR content blocks (tables rendered as TSV). Never modified. */
+/** Extract readable text from a single OCR block (shared by buildRawText variants). */
+function blockToText(b: any): string {
+  if (b.type === "table") {
+    const caption = b.caption ? `[Table: ${b.caption}]\n` : "[Table]\n";
+    const headers = Array.isArray(b.headers) ? b.headers.join("\t") + "\n" : "";
+    const rows = Array.isArray(b.rows)
+      ? (b.rows as any[][]).map((r: any[]) => r.join("\t")).join("\n")
+      : "";
+    return caption + headers + rows;
+  }
+  return b.text ?? b.content ?? "";
+}
+
+/**
+ * Build the rawText string from OCR structured data.
+ * Handles three model output shapes:
+ *   1. Standard: {"content_blocks":[…]}
+ *   2. Single block at root: {"type":"text","text":"…","bbox":{…}}
+ *   3. Fallback: any root-level string fields joined together
+ */
 function buildRawText(data: Record<string, unknown>): string {
-  if (!Array.isArray(data.content_blocks)) return JSON.stringify(data);
-  return (data.content_blocks as any[]).map((b: any) => {
-    if (b.type === "table") {
-      const caption = b.caption ? `[Table: ${b.caption}]\n` : "[Table]\n";
-      const headers = Array.isArray(b.headers) ? b.headers.join("\t") + "\n" : "";
-      const rows = Array.isArray(b.rows)
-        ? (b.rows as any[][]).map((r: any[]) => r.join("\t")).join("\n")
-        : "";
-      return caption + headers + rows;
-    }
-    return b.text ?? "";
-  }).filter(Boolean).join("\n\n");
+  if (Array.isArray(data.content_blocks)) {
+    return (data.content_blocks as any[]).map(blockToText).filter(Boolean).join("\n\n");
+  }
+  // Model returned a single block at the root level (schema non-compliance)
+  if (typeof data.text === "string" && data.text.length > 0) return data.text as string;
+  // Try extracting any string values from the root object
+  const texts = Object.values(data)
+    .filter((v): v is string => typeof v === "string" && v.length > 10);
+  return texts.length > 0 ? texts.join("\n\n") : "";
 }
 
 /**
@@ -578,6 +610,7 @@ async function _runJob(jobId: number): Promise<void> {
     const rawPagePath = rawPageFiles[i];   // original full-colour — use for visual content stages
     const stagesFailed: string[] = [];
     let ocrConfidence = 0;
+    let confidenceFromModel: number | null = null; // null = model didn't provide a score
     let nativeSimilarity: number | null = null;
     let ocrResultId: number | null = null;
     let currentRawText: string | null = null; // set when OCR succeeds; used by content_break_detect
@@ -665,11 +698,20 @@ async function _runJob(jobId: number): Promise<void> {
       const r = await invokeStage("ocr_extraction", ocrContent, regionContext, PROMPT_OCR_EXTRACTION,
         { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_OCR }, { pageId, jobId });
       const data = parseJsonResponse(r.content);
-      ocrConfidence = typeof data.confidence === "number" ? data.confidence : 0;
+      // Track whether the model actually provided a confidence score.
+      // When it's absent we don't treat the page as low-confidence — we rely
+      // on native-text similarity instead.  confidenceFromModel=null lets the
+      // HITL gate below distinguish "model said 0%" from "model was silent".
+      confidenceFromModel = typeof data.confidence === "number" ? data.confidence : null;
+      ocrConfidence = confidenceFromModel ?? 0;
 
       currentRawText = buildRawText(data);
       const nt = nativePageTexts[i];
-      nativeSimilarity = nt !== null ? nativeTextSimilarity(nt, currentRawText) : null;
+      // Skip similarity when buildRawText produced empty or JSON-like output
+      // (indicates the model returned a non-standard schema — garbage-in would
+      // produce misleadingly low F1 scores and trigger spurious HITL flags).
+      const rawIsUsable = currentRawText.length > 0 && !currentRawText.startsWith("{");
+      nativeSimilarity = (nt !== null && rawIsUsable) ? nativeTextSimilarity(nt, currentRawText) : null;
       if (nativeSimilarity !== null) {
         console.log(`[Pipeline] Job ${jobId} p${pageNum} native similarity: ${Math.round(nativeSimilarity * 100)}%`);
       }
@@ -799,14 +841,15 @@ async function _runJob(jobId: number): Promise<void> {
       }
     }
 
-    // Queue for HITL review: stage failure, low model confidence, or significant
-    // divergence from the embedded PDF text (ground truth for digital-native PDFs).
+    // Queue for HITL review: stage failure, low model confidence (only when the
+    // model actually returned a score), or significant native-text divergence.
     const poorNativeAlignment = nativeSimilarity !== null && nativeSimilarity < NATIVE_SIMILARITY_THRESHOLD;
-    const needsHitl = stagesFailed.length > 0 || ocrConfidence < HITL_CONFIDENCE_THRESHOLD || poorNativeAlignment;
+    const lowConfidence = confidenceFromModel !== null && ocrConfidence < HITL_CONFIDENCE_THRESHOLD;
+    const needsHitl = stagesFailed.length > 0 || lowConfidence || poorNativeAlignment;
     if (needsHitl) {
       const reasonParts: string[] = [`Page ${pageNum} of ${totalDocPages}`];
       if (stagesFailed.length > 0) reasonParts.push(`failed stages: ${stagesFailed.join(", ")}`);
-      if (ocrConfidence < HITL_CONFIDENCE_THRESHOLD) reasonParts.push(`low confidence: ${ocrConfidence}%`);
+      if (lowConfidence) reasonParts.push(`low confidence: ${ocrConfidence}%`);
       if (poorNativeAlignment) reasonParts.push(`native text divergence: ${Math.round(nativeSimilarity! * 100)}% similarity`);
       await createHitlItem({
         pageId,
@@ -815,7 +858,8 @@ async function _runJob(jobId: number): Promise<void> {
         flagCategory: stagesFailed.length > 0 ? "stage_failure"
           : poorNativeAlignment ? "native_text_divergence"
           : "low_confidence",
-        priority: stagesFailed.includes("ocr_extraction") || ocrConfidence < 50
+        priority: stagesFailed.includes("ocr_extraction")
+          || (confidenceFromModel !== null && ocrConfidence < 50)
           || (poorNativeAlignment && nativeSimilarity! < 0.5) ? "high" : "medium",
       });
     }
