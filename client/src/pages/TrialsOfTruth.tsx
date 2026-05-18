@@ -462,7 +462,7 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
     <Card className={`bg-card/50 backdrop-blur-sm border-border/50 transition-colors ${isActive ? "border-primary/30" : ""}`}>
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div className="flex items-center gap-3 min-w-0">
+          <div className="flex items-center gap-3 min-w-0 flex-1">
             <input
               type="checkbox"
               checked={isSelected}
@@ -470,16 +470,19 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
               onClick={e => e.stopPropagation()}
               className="flex-shrink-0 accent-primary cursor-pointer w-4 h-4"
             />
-            <button onClick={() => { const next = !expanded; setExpanded(next); if (next) onActivate(); }} className="text-muted-foreground hover:text-foreground flex-shrink-0">
-              {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+            <button
+              onClick={() => { const next = !expanded; setExpanded(next); if (next) onActivate(); }}
+              className="flex items-center gap-3 min-w-0 flex-1 text-left text-muted-foreground hover:text-foreground"
+            >
+              {expanded ? <ChevronDown className="w-4 h-4 flex-shrink-0" /> : <ChevronRight className="w-4 h-4 flex-shrink-0" />}
+              <CardTitle className="text-base truncate">
+                PDF p.{item.page?.pageNumber ?? "?"}
+                {item.page?.printedPageLabel && (
+                  <span className="text-muted-foreground font-normal"> / Doc p.{item.page.printedPageLabel}</span>
+                )}
+                {" — "}{item.reason}
+              </CardTitle>
             </button>
-            <CardTitle className="text-base truncate">
-              PDF p.{item.page?.pageNumber ?? "?"}
-              {item.page?.printedPageLabel && (
-                <span className="text-muted-foreground font-normal"> / Doc p.{item.page.printedPageLabel}</span>
-              )}
-              {" — "}{item.reason}
-            </CardTitle>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
             <StatusBadge status={item.status} />

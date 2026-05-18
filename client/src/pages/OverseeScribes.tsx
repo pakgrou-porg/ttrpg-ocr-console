@@ -123,7 +123,7 @@ function PageCard({ page, jobId, onFlagged, timing }: {
   const ocr = page.ocr;
   const sd = ocr?.structuredData as any;
   const blocks: any[] = Array.isArray(sd?.content_blocks) ? sd.content_blocks : [];
-  const displayText = ocr?.rawText || (blocks.length > 0 ? blocks.map((b: any) => b.text ?? "").join("\n\n") : null);
+  const displayText = ocr?.rawText || (blocks.length > 0 ? blocks.map((b: any) => b.text ?? b.content ?? "").join("\n\n") : null);
   const regions = page.contentRegions ?? sd?.regions;
 
   return (
