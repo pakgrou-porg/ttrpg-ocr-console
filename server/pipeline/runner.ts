@@ -836,8 +836,12 @@ async function _runJob(jobId: number): Promise<void> {
           }
         }
       } catch (err: any) {
-        if (isConfigError(err)) throw err;
-        console.warn(`[Pipeline] Job ${jobId} p${pageNum} tabular_extraction: ${err.message}`);
+        if (isConfigError(err)) {
+          // tabular_extraction is optional — a missing inscription means "skip table enhancement"
+          console.warn(`[Pipeline] Job ${jobId} p${pageNum} tabular_extraction: not configured, skipping table extraction`);
+        } else {
+          console.warn(`[Pipeline] Job ${jobId} p${pageNum} tabular_extraction: ${err.message}`);
+        }
       }
     }
 

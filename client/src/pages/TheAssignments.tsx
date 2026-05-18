@@ -52,6 +52,7 @@ const STAGE_PHASE_MAP: Record<string, string> = {
   content_type_classify:   "Phase 1 — Ingestion & Layout",
   child_image_extraction:  "Phase 1 — Ingestion & Layout",
   ocr_extraction:          "Phase 2 — OCR Extraction",
+  tabular_extraction:      "Phase 2 — OCR Extraction",
   content_break_detect:    "Phase 2 — OCR Extraction",
   quality_validation:      "Phase 2 — OCR Extraction",
   pass_comparison:         "Phase 2 — OCR Extraction",
