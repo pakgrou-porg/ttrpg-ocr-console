@@ -45,6 +45,22 @@ const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
 type DocumentAccessTarget = { ownerUserId?: number | null; visibility?: string | null };
 type RouterCtx = { user: { id: number; role: string } };
 
+const REVIEW_LAYOUT_TYPES = new Set([
+  "cover",
+  "title_page",
+  "toc",
+  "chapter_header",
+  "body_text",
+  "stat_block",
+  "table",
+  "illustration_full",
+  "illustration_with_text",
+  "index",
+  "appendix",
+  "mixed",
+  "unknown",
+]);
+
 function canAccessDocument(ctx: RouterCtx, doc: DocumentAccessTarget): boolean {
   return ctx.user.role === "admin" || doc.ownerUserId === ctx.user.id || doc.visibility !== "private";
 }
@@ -81,6 +97,56 @@ async function getHitlItemOrThrow(id: number) {
   const item = await getHitlItemById(id);
   if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "HITL item not found." });
   return item;
+}
+
+function parseReviewValue(value: string): unknown {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return trimmed;
+  }
+}
+
+function extractLayoutType(value: unknown): string | null {
+  if (typeof value === "string") return REVIEW_LAYOUT_TYPES.has(value) ? value : null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const obj = value as Record<string, unknown>;
+  const raw = obj.layout_type ?? obj.layoutType ?? obj.page_layout ?? obj.pageLayout;
+  return typeof raw === "string" && REVIEW_LAYOUT_TYPES.has(raw) ? raw : null;
+}
+
+function normaliseReviewRegions(value: unknown) {
+  if (!Array.isArray(value)) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Region corrections must be a JSON array." });
+  }
+  return value.map((region, index) => {
+    if (!region || typeof region !== "object" || Array.isArray(region)) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: `Region ${index + 1} must be an object.` });
+    }
+
+    const source = region as Record<string, any>;
+    const bbox = source.bbox && typeof source.bbox === "object" && !Array.isArray(source.bbox)
+      ? source.bbox as Record<string, any>
+      : source;
+    const x = Number(bbox.x ?? bbox.left ?? bbox.x1);
+    const y = Number(bbox.y ?? bbox.top ?? bbox.y1);
+    const w = Number(bbox.w ?? bbox.width ?? (bbox.x2 != null ? Number(bbox.x2) - x : undefined));
+    const h = Number(bbox.h ?? bbox.height ?? (bbox.y2 != null ? Number(bbox.y2) - y : undefined));
+    if (![x, y, w, h].every(Number.isFinite) || w <= 0 || h <= 0) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: `Region ${index + 1} has invalid bbox coordinates.` });
+    }
+
+    const regionType = String(source.regionType ?? source.type ?? "unknown");
+    return {
+      ...source,
+      sequence: Number.isFinite(Number(source.sequence)) ? Number(source.sequence) : index + 1,
+      type: regionType,
+      regionType,
+      bbox: { x, y, w, h },
+    };
+  });
 }
 
 async function getPageWithAccess(ctx: RouterCtx, pageId: number) {
@@ -1875,6 +1941,25 @@ export const appRouter = router({
           ? await getOcrResultById(item.ocrResultId)
           : await getOcrResultByPageId(item.pageId);
 
+        if (input.correctedStructuredData) {
+          const layoutCorrection = input.correctedStructuredData.layout_correction;
+          const layoutType = typeof layoutCorrection === "string"
+            ? extractLayoutType(parseReviewValue(layoutCorrection))
+            : extractLayoutType(layoutCorrection);
+          const pageUpdates: any = {};
+          if (layoutType) pageUpdates.layoutType = layoutType;
+
+          const regionCorrection = input.correctedStructuredData.regions_correction;
+          if (typeof regionCorrection === "string" && regionCorrection.trim()) {
+            pageUpdates.contentRegions = normaliseReviewRegions(parseReviewValue(regionCorrection));
+          } else if (Array.isArray(regionCorrection)) {
+            pageUpdates.contentRegions = normaliseReviewRegions(regionCorrection);
+          }
+          if (Object.keys(pageUpdates).length > 0) {
+            await updateDocumentPage(item.pageId, pageUpdates);
+          }
+        }
+
         if (ocrResult && (input.correctedText || input.correctedStructuredData)) {
           await updateOcrResult(ocrResult.id, {
             correctedText: input.correctedText,
@@ -1933,6 +2018,16 @@ export const appRouter = router({
         await getPageOrThrow(input.pageId);
         const ocr = await getOcrResultByPageId(input.pageId);
         if (!ocr) throw new TRPCError({ code: "NOT_FOUND", message: "No OCR result found for this page." });
+
+        const parsedValue = parseReviewValue(input.value);
+        if (input.field === "layout") {
+          const layoutType = extractLayoutType(parsedValue);
+          if (layoutType) await updateDocumentPage(input.pageId, { layoutType });
+        } else if (input.field === "regions" && input.value.trim()) {
+          const regions = normaliseReviewRegions(parsedValue);
+          await updateDocumentPage(input.pageId, { contentRegions: regions });
+        }
+
         if (input.field === "text") {
           await updateOcrResult(ocr.id, {
             correctedText: input.value || null,
@@ -2002,11 +2097,10 @@ export const appRouter = router({
         currentId: z.number().int().optional(),
       }).optional())
       .query(async () => {
-        // Priority order: critical > high > medium > low, then oldest first
+        // FIFO review order follows source page/material order when queue creation is sequential.
         const items = await getAllHitlItems({
           status: "queued",
           limit: 100,
-          orderByPriority: true,
         });
         if (items.length > 0) return items[0];
 
@@ -2014,7 +2108,6 @@ export const appRouter = router({
         const inProgress = await getAllHitlItems({
           status: "in_progress",
           limit: 100,
-          orderByPriority: true,
         });
         return inProgress[0] ?? null;
       }),
@@ -2083,11 +2176,14 @@ export const appRouter = router({
         });
       }),
 
-    /** Export task-specific review records for prompt regression and OCR tuning. */
+    /** Export per-page review records for prompt regression and OCR tuning. */
     exportTrainingData: protectedProcedure
       .input(z.object({
         ids: z.array(z.number().int()).optional(),
         status: z.enum(HITL_STATUSES).optional(),
+        documentId: z.number().int().optional(),
+        pageStart: z.number().int().min(1).optional(),
+        pageEnd: z.number().int().min(1).optional(),
       }).optional())
       .query(async ({ ctx, input }) => {
         const parseCorrection = (value: unknown) => {
@@ -2097,82 +2193,123 @@ export const appRouter = router({
           try { return JSON.parse(trimmed); } catch { return trimmed; }
         };
 
-        const items = input?.ids?.length
-          ? await getHitlItemsByIds(input.ids)
-          : await getAllHitlItems({ status: input?.status, limit: 10_000 });
-        if (items.length === 0) return [];
+        let pages: Awaited<ReturnType<typeof getPagesByIds>> = [];
+        let items: Awaited<ReturnType<typeof getAllHitlItems>> = [];
 
-        const pageIds = [...new Set(items.map(i => i.pageId))];
-        const pages = await getPagesByIds(pageIds);
-        const pageMap = new Map(pages.map(p => [p.id, p]));
+        if (input?.documentId) {
+          const doc = assertDocumentAccess(ctx, await getDocumentById(input.documentId));
+          pages = (await getPagesByDocumentId(doc.id)).filter(page => {
+            if (input.pageStart && page.pageNumber < input.pageStart) return false;
+            if (input.pageEnd && page.pageNumber > input.pageEnd) return false;
+            return true;
+          });
+          const allItems = await getAllHitlItems({ limit: 10_000 });
+          const pageIdSet = new Set(pages.map(p => p.id));
+          items = allItems.filter(item => pageIdSet.has(item.pageId));
+        } else {
+          items = input?.ids?.length
+            ? await getHitlItemsByIds(input.ids)
+            : await getAllHitlItems({ status: input?.status, limit: 10_000 });
+          if (items.length === 0) return [];
+          pages = await getPagesByIds([...new Set(items.map(i => i.pageId))]);
+        }
+
+        if (pages.length === 0) return [];
+
         const docs = await getDocumentsByIds([...new Set(pages.map(p => p.documentId))]);
         const docMap = new Map(docs.map(d => [d.id, d]));
+        const pageIds = pages.map(p => p.id);
         const ocrByPage = await getOcrResultsByPageIds(pageIds);
         const ocrMap = new Map(ocrByPage.map(r => [r.pageId, r]));
+        const itemMap = new Map<number, any>();
+        for (const item of items) {
+          if (!itemMap.has(item.pageId)) itemMap.set(item.pageId, item);
+        }
 
-        return items.flatMap(item => {
-          const page = pageMap.get(item.pageId) ?? null;
-          const doc = page ? docMap.get(page.documentId) ?? null : null;
-          const ocr = page ? ocrMap.get(page.id) ?? null : null;
+        return pages.flatMap(page => {
+          const doc = docMap.get(page.documentId) ?? null;
+          const ocr = ocrMap.get(page.id) ?? null;
+          const item = itemMap.get(page.id) ?? null;
           if (!page || !doc || !canAccessDocument(ctx, doc)) return [];
 
           const imageUrl = page.rawPngUrl
             ? `/api/pipeline/pages/${page.rawPngUrl.replace(/.*\/workspace\//, "")}`
             : null;
           const corrected = (ocr?.correctedStructuredData as Record<string, unknown> | null) ?? {};
-          const base = {
-            hitl_id: item.id,
-            review_status: item.status,
-            review_reason: item.reason,
+          const layoutExpected = parseCorrection(corrected.layout_correction) ?? {
+            layout_type: page.layoutType ?? null,
+            columns: (ocr?.layoutMetadata as any)?.columns ?? null,
+          };
+          const regionsExpected = parseCorrection(corrected.regions_correction) ?? page.contentRegions ?? [];
+          const ocrExpected = parseCorrection(corrected.json_correction)
+            ?? parseCorrection(corrected.structure_correction)
+            ?? (ocr?.correctedText ? { corrected_text: ocr.correctedText } : ocr?.structuredData ?? null);
+
+          return {
+            schema_version: "hitl_page_training_v1",
             source: {
               document_id: doc.id,
               document_title: doc.title ?? doc.filename,
+              publisher: doc.publisher ?? null,
+              document_type: doc.documentType ?? null,
               game_system: doc.gameSystem ?? null,
               page_id: page.id,
               page_number: page.pageNumber,
+              printed_page_label: page.printedPageLabel ?? null,
               image_url: imageUrl,
+              image_width: page.imageWidth ?? null,
+              image_height: page.imageHeight ?? null,
+              phash: page.phash ?? null,
+            },
+            review: item ? {
+              hitl_id: item.id,
+              status: item.status,
+              priority: item.priority,
+              reason: item.reason,
+              flag_category: item.flagCategory ?? null,
+              resolution_notes: item.resolutionNotes ?? null,
+            } : null,
+            model_trace: {
+              pass1_model: ocr?.pass1Model ?? null,
+              pass2_model: ocr?.pass2Model ?? null,
+              confidence: ocr?.confidence ?? null,
+              audit_log: ocr?.auditLog ?? null,
+            },
+            labels: {
+              page_layout: layoutExpected,
+              regions: regionsExpected,
+              ocr_text: ocr?.correctedText ?? ocr?.rawText ?? null,
+              ocr_structured: ocrExpected,
+            },
+            tasks: {
+              layout_analysis: {
+                input: { image_url: imageUrl },
+                model_output: {
+                  layout_type: page.layoutType ?? null,
+                  columns: (ocr?.layoutMetadata as any)?.columns ?? null,
+                  has_table: Array.isArray(page.contentRegions) ? page.contentRegions.some((r: any) => r.type === "table" || r.type === "stat_block") : null,
+                },
+                expected: layoutExpected,
+              },
+              bbox_detection: {
+                input: { image_url: imageUrl, page_layout: layoutExpected },
+                model_output: page.contentRegions ?? [],
+                expected: regionsExpected,
+              },
+              ocr_extraction: {
+                input: {
+                  image_url: imageUrl,
+                  page_layout: layoutExpected,
+                  regions: regionsExpected,
+                },
+                model_output: {
+                  raw_text: ocr?.rawText ?? null,
+                  structured_data: ocr?.structuredData ?? null,
+                },
+                expected: ocrExpected,
+              },
             },
           };
-
-          const records: any[] = [];
-          records.push({
-            ...base,
-            task: "layout_analysis",
-            input: { image_url: imageUrl },
-            model_output: {
-              layout_type: page.layoutType ?? null,
-              columns: (ocr?.layoutMetadata as any)?.columns ?? null,
-              has_table: Array.isArray(page.contentRegions) ? page.contentRegions.some((r: any) => r.type === "table" || r.type === "stat_block") : null,
-            },
-            expected: parseCorrection(corrected.layout_correction) ?? {
-              layout_type: page.layoutType ?? null,
-              columns: (ocr?.layoutMetadata as any)?.columns ?? null,
-            },
-          });
-
-          records.push({
-            ...base,
-            task: "bbox_detection",
-            input: { image_url: imageUrl },
-            model_output: page.contentRegions ?? [],
-            expected: parseCorrection(corrected.regions_correction) ?? page.contentRegions ?? [],
-          });
-
-          records.push({
-            ...base,
-            task: "ocr_extraction",
-            input: {
-              image_url: imageUrl,
-              layout_type: page.layoutType ?? null,
-              regions: page.contentRegions ?? [],
-            },
-            model_output: ocr?.structuredData ?? null,
-            expected: parseCorrection(corrected.json_correction)
-              ?? parseCorrection(corrected.structure_correction)
-              ?? (ocr?.correctedText ? { corrected_text: ocr.correctedText } : ocr?.structuredData ?? null),
-          });
-
-          return records;
         });
       }),
   }),

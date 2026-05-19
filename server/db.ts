@@ -1256,7 +1256,7 @@ export async function getAllHitlItems(options?: { status?: string; priority?: st
 
   const order = options?.orderByPriority
     ? [asc(priorityRank), asc(hitlQueue.createdAt)]
-    : [desc(hitlQueue.createdAt)];
+    : [asc(hitlQueue.createdAt)];
 
   const baseQuery = db.select().from(hitlQueue);
   const filtered = conditions.length > 0 ? baseQuery.where(and(...conditions)) : baseQuery;
