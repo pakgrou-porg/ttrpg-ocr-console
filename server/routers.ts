@@ -25,6 +25,7 @@ import {
   getPagesByIds, getDocumentsByIds, getOcrResultsByPageIds,
   getOcrResultByPageId, getOcrResultById, createOcrResult, updateOcrResult,
   getHitlItemById, getHitlItemsByIds, getHitlItemsByPageId, getAllHitlItems, createHitlItem, updateHitlItem, getHitlStats,
+  getHitlRetryAttemptsByPageId, getHitlRetryAttemptsByPageIds,
   getAllGameSystems, createGameSystem, updateGameSystem, deleteGameSystem,
   getLlmMetricsByPage, getLlmMetricsJobSummary, getLlmMetricsPageSummary, getLlmProviderMetricsSummary,
   getContentSummariesByDocument, updateContentSummary,
@@ -1854,6 +1855,11 @@ export const appRouter = router({
 
         const ocrByPage = await getOcrResultsByPageIds(pageIds);
         const ocrMap = new Map(ocrByPage.map(r => [r.pageId, r]));
+        const retryAttempts = await getHitlRetryAttemptsByPageIds(pageIds);
+        const retryMap = new Map<number, typeof retryAttempts>();
+        for (const attempt of retryAttempts) {
+          retryMap.set(attempt.pageId, [...(retryMap.get(attempt.pageId) ?? []), attempt]);
+        }
 
         return items.flatMap(item => {
           const page = pageMap.get(item.pageId) ?? null;
@@ -1864,6 +1870,7 @@ export const appRouter = router({
             ...item,
             page: page ?? null,
             ocr: ocr ?? null,
+            retryAttempts: retryMap.get(item.pageId) ?? [],
             documentTitle: doc?.title ?? doc?.filename ?? "Unknown",
             documentId: page?.documentId ?? null,
           };
@@ -1878,7 +1885,8 @@ export const appRouter = router({
         const page = await getPageById(item.pageId);
         const document = page ? await getDocumentById(page.documentId) : null;
         const ocrResult = item.ocrResultId ? await getOcrResultById(item.ocrResultId) : await getOcrResultByPageId(item.pageId);
-        return { item, page, ocrResult: ocrResult ?? null, document };
+        const retryAttempts = await getHitlRetryAttemptsByPageId(item.pageId);
+        return { item, page, ocrResult: ocrResult ?? null, document, retryAttempts };
       }),
 
     /** Get HITL stats for the dashboard */
@@ -2103,16 +2111,18 @@ export const appRouter = router({
       .input(z.object({
         pageId: z.number().int(),
         hitlId: z.number().int().optional(),
+        savedCorrectionFields: z.array(z.enum(["text", "layout", "regions", "structure", "json"] as const)).optional(),
         stages: z.array(z.enum(["layout_analysis", "bbox_detection", "ocr_extraction"] as const))
           .min(1)
           .default(["layout_analysis", "bbox_detection", "ocr_extraction"]),
       }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
         await getPageOrThrow(input.pageId);
         const result = await retryPageStages(
           input.pageId,
           input.stages as RetryStage[],
           input.hitlId,
+          { reviewerUserId: ctx.user.id, savedCorrectionFields: input.savedCorrectionFields ?? [] },
         );
         return { success: true, ...result };
       }),
@@ -2270,6 +2280,11 @@ export const appRouter = router({
         const pageIds = pages.map(p => p.id);
         const ocrByPage = await getOcrResultsByPageIds(pageIds);
         const ocrMap = new Map(ocrByPage.map(r => [r.pageId, r]));
+        const retryAttempts = await getHitlRetryAttemptsByPageIds(pageIds);
+        const retryMap = new Map<number, typeof retryAttempts>();
+        for (const attempt of retryAttempts) {
+          retryMap.set(attempt.pageId, [...(retryMap.get(attempt.pageId) ?? []), attempt]);
+        }
         const itemMap = new Map<number, any>();
         for (const item of items) {
           if (!itemMap.has(item.pageId)) itemMap.set(item.pageId, item);
@@ -2323,6 +2338,7 @@ export const appRouter = router({
               pass2_model: ocr?.pass2Model ?? null,
               confidence: ocr?.confidence ?? null,
               audit_log: ocr?.auditLog ?? null,
+              retry_attempts: retryMap.get(page.id) ?? [],
             },
             labels: {
               page_layout: layoutExpected,

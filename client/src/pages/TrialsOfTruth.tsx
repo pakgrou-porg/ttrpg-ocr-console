@@ -60,6 +60,7 @@ function formatExportRecord(item: any) {
     human_corrections: (item.ocr?.correctedStructuredData || item.ocr?.correctedText)
       ? { corrected_text: item.ocr?.correctedText ?? null, corrected_data: item.ocr?.correctedStructuredData ?? null }
       : null,
+    retry_attempts: item.retryAttempts ?? [],
   };
 }
 
@@ -103,6 +104,18 @@ function parseLayoutCorrection(value: string): Record<string, unknown> {
 
 function layoutLabel(value: string) {
   return value.split("_").map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
+}
+
+function formatRetryTimestamp(value: string | Date | null | undefined) {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleString();
+}
+
+function retryStatusClass(status: string) {
+  if (status === "succeeded") return "text-green-400";
+  if (status === "failed") return "text-red-400";
+  return "text-yellow-400";
 }
 
 // ── JSON pruning ──────────────────────────────────────────────────────────────
@@ -455,6 +468,7 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
         pageId,
         hitlId: item.id,
         stages: [...retryStages],
+        savedCorrectionFields: dependencyFields,
       });
     })();
   };
@@ -489,6 +503,7 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
             pageId,
             hitlId: item.id,
             stages: ["ocr_extraction"],
+            savedCorrectionFields: [activeTab],
           });
         },
       },
@@ -568,6 +583,7 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
 
   const hasCorrections = Object.values(corrections).some(v => v.trim());
   const activeEditableTab = activeTab !== "document";
+  const retryAttempts: any[] = Array.isArray(item.retryAttempts) ? item.retryAttempts : [];
 
   return (
     <div ref={cardRef}>
@@ -747,6 +763,38 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
                 </>
               )}
             </div>
+            {retryAttempts.length > 0 && (
+              <div className="space-y-1 border-t border-border/30 pt-3">
+                <p className="text-xs text-muted-foreground font-medium">Retry history</p>
+                <div className="space-y-1">
+                  {retryAttempts.slice(0, 4).map(attempt => {
+                    const errors = attempt.stageErrors && Object.keys(attempt.stageErrors).length > 0
+                      ? Object.entries(attempt.stageErrors).map(([stage, message]) => `${stage}: ${String(message)}`).join(" | ")
+                      : "";
+                    return (
+                      <div key={attempt.id} className="text-[11px] rounded border border-border/30 bg-muted/10 p-2 space-y-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={`font-semibold ${retryStatusClass(attempt.status)}`}>{attempt.status}</span>
+                          <span className="text-muted-foreground">{formatRetryTimestamp(attempt.completedAt ?? attempt.startedAt)}</span>
+                          <span className="font-mono text-muted-foreground">
+                            {(attempt.requestedStages ?? []).join(", ") || "no stages"}
+                          </span>
+                          {typeof attempt.confidence === "number" && (
+                            <span className="text-muted-foreground">conf: {attempt.confidence}%</span>
+                          )}
+                        </div>
+                        {(attempt.savedCorrectionFields ?? []).length > 0 && (
+                          <p className="text-muted-foreground">
+                            saved before retry: {(attempt.savedCorrectionFields ?? []).join(", ")}
+                          </p>
+                        )}
+                        {errors && <p className="text-red-300 truncate">{errors}</p>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             <div className="flex items-center justify-between gap-4 flex-wrap">
               <div className="flex items-center gap-3 min-w-0">

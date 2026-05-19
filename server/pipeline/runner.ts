@@ -10,6 +10,7 @@ import {
   createDocument, updateDocument,
   createDocumentPage, updateDocumentPage,
   createOcrResult, updateOcrResult, createHitlItem, updateHitlItem,
+  createHitlRetryAttempt, updateHitlRetryAttempt,
   getPageById, getDocumentById,
   getOcrResultByPageId,
   getPageByDocumentAndNumber,
@@ -1118,19 +1119,26 @@ async function _runJob(jobId: number): Promise<void> {
 
 export type RetryStage = "layout_analysis" | "bbox_detection" | "ocr_extraction";
 
+export type RetryPageMetadata = {
+  reviewerUserId?: number;
+  savedCorrectionFields?: string[];
+};
+
 export async function retryPageStages(
   pageId: number,
   stages: RetryStage[],
   hitlId?: number,
+  metadata: RetryPageMetadata = {},
 ): Promise<{ confidence: number; stagesFailed: string[]; stageErrors: Record<string, string> }> {
   const page = await getPageById(pageId);
   if (!page) throw new Error(`Page ${pageId} not found`);
   if (!page.rawPngUrl) throw new Error(`Page ${pageId} has no image on disk`);
 
-  const [doc, prevPage, nextPage] = await Promise.all([
+  const [doc, prevPage, nextPage, currentOcrBefore] = await Promise.all([
     getDocumentById(page.documentId),
     getPageByDocumentAndNumber(page.documentId, page.pageNumber - 1),
     getPageByDocumentAndNumber(page.documentId, page.pageNumber + 1),
+    getOcrResultByPageId(pageId),
   ]);
   const [prevOcr, nextOcr] = await Promise.all([
     prevPage ? getOcrResultByPageId(prevPage.id) : Promise.resolve(null),
@@ -1156,6 +1164,39 @@ export async function retryPageStages(
   const stageErrors: Record<string, string> = {};
   let layoutType = page.layoutType ?? undefined;
   let ocrConfidence = 0;
+  let retryOcrResultId: number | null = currentOcrBefore?.id ?? null;
+  const modelTrace: Record<string, string> = {};
+  const retryStartedAt = Date.now();
+  const savedCorrectionFields = [...new Set(metadata.savedCorrectionFields ?? [])];
+  const corrected = (currentOcrBefore?.correctedStructuredData as Record<string, unknown> | null) ?? {};
+  const usedReviewedLayout = savedCorrectionFields.includes("layout") || page.layoutType != null;
+  const usedReviewedRegions = savedCorrectionFields.includes("regions") || page.contentRegions != null;
+  const usedReviewedStructure = savedCorrectionFields.some(f => ["text", "structure", "json"].includes(f))
+    || currentOcrBefore?.correctedText != null
+    || corrected.structure_correction != null
+    || corrected.json_correction != null;
+  let retryAttemptId: number | null = null;
+  try {
+    const attempt = await createHitlRetryAttempt({
+      hitlItemId: hitlId ?? null,
+      pageId,
+      requestedStages: stages,
+      savedCorrectionFields,
+      usedReviewedLayout,
+      usedReviewedRegions,
+      usedReviewedStructure,
+      status: "running",
+      confidence: null,
+      stagesFailed: [],
+      stageErrors: {},
+      modelTrace: {},
+      ocrResultId: retryOcrResultId,
+      createdBy: metadata.reviewerUserId ?? null,
+    } as any);
+    retryAttemptId = attempt.id;
+  } catch (err: any) {
+    console.warn(`[Pipeline] Page ${pageId} retry tracking start failed: ${err?.message ?? String(err)}`);
+  }
 
   await PAGE_LLM_SEMAPHORE.acquirePriority();
   console.log(`[Pipeline] Page ${pageId} retry: acquired LLM slot (stages: ${stages.join(", ")})`);
@@ -1166,11 +1207,11 @@ export async function retryPageStages(
         const content: UserContentPart[] = [imgPart, { type: "text", text: "Classify the layout type and structure of this page. Reply with ONLY a JSON object — start with { and end with }." }];
         const r = await invokeStage("layout_analysis", content, surroundingContext, PROMPT_LAYOUT_ANALYSIS,
           { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_LAYOUT, validateResult: assertLayoutInvokeResult }, { pageId, jobId: doc?.ingestionJobId ?? undefined });
+        modelTrace.layout_analysis = r.model;
         const data = validateLayoutData(parseJsonResponse(r.content));
         layoutType = (data.layout_type as string) || undefined;
         await updateDocumentPage(pageId, { layoutType });
       } catch (err: any) {
-        if (isConfigError(err)) throw err;
         const msg = stageErrorMessage(err);
         stagesFailed.push("layout_analysis");
         stageErrors.layout_analysis = msg;
@@ -1187,11 +1228,11 @@ export async function retryPageStages(
         const content: UserContentPart[] = [imgPart, { type: "text", text: "Identify all distinct content regions on this page. Reply with ONLY a JSON object — start with { and end with }." }];
         const r = await invokeStage("bbox_detection", content, surroundingContext, PROMPT_BBOX_DETECTION,
           { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_BBOX, validateResult: assertBboxInvokeResult }, { pageId, jobId: doc?.ingestionJobId ?? undefined });
+        modelTrace.bbox_detection = r.model;
         const data = parseJsonResponse(r.content);
         regions = validateBboxRegions(data);
         await updateDocumentPage(pageId, { contentRegions: regions });
       } catch (err: any) {
-        if (isConfigError(err)) throw err;
         const msg = stageErrorMessage(err);
         stagesFailed.push("bbox_detection");
         stageErrors.bbox_detection = msg;
@@ -1216,6 +1257,7 @@ export async function retryPageStages(
         }];
         const r = await invokeStage("ocr_extraction", content, fullContext, PROMPT_OCR_EXTRACTION,
           { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_OCR }, { pageId, jobId: doc?.ingestionJobId ?? undefined });
+        modelTrace.ocr_extraction = r.model;
         const data = parseRetryOcrResponse(r.content);
         ocrConfidence = typeof data.confidence === "number" ? data.confidence : 0;
 
@@ -1235,18 +1277,19 @@ export async function retryPageStages(
               retryAudit],
           } as any);
         } else {
-          await createOcrResult({
+          const created = await createOcrResult({
             pageId, structuredData: data, rawText, markdownText, normalisedText, confidence: ocrConfidence,
             status: "pass1_complete", pass1Model: r.model,
             auditLog: [retryAudit],
           } as any);
+          retryOcrResultId = created.id;
         }
+        if (existing) retryOcrResultId = existing.id;
         await updateDocumentPage(pageId, {
           ocrCompleted: true, ocrConfidence,
           printedPageLabel: printedPageLabel ?? "[unnumbered]",
         });
       } catch (err: any) {
-        if (isConfigError(err)) throw err;
         const msg = stageErrorMessage(err);
         stagesFailed.push("ocr_extraction");
         stageErrors.ocr_extraction = msg;
@@ -1274,6 +1317,23 @@ export async function retryPageStages(
       }
       if (ocrConfidence < HITL_CONFIDENCE_THRESHOLD) parts.push(`confidence ${ocrConfidence}%`);
       await updateHitlItem(hitlId, { resolutionNotes: parts.join(" — ") });
+    }
+  }
+
+  if (retryAttemptId != null) {
+    try {
+      await updateHitlRetryAttempt(retryAttemptId, {
+        status: stagesFailed.length === 0 ? "succeeded" : "failed",
+        confidence: ocrConfidence,
+        stagesFailed,
+        stageErrors,
+        modelTrace,
+        ocrResultId: retryOcrResultId,
+        completedAt: new Date(),
+        durationMs: Date.now() - retryStartedAt,
+      } as any);
+    } catch (err: any) {
+      console.warn(`[Pipeline] Page ${pageId} retry tracking finish failed: ${err?.message ?? String(err)}`);
     }
   }
 
