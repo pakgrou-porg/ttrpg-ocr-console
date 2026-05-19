@@ -1960,14 +1960,31 @@ export const appRouter = router({
           }
         }
 
-        if (ocrResult && (input.correctedText || input.correctedStructuredData)) {
-          await updateOcrResult(ocrResult.id, {
+        if (input.correctedText || input.correctedStructuredData) {
+          const correctionPayload = {
             correctedText: input.correctedText,
             correctedStructuredData: input.correctedStructuredData,
             correctedBy: ctx.user.id,
             correctedAt: new Date(),
             status: "corrected",
-          });
+          } as any;
+
+          if (!ocrResult) {
+            await createOcrResult({
+              pageId: item.pageId,
+              confidence: 0,
+              ...correctionPayload,
+              auditLog: [{
+                timestamp: new Date().toISOString(),
+                action: "hitl_resolve_correction",
+                detail: "created review OCR record during HITL approval",
+              }],
+          } as any);
+          } else {
+            await updateOcrResult(ocrResult.id, {
+              ...correctionPayload,
+            });
+          }
         }
 
         return { success: true };
@@ -2018,6 +2035,7 @@ export const appRouter = router({
         await getPageOrThrow(input.pageId);
 
         const parsedValue = parseReviewValue(input.value);
+        let structuredCorrection: unknown = parsedValue;
         if (input.field === "layout") {
           if (!input.value.trim()) {
             await updateDocumentPage(input.pageId, { layoutType: null });
@@ -2027,13 +2045,36 @@ export const appRouter = router({
           }
         } else if (input.field === "regions") {
           const regions = input.value.trim() ? normaliseReviewRegions(parsedValue) : [];
+          structuredCorrection = regions;
           await updateDocumentPage(input.pageId, { contentRegions: regions });
+        } else if ((input.field === "structure" || input.field === "json") && input.value.trim()) {
+          if (!parsedValue || typeof parsedValue !== "object" || Array.isArray(parsedValue)) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `${input.field === "structure" ? "Structure" : "JSON"} corrections must be a JSON object.`,
+            });
+          }
         }
 
         const ocr = await getOcrResultByPageId(input.pageId);
         if (!ocr) {
-          if (input.field === "layout" || input.field === "regions") return { success: true, savedPageOnly: true };
-          throw new TRPCError({ code: "NOT_FOUND", message: "No OCR result found for this page." });
+          if (!input.value.trim()) return { success: true, savedPageOnly: input.field === "layout" || input.field === "regions" };
+          const key = `${input.field}_correction`;
+          const created = await createOcrResult({
+            pageId: input.pageId,
+            confidence: 0,
+            status: "corrected",
+            correctedText: input.field === "text" ? input.value : undefined,
+            correctedStructuredData: input.field === "text" ? undefined : { [key]: structuredCorrection },
+            correctedBy: ctx.user.id,
+            correctedAt: new Date(),
+            auditLog: [{
+              timestamp: new Date().toISOString(),
+              action: "hitl_save_correction",
+              detail: `created review OCR record for ${input.field}`,
+            }],
+          } as any);
+          return { success: true, ocrResultId: created.id, createdOcrResult: true };
         }
 
         if (input.field === "text") {
@@ -2046,7 +2087,7 @@ export const appRouter = router({
           const existing = (ocr.correctedStructuredData as Record<string, unknown>) ?? {};
           const key = `${input.field}_correction`;
           const updated = input.value
-            ? { ...existing, [key]: input.value }
+            ? { ...existing, [key]: structuredCorrection }
             : Object.fromEntries(Object.entries(existing).filter(([k]) => k !== key));
           await updateOcrResult(ocr.id, {
             correctedStructuredData: updated,

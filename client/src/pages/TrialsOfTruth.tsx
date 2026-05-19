@@ -417,8 +417,11 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
   const [retryStages, setRetryStages] = useState<Set<RetryStageId>>(new Set(ALL_RETRY_STAGES));
   const retryMut = trpc.hitl.retryPage.useMutation({
     onSuccess: (r) => {
+      const errorDetails = Object.entries(r.stageErrors ?? {})
+        .map(([stage, message]) => `${stage}: ${String(message)}`)
+        .join(" | ");
       const msg = r.stagesFailed.length > 0
-        ? `Retry done — ${r.stagesFailed.join(", ")} failed. Confidence: ${r.confidence}%`
+        ? `Retry done — ${r.stagesFailed.join(", ")} failed. Confidence: ${r.confidence}%${errorDetails ? `\n${errorDetails.slice(0, 300)}` : ""}`
         : `Retry succeeded — confidence ${r.confidence}%`;
       toast({ title: "Retry complete", description: msg });
       onResolved();
@@ -431,11 +434,29 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
 
   const runRetry = () => {
     if (retryStages.size === 0) return;
-    retryMut.mutate({
-      pageId: item.page?.id ?? item.pageId,
-      hitlId: item.id,
-      stages: [...retryStages],
-    });
+    void (async () => {
+      const pageId = item.page?.id ?? item.pageId;
+      const dependencyFields = (["text", "layout", "regions", "structure", "json"] as const)
+        .filter(field => corrections[field].trim());
+      try {
+        for (const field of dependencyFields) {
+          await saveCorrectionMut.mutateAsync({ pageId, field, value: corrections[field] });
+        }
+      } catch {
+        return;
+      }
+      if (dependencyFields.length > 0) {
+        setCorrections(c => ({
+          ...c,
+          ...Object.fromEntries(dependencyFields.map(field => [field, ""])),
+        }));
+      }
+      retryMut.mutate({
+        pageId,
+        hitlId: item.id,
+        stages: [...retryStages],
+      });
+    })();
   };
 
   const saveCorrectionMut = trpc.hitl.saveCorrection.useMutation({
@@ -443,11 +464,18 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
     onError: (e) => toast({ title: "Save failed", description: e.message, variant: "destructive" }),
   });
   const saveSection = (field: "text" | "layout" | "regions" | "structure" | "json") => () => {
-    saveCorrectionMut.mutate({ pageId: item.page?.id ?? item.pageId, field, value: corrections[field] });
+    saveCorrectionMut.mutate(
+      { pageId: item.page?.id ?? item.pageId, field, value: corrections[field] },
+      { onSuccess: () => setCorrections(c => ({ ...c, [field]: "" })) },
+    );
   };
   const saveActiveOnly = () => {
-    if (activeTab !== "layout" && activeTab !== "regions") return;
-    saveCorrectionMut.mutate({ pageId: item.page?.id ?? item.pageId, field: activeTab, value: corrections[activeTab] });
+    if (activeTab === "document") return;
+    const field = activeTab as "text" | "layout" | "regions" | "structure" | "json";
+    saveCorrectionMut.mutate(
+      { pageId: item.page?.id ?? item.pageId, field, value: corrections[field] },
+      { onSuccess: () => setCorrections(c => ({ ...c, [field]: "" })) },
+    );
   };
   const saveActiveAndRetryOcr = () => {
     if (activeTab !== "layout" && activeTab !== "regions") return;
@@ -455,11 +483,14 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
     saveCorrectionMut.mutate(
       { pageId, field: activeTab, value: corrections[activeTab] },
       {
-        onSuccess: () => retryMut.mutate({
-          pageId,
-          hitlId: item.id,
-          stages: ["ocr_extraction"],
-        }),
+        onSuccess: () => {
+          setCorrections(c => ({ ...c, [activeTab]: "" }));
+          retryMut.mutate({
+            pageId,
+            hitlId: item.id,
+            stages: ["ocr_extraction"],
+          });
+        },
       },
     );
   };
@@ -536,6 +567,7 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
   };
 
   const hasCorrections = Object.values(corrections).some(v => v.trim());
+  const activeEditableTab = activeTab !== "document";
 
   return (
     <div ref={cardRef}>
@@ -691,12 +723,12 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
                 );
               })}
               <Button size="sm" variant="outline" className="gap-1.5 ml-auto"
-                onClick={runRetry} disabled={isPending || retryStages.size === 0}>
+                onClick={runRetry} disabled={isPending || saveCorrectionMut.isPending || retryStages.size === 0}>
                 {retryMut.isPending
                   ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Retrying…</>
                   : <><RefreshCw className="w-3.5 h-3.5" /> Retry</>}
               </Button>
-              {(activeTab === "layout" || activeTab === "regions") && (
+              {activeEditableTab && (
                 <>
                   <Button size="sm" variant="outline" className="gap-1.5"
                     onClick={saveActiveOnly} disabled={isPending || saveCorrectionMut.isPending}>
@@ -704,12 +736,14 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
                       ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving...</>
                       : <><Save className="w-3.5 h-3.5" /> Save</>}
                   </Button>
-                  <Button size="sm" variant="outline" className="gap-1.5"
-                    onClick={saveActiveAndRetryOcr} disabled={isPending || saveCorrectionMut.isPending}>
-                    {saveCorrectionMut.isPending || retryMut.isPending
-                      ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Applying...</>
-                      : <><RefreshCw className="w-3.5 h-3.5" /> Save + OCR</>}
-                  </Button>
+                  {(activeTab === "layout" || activeTab === "regions") && (
+                    <Button size="sm" variant="outline" className="gap-1.5"
+                      onClick={saveActiveAndRetryOcr} disabled={isPending || saveCorrectionMut.isPending}>
+                      {saveCorrectionMut.isPending || retryMut.isPending
+                        ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Applying...</>
+                        : <><RefreshCw className="w-3.5 h-3.5" /> Save + OCR</>}
+                    </Button>
+                  )}
                 </>
               )}
             </div>

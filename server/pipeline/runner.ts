@@ -250,6 +250,10 @@ function isConfigError(err: any): boolean {
   return typeof err?.message === "string" && err.message.startsWith("[CONFIG]");
 }
 
+function stageErrorMessage(err: any): string {
+  return (err?.message ?? String(err)).replace(/\s+/g, " ").slice(0, 500);
+}
+
 const LAYOUT_TYPES = new Set([
   "cover",
   "title_page",
@@ -451,6 +455,21 @@ function buildRawText(data: Record<string, unknown>): string {
   const texts = Object.values(data)
     .filter((v): v is string => typeof v === "string" && v.length > 10);
   return texts.length > 0 ? texts.join("\n\n") : "";
+}
+
+function parseRetryOcrResponse(content: string): Record<string, unknown> {
+  try {
+    return parseJsonResponse(content);
+  } catch (err: any) {
+    const text = content.trim();
+    if (!text) throw err;
+    return {
+      content_blocks: [{ type: "text", text }],
+      page_summary: text.slice(0, 240),
+      confidence: 25,
+      retry_parse_warning: stageErrorMessage(err),
+    };
+  }
 }
 
 /**
@@ -1103,7 +1122,7 @@ export async function retryPageStages(
   pageId: number,
   stages: RetryStage[],
   hitlId?: number,
-): Promise<{ confidence: number; stagesFailed: string[] }> {
+): Promise<{ confidence: number; stagesFailed: string[]; stageErrors: Record<string, string> }> {
   const page = await getPageById(pageId);
   if (!page) throw new Error(`Page ${pageId} not found`);
   if (!page.rawPngUrl) throw new Error(`Page ${pageId} has no image on disk`);
@@ -1134,6 +1153,8 @@ export async function retryPageStages(
   const ocrImgPath = (page.wasPreprocessed && page.preprocessedPngUrl) ? page.preprocessedPngUrl : page.rawPngUrl!;
   const imgPart = await imageContent(ocrImgPath);
   const stagesFailed: string[] = [];
+  const stageErrors: Record<string, string> = {};
+  let layoutType = page.layoutType ?? undefined;
   let ocrConfidence = 0;
 
   await PAGE_LLM_SEMAPHORE.acquirePriority();
@@ -1146,16 +1167,21 @@ export async function retryPageStages(
         const r = await invokeStage("layout_analysis", content, surroundingContext, PROMPT_LAYOUT_ANALYSIS,
           { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_LAYOUT, validateResult: assertLayoutInvokeResult }, { pageId, jobId: doc?.ingestionJobId ?? undefined });
         const data = validateLayoutData(parseJsonResponse(r.content));
-        await updateDocumentPage(pageId, { layoutType: (data.layout_type as string) || undefined });
+        layoutType = (data.layout_type as string) || undefined;
+        await updateDocumentPage(pageId, { layoutType });
       } catch (err: any) {
         if (isConfigError(err)) throw err;
+        const msg = stageErrorMessage(err);
         stagesFailed.push("layout_analysis");
-        console.warn(`[Pipeline] Page ${pageId} retry layout_analysis: ${err.message}`);
+        stageErrors.layout_analysis = msg;
+        console.warn(`[Pipeline] Page ${pageId} retry layout_analysis: ${msg}`);
       }
     }
 
     // bbox_detection — use existing regions if not re-running
-    let regions: any[] = stages.includes("bbox_detection") ? [] : ((page.contentRegions as any[]) ?? []);
+    let regions: any[] = stages.includes("bbox_detection")
+      ? []
+      : (Array.isArray(page.contentRegions) ? (page.contentRegions as any[]) : []);
     if (stages.includes("bbox_detection")) {
       try {
         const content: UserContentPart[] = [imgPart, { type: "text", text: "Identify all distinct content regions on this page. Reply with ONLY a JSON object — start with { and end with }." }];
@@ -1166,22 +1192,31 @@ export async function retryPageStages(
         await updateDocumentPage(pageId, { contentRegions: regions });
       } catch (err: any) {
         if (isConfigError(err)) throw err;
+        const msg = stageErrorMessage(err);
         stagesFailed.push("bbox_detection");
-        console.warn(`[Pipeline] Page ${pageId} retry bbox_detection: ${err.message}`);
+        stageErrors.bbox_detection = msg;
+        console.warn(`[Pipeline] Page ${pageId} retry bbox_detection: ${msg}`);
       }
     }
 
     // ocr_extraction
     if (stages.includes("ocr_extraction")) {
       try {
-        const regionCtx = regions.length > 0
-          ? `Content regions already detected: ${JSON.stringify(regions.slice(0, 5))}`
+        const layoutCtx = layoutType
+          ? `Reviewed page_layout: ${layoutType}`
           : undefined;
-        const fullContext = [surroundingContext, regionCtx].filter(Boolean).join("\n\n") || undefined;
-        const content: UserContentPart[] = [imgPart, { type: "text", text: "Extract all readable text from this page in reading order. Reply with ONLY a JSON object — start with { and end with }." }];
+        const regionCtx = regions.length > 0
+          ? `Reviewed content_regions (${regions.length}) in percent coordinates; use sequence order when present: ${JSON.stringify(regions.slice(0, 50))}`
+          : undefined;
+        const reviewedContext = [layoutCtx, regionCtx].filter(Boolean).join("\n");
+        const fullContext = [surroundingContext, reviewedContext].filter(Boolean).join("\n\n") || undefined;
+        const content: UserContentPart[] = [imgPart, {
+          type: "text",
+          text: "Extract all readable text from this page in reading order. Use reviewed page_layout and content_regions from context as authoritative HITL corrections. If regions are present, process them in sequence order, then include any remaining readable text outside the boxes. Reply with ONLY a JSON object - start with { and end with }.",
+        }];
         const r = await invokeStage("ocr_extraction", content, fullContext, PROMPT_OCR_EXTRACTION,
           { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_OCR }, { pageId, jobId: doc?.ingestionJobId ?? undefined });
-        const data = parseJsonResponse(r.content);
+        const data = parseRetryOcrResponse(r.content);
         ocrConfidence = typeof data.confidence === "number" ? data.confidence : 0;
 
         const rawText = buildRawText(data);
@@ -1190,18 +1225,20 @@ export async function retryPageStages(
         const printedPageLabel = extractPrintedPageLabel(data);
 
         const existing = await getOcrResultByPageId(pageId);
+        const retryAudit: any = { timestamp: new Date().toISOString(), action: "retry", model: r.model };
+        if (data.retry_parse_warning) retryAudit.warning = String(data.retry_parse_warning);
         if (existing) {
           await updateOcrResult(existing.id, {
             structuredData: data, rawText, markdownText, normalisedText, confidence: ocrConfidence,
             status: "pass1_complete", pass1Model: r.model,
             auditLog: [...((existing.auditLog as any[]) ?? []),
-              { timestamp: new Date().toISOString(), action: "retry", model: r.model }],
+              retryAudit],
           } as any);
         } else {
           await createOcrResult({
             pageId, structuredData: data, rawText, markdownText, normalisedText, confidence: ocrConfidence,
             status: "pass1_complete", pass1Model: r.model,
-            auditLog: [{ timestamp: new Date().toISOString(), action: "retry", model: r.model }],
+            auditLog: [retryAudit],
           } as any);
         }
         await updateDocumentPage(pageId, {
@@ -1210,8 +1247,10 @@ export async function retryPageStages(
         });
       } catch (err: any) {
         if (isConfigError(err)) throw err;
+        const msg = stageErrorMessage(err);
         stagesFailed.push("ocr_extraction");
-        console.warn(`[Pipeline] Page ${pageId} retry ocr_extraction: ${err.message}`);
+        stageErrors.ocr_extraction = msg;
+        console.warn(`[Pipeline] Page ${pageId} retry ocr_extraction: ${msg}`);
       }
     }
   } finally {
@@ -1230,13 +1269,16 @@ export async function retryPageStages(
     } else {
       const parts = ["Retry attempted"];
       if (stagesFailed.length > 0) parts.push(`failed: ${stagesFailed.join(", ")}`);
+      for (const stage of stagesFailed) {
+        if (stageErrors[stage]) parts.push(`${stage}: ${stageErrors[stage].slice(0, 160)}`);
+      }
       if (ocrConfidence < HITL_CONFIDENCE_THRESHOLD) parts.push(`confidence ${ocrConfidence}%`);
       await updateHitlItem(hitlId, { resolutionNotes: parts.join(" — ") });
     }
   }
 
   console.log(`[Pipeline] Page ${pageId} retry done (confidence: ${ocrConfidence}, failed: ${stagesFailed.join(", ") || "none"})`);
-  return { confidence: ocrConfidence, stagesFailed };
+  return { confidence: ocrConfidence, stagesFailed, stageErrors };
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
