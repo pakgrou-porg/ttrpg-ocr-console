@@ -1,4 +1,4 @@
-import { getLlmProviderById, getStageInscriptionByStage, getSystemPromptByName, insertLlmTimingMetric } from "../db";
+import { getLlmProviderById, getStageInscriptionByStage, getSystemPromptByName, insertLlmTimingMetric, updateLlmProvider } from "../db";
 import { decryptSecret } from "../crypto";
 import { fetchWithRetry, PER_ATTEMPT_TIMEOUT_MS } from "../_core/fetch-retry";
 
@@ -45,16 +45,60 @@ type ProviderCandidate = {
   withRetry: boolean;
 };
 
+function cleanModelId(modelId: unknown): string | undefined {
+  if (typeof modelId !== "string") return undefined;
+  const trimmed = modelId.trim().replace(/^["'`]+|["'`]+$/g, "").trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function providerBaseUrl(provider: any): string {
+  const host = provider.baseUrl.replace(/\/$/, "");
+  const portStr = provider.port ? `:${provider.port}` : "";
+  const prefix = (provider.apiPrefix ?? "/v1").replace(/\/$/, "");
+  return `${host}${portStr}${prefix}`;
+}
+
+function isPrivateOrLocalHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  if (host === "localhost" || host.endsWith(".local")) return true;
+  if (/^(127\.|10\.)/.test(host)) return true;
+  if (/^192\.168\./.test(host)) return true;
+  const match172 = host.match(/^172\.(\d+)\./);
+  return !!match172 && Number(match172[1]) >= 16 && Number(match172[1]) <= 31;
+}
+
+function canDiscoverLoadedModel(provider: any): boolean {
+  if (provider.providerType === "lm_studio" || provider.providerType === "custom") return true;
+  if (provider.providerType !== "openai_compatible") return false;
+  try {
+    const url = new URL(provider.baseUrl);
+    return isPrivateOrLocalHost(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+async function discoverLoadedModels(provider: any, headers: Record<string, string>): Promise<string[]> {
+  const res = await fetch(`${providerBaseUrl(provider)}/models`, {
+    headers,
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) return [];
+  const data = await res.json() as { data?: Array<{ id?: string }> };
+  return (data.data ?? []).map(model => model.id).filter((id): id is string => !!id);
+}
+
+function isMissingModelResponse(status: number, body: string): boolean {
+  return status === 404 && /model[\s\S]{0,160}(does not exist|not found)/i.test(body);
+}
+
 async function buildProviderCall(
   provider: any,
   messages: any[],
   inscription: { temperature?: number | null; maxTokens?: number | null; llmSettings?: unknown },
   options?: InvokeOptions,
 ): Promise<{ url: string; headers: Record<string, string>; body: Record<string, unknown> }> {
-  const host = provider.baseUrl.replace(/\/$/, "");
-  const portStr = provider.port ? `:${provider.port}` : "";
-  const prefix = (provider.apiPrefix ?? "/v1").replace(/\/$/, "");
-  const url = `${host}${portStr}${prefix}/chat/completions`;
+  const url = `${providerBaseUrl(provider)}/chat/completions`;
 
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (provider.encryptedApiKey) {
@@ -75,9 +119,13 @@ async function buildProviderCall(
     temperature: inscription.temperature ?? provider.defaultTemperature ?? 0.2,
     max_tokens: inscription.maxTokens ?? 4096,
   };
-  if (provider.modelId) body.model = provider.modelId;
+  const configuredModel = cleanModelId(provider.modelId);
+  if (configuredModel) body.model = configuredModel;
   if (inscription.llmSettings) Object.assign(body, inscription.llmSettings);
   if (options?.overrideBody) Object.assign(body, options.overrideBody);
+  const finalModel = cleanModelId(body.model);
+  if (finalModel) body.model = finalModel;
+  else delete body.model;
 
   return { url, headers, body };
 }
@@ -91,16 +139,40 @@ async function dispatchToProvider(
   withRetry = true,
 ): Promise<StageInvokeResult> {
   const { url, headers, body } = await buildProviderCall(provider, messages, inscription, options);
-  const init = { method: "POST", headers, body: JSON.stringify(body) };
 
   const startMs = Date.now();
-  const res = withRetry
-    ? await fetchWithRetry(url, init)
-    : await fetch(url, { ...init, signal: AbortSignal.timeout(PER_ATTEMPT_TIMEOUT_MS) });
+  const postChat = (requestBody: Record<string, unknown>) => {
+    const init = { method: "POST", headers, body: JSON.stringify(requestBody) };
+    return withRetry
+      ? fetchWithRetry(url, init)
+      : fetch(url, { ...init, signal: AbortSignal.timeout(PER_ATTEMPT_TIMEOUT_MS) });
+  };
 
+  let usedModel = typeof body.model === "string" ? body.model : undefined;
+  let res = await postChat(body);
   if (!res.ok) {
     const errText = await res.text().catch(() => "");
-    throw new Error(`[${stage}] Provider ${provider.name} HTTP ${res.status}: ${errText.slice(0, 1000)}`);
+    if (isMissingModelResponse(res.status, errText) && canDiscoverLoadedModel(provider)) {
+      const models = await discoverLoadedModels(provider, headers).catch(() => []);
+      const fallbackModel = models.find(model => model === cleanModelId(provider.modelId)) ?? models[0];
+      if (fallbackModel && fallbackModel !== usedModel) {
+        console.warn(
+          `[invoke] ${stage} provider ${provider.name} rejected model ${usedModel ?? "(none)"}; retrying loaded model ${fallbackModel}.`,
+        );
+        res = await postChat({ ...body, model: fallbackModel });
+        usedModel = fallbackModel;
+        if (res.ok) {
+          updateLlmProvider(provider.id, { modelId: fallbackModel, availableModels: models } as any)
+            .catch(err => console.warn(`[invoke] failed to persist discovered model for ${provider.name}: ${err?.message}`));
+        }
+      }
+      if (!res.ok) {
+        const retryText = await res.text().catch(() => "");
+        throw new Error(`[${stage}] Provider ${provider.name} HTTP ${res.status}: ${retryText.slice(0, 1000)} (after model discovery: ${models.join(", ") || "none"})`);
+      }
+    } else {
+      throw new Error(`[${stage}] Provider ${provider.name} HTTP ${res.status}: ${errText.slice(0, 1000)}`);
+    }
   }
 
   const data = await res.json() as any;
@@ -119,7 +191,7 @@ async function dispatchToProvider(
 
   return {
     content,
-    model: data.model ?? provider.modelId ?? "",
+    model: data.model ?? usedModel ?? cleanModelId(provider.modelId) ?? "",
     tokensUsed: data.usage?.total_tokens ?? 0,
     providerId: provider.id,
     durationMs,
