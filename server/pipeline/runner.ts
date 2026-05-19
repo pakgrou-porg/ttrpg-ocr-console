@@ -250,6 +250,53 @@ function isConfigError(err: any): boolean {
   return typeof err?.message === "string" && err.message.startsWith("[CONFIG]");
 }
 
+/** Normalise a raw model bbox into {x, y, w, h} percentage values (0-100).
+ *  Handles {x,y,w,h}, {x,y,width,height}, {x1,y1,x2,y2}, array, and flat
+ *  top-level coord variants.  If values exceed 101, treats them as pixels and
+ *  scales to 0-100 using the observed page extent. */
+function normaliseBboxRegions(raw: any[]): any[] {
+  type Box = { x: number; y: number; w: number; h: number };
+
+  function extractBox(r: any): Box | null {
+    const b = r?.bbox;
+    let box: Box | null = null;
+    if (Array.isArray(b) && b.length >= 4) {
+      box = { x: b[0], y: b[1], w: b[2], h: b[3] };
+    } else if (b && typeof b === "object") {
+      if (b.w !== undefined && b.h !== undefined) box = { x: b.x ?? 0, y: b.y ?? 0, w: b.w, h: b.h };
+      else if (b.width !== undefined && b.height !== undefined) box = { x: b.x ?? 0, y: b.y ?? 0, w: b.width, h: b.height };
+      else if (b.x1 !== undefined && b.x2 !== undefined) box = { x: b.x1, y: b.y1 ?? 0, w: b.x2 - b.x1, h: b.y2 - b.y1 };
+      else if (b.left !== undefined && b.right !== undefined) box = { x: b.left, y: b.top ?? 0, w: b.right - b.left, h: b.bottom - b.top };
+    } else if (r.x !== undefined && r.y !== undefined) {
+      if (r.w !== undefined && r.h !== undefined) box = { x: r.x, y: r.y, w: r.w, h: r.h };
+      else if (r.width !== undefined && r.height !== undefined) box = { x: r.x, y: r.y, w: r.width, h: r.height };
+    }
+    if (!box || box.w <= 0 || box.h <= 0) return null;
+    return box;
+  }
+
+  const pairs = raw.map(r => ({ r, box: extractBox(r) })).filter(p => p.box !== null) as Array<{ r: any; box: Box }>;
+  if (pairs.length === 0) return raw; // leave untouched if nothing parseable
+
+  const maxX = Math.max(...pairs.map(p => p.box.x + p.box.w));
+  const maxY = Math.max(...pairs.map(p => p.box.y + p.box.h));
+  const isPixels = maxX > 101 || maxY > 101;
+  const scaleX = isPixels && maxX > 0 ? 100 / maxX : 1;
+  const scaleY = isPixels && maxY > 0 ? 100 / maxY : 1;
+
+  return raw.map(r => {
+    const box = extractBox(r);
+    if (!box) return r;
+    const norm: Box = {
+      x: Math.round(box.x * scaleX * 100) / 100,
+      y: Math.round(box.y * scaleY * 100) / 100,
+      w: Math.round(box.w * scaleX * 100) / 100,
+      h: Math.round(box.h * scaleY * 100) / 100,
+    };
+    return { ...r, bbox: norm };
+  });
+}
+
 /** Extract the printed page label (e.g. "i", "42") from OCR content blocks. */
 function extractPrintedPageLabel(data: Record<string, unknown>): string | null {
   if (!Array.isArray(data.content_blocks)) return null;
@@ -648,7 +695,7 @@ async function _runJob(jobId: number): Promise<void> {
         { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_BBOX }, { pageId, jobId })
         .then(async r => {
           const data = parseJsonResponse(r.content);
-          const regs: any[] = Array.isArray(data.regions) ? data.regions : [];
+          const regs: any[] = normaliseBboxRegions(Array.isArray(data.regions) ? data.regions : []);
           await updateDocumentPage(pageId, { contentRegions: regs });
           return regs;
         }),
@@ -999,7 +1046,7 @@ export async function retryPageStages(
         const r = await invokeStage("bbox_detection", content, surroundingContext, PROMPT_BBOX_DETECTION,
           { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_BBOX }, { pageId, jobId: doc?.ingestionJobId ?? undefined });
         const data = parseJsonResponse(r.content);
-        regions = Array.isArray(data.regions) ? data.regions : [];
+        regions = normaliseBboxRegions(Array.isArray(data.regions) ? data.regions : []);
         await updateDocumentPage(pageId, { contentRegions: regions });
       } catch (err: any) {
         if (isConfigError(err)) throw err;
