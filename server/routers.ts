@@ -2016,16 +2016,24 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         await getPageOrThrow(input.pageId);
-        const ocr = await getOcrResultByPageId(input.pageId);
-        if (!ocr) throw new TRPCError({ code: "NOT_FOUND", message: "No OCR result found for this page." });
 
         const parsedValue = parseReviewValue(input.value);
         if (input.field === "layout") {
-          const layoutType = extractLayoutType(parsedValue);
-          if (layoutType) await updateDocumentPage(input.pageId, { layoutType });
-        } else if (input.field === "regions" && input.value.trim()) {
-          const regions = normaliseReviewRegions(parsedValue);
+          if (!input.value.trim()) {
+            await updateDocumentPage(input.pageId, { layoutType: null });
+          } else {
+            const layoutType = extractLayoutType(parsedValue);
+            if (layoutType) await updateDocumentPage(input.pageId, { layoutType });
+          }
+        } else if (input.field === "regions") {
+          const regions = input.value.trim() ? normaliseReviewRegions(parsedValue) : [];
           await updateDocumentPage(input.pageId, { contentRegions: regions });
+        }
+
+        const ocr = await getOcrResultByPageId(input.pageId);
+        if (!ocr) {
+          if (input.field === "layout" || input.field === "regions") return { success: true, savedPageOnly: true };
+          throw new TRPCError({ code: "NOT_FOUND", message: "No OCR result found for this page." });
         }
 
         if (input.field === "text") {

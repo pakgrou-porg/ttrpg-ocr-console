@@ -13,7 +13,7 @@ import {
 import {
   CheckCircle2, XCircle, ArrowUpCircle, ChevronDown, ChevronRight,
   Loader2, ClipboardList, FileText, Layout, BoxSelect, ListTree, Braces, BookOpen,
-  Trash2, ChevronLeft, Download, RefreshCw, Scissors,
+  Trash2, ChevronLeft, Download, RefreshCw, Scissors, Save,
 } from "lucide-react";
 import { BboxOverlayToggle } from "@/components/BboxOverlay";
 import { BboxRegionEditor, parseRegionJson } from "@/components/BboxRegionEditor";
@@ -445,6 +445,10 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
   const saveSection = (field: "text" | "layout" | "regions" | "structure" | "json") => () => {
     saveCorrectionMut.mutate({ pageId: item.page?.id ?? item.pageId, field, value: corrections[field] });
   };
+  const saveActiveOnly = () => {
+    if (activeTab !== "layout" && activeTab !== "regions") return;
+    saveCorrectionMut.mutate({ pageId: item.page?.id ?? item.pageId, field: activeTab, value: corrections[activeTab] });
+  };
   const saveActiveAndRetryOcr = () => {
     if (activeTab !== "layout" && activeTab !== "regions") return;
     const pageId = item.page?.id ?? item.pageId;
@@ -693,12 +697,20 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
                   : <><RefreshCw className="w-3.5 h-3.5" /> Retry</>}
               </Button>
               {(activeTab === "layout" || activeTab === "regions") && (
-                <Button size="sm" variant="outline" className="gap-1.5"
-                  onClick={saveActiveAndRetryOcr} disabled={isPending || saveCorrectionMut.isPending}>
-                  {saveCorrectionMut.isPending || retryMut.isPending
-                    ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Applying...</>
-                    : <><RefreshCw className="w-3.5 h-3.5" /> Save + OCR</>}
-                </Button>
+                <>
+                  <Button size="sm" variant="outline" className="gap-1.5"
+                    onClick={saveActiveOnly} disabled={isPending || saveCorrectionMut.isPending}>
+                    {saveCorrectionMut.isPending
+                      ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving...</>
+                      : <><Save className="w-3.5 h-3.5" /> Save</>}
+                  </Button>
+                  <Button size="sm" variant="outline" className="gap-1.5"
+                    onClick={saveActiveAndRetryOcr} disabled={isPending || saveCorrectionMut.isPending}>
+                    {saveCorrectionMut.isPending || retryMut.isPending
+                      ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Applying...</>
+                      : <><RefreshCw className="w-3.5 h-3.5" /> Save + OCR</>}
+                  </Button>
+                </>
               )}
             </div>
 

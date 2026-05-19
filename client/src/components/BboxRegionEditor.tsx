@@ -272,6 +272,11 @@ export function BboxRegionEditor({
     emit(next);
   };
 
+  const deleteAll = () => {
+    setSelectedId(null);
+    emit([]);
+  };
+
   const addFullPage = () => {
     const id = `full-${Date.now()}`;
     setSelectedId(id);
@@ -310,6 +315,10 @@ export function BboxRegionEditor({
         <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5" onClick={deleteSelected} disabled={!selected}>
           <Trash2 className="h-3.5 w-3.5" />
           Delete
+        </Button>
+        <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5" onClick={deleteAll} disabled={baseDrafts.length === 0}>
+          <Trash2 className="h-3.5 w-3.5" />
+          Clear
         </Button>
       </div>
 
