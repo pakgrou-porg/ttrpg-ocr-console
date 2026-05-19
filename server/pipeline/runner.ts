@@ -10,6 +10,7 @@ import {
   createDocument, updateDocument,
   createDocumentPage, updateDocumentPage,
   createOcrResult, updateOcrResult, createHitlItem, updateHitlItem,
+  createHitlRetryAttempt, updateHitlRetryAttempt,
   getPageById, getDocumentById,
   getOcrResultByPageId,
   getPageByDocumentAndNumber,
@@ -250,6 +251,88 @@ function isConfigError(err: any): boolean {
   return typeof err?.message === "string" && err.message.startsWith("[CONFIG]");
 }
 
+function stageErrorMessage(err: any): string {
+  return (err?.message ?? String(err)).replace(/\s+/g, " ").slice(0, 500);
+}
+
+const LAYOUT_TYPES = new Set([
+  "cover",
+  "title_page",
+  "toc",
+  "chapter_header",
+  "body_text",
+  "stat_block",
+  "table",
+  "illustration_full",
+  "illustration_with_text",
+  "index",
+  "appendix",
+  "mixed",
+]);
+
+const LAYOUT_TYPE_ALIASES: Record<string, string> = {
+  one_column: "body_text",
+  single_column: "body_text",
+  two_column: "body_text",
+  three_column: "body_text",
+  multi_column: "body_text",
+  contents: "toc",
+  table_of_contents: "toc",
+  title: "title_page",
+  full_page_art: "illustration_full",
+  illustration: "illustration_with_text",
+};
+
+const REGION_TYPES = new Set([
+  "heading",
+  "subheading",
+  "paragraph",
+  "text",          // alias for paragraph used by some models and the editor
+  "table",
+  "list",
+  "list_item",
+  "image",
+  "illustration",  // alias for image
+  "map",
+  "graphic",
+  "advertisement",
+  "stat_block",
+  "stat_line",
+  "sidebar",
+  "callout",
+  "caption",
+  "header",
+  "footer",
+  "page_number",
+  "unknown",
+]);
+
+function validateLayoutData(data: Record<string, unknown>): Record<string, unknown> {
+  const rawType = String(data.layout_type ?? "").trim().toLowerCase();
+  const layoutType = LAYOUT_TYPE_ALIASES[rawType] ?? rawType;
+  if (!LAYOUT_TYPES.has(layoutType)) {
+    throw new Error(`Invalid layout_analysis response: unsupported layout_type "${rawType || "<missing>"}"`);
+  }
+
+  const rawColumns = Number(data.columns ?? 1);
+  const columns = Number.isFinite(rawColumns)
+    ? Math.max(1, Math.min(4, Math.round(rawColumns)))
+    : 1;
+
+  return {
+    ...data,
+    layout_type: layoutType,
+    columns,
+    has_table: data.has_table === true,
+    has_image_or_art: data.has_image_or_art === true,
+    has_list: data.has_list === true,
+  };
+}
+
+function assertLayoutInvokeResult(result: { content: string }): void {
+  validateLayoutData(parseJsonResponse(result.content));
+}
+
 /** Normalise a raw model bbox into {x, y, w, h} percentage values (0-100).
  *  Handles {x,y,w,h}, {x,y,width,height}, {x1,y1,x2,y2}, array, and flat
  *  top-level coord variants.  If values exceed 101, treats them as pixels and
@@ -297,6 +380,53 @@ function normaliseBboxRegions(raw: any[]): any[] {
   });
 }
 
+function clampPercent(value: unknown, fallback = 0): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.min(100, Math.round(n * 100) / 100));
+}
+
+function validateBboxRegions(data: Record<string, unknown>): any[] {
+  if (!Array.isArray(data.regions)) {
+    throw new Error("Invalid bbox_detection response: missing regions array");
+  }
+
+  const normalised = normaliseBboxRegions(data.regions);
+  const valid = normalised.flatMap((region: any) => {
+    const bbox = region?.bbox;
+    if (!bbox || typeof bbox !== "object") return [];
+
+    const x = Math.min(clampPercent(bbox.x), 99.9);
+    const y = Math.min(clampPercent(bbox.y), 99.9);
+    const w = clampPercent(bbox.w);
+    const h = clampPercent(bbox.h);
+    if (w <= 0 || h <= 0) return [];
+
+    const clampedW = Math.min(Math.max(0.1, w), 100 - x);
+    const clampedH = Math.min(Math.max(0.1, h), 100 - y);
+    const rawType = String(region.type ?? "paragraph").trim().toLowerCase();
+    const type = REGION_TYPES.has(rawType) ? rawType : "paragraph";
+
+    return [{
+      ...region,
+      type,
+      label: typeof region.label === "string" && region.label.trim()
+        ? region.label.trim().slice(0, 160)
+        : type,
+      bbox: { x, y, w: clampedW, h: clampedH },
+    }];
+  });
+
+  if (valid.length === 0) {
+    throw new Error("Invalid bbox_detection response: no usable regions");
+  }
+  return valid;
+}
+
+function assertBboxInvokeResult(result: { content: string }): void {
+  validateBboxRegions(parseJsonResponse(result.content));
+}
+
 /** Extract the printed page label (e.g. "i", "42") from OCR content blocks. */
 function extractPrintedPageLabel(data: Record<string, unknown>): string | null {
   if (!Array.isArray(data.content_blocks)) return null;
@@ -335,6 +465,21 @@ function buildRawText(data: Record<string, unknown>): string {
   const texts = Object.values(data)
     .filter((v): v is string => typeof v === "string" && v.length > 10);
   return texts.length > 0 ? texts.join("\n\n") : "";
+}
+
+function parseRetryOcrResponse(content: string): Record<string, unknown> {
+  try {
+    return parseJsonResponse(content);
+  } catch (err: any) {
+    const text = content.trim();
+    if (!text) throw err;
+    return {
+      content_blocks: [{ type: "text", text }],
+      page_summary: text.slice(0, 240),
+      confidence: 25,
+      retry_parse_warning: stageErrorMessage(err),
+    };
+  }
 }
 
 /**
@@ -685,17 +830,17 @@ async function _runJob(jobId: number): Promise<void> {
 
     const [layoutSettled, bboxSettled] = await Promise.allSettled([
       invokeStage("layout_analysis", layoutContent, undefined, PROMPT_LAYOUT_ANALYSIS,
-        { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_LAYOUT }, { pageId, jobId })
+        { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_LAYOUT, validateResult: assertLayoutInvokeResult }, { pageId, jobId })
         .then(async r => {
-          const data = parseJsonResponse(r.content);
+          const data = validateLayoutData(parseJsonResponse(r.content));
           await updateDocumentPage(pageId, { layoutType: (data.layout_type as string) || undefined });
           return data;
         }),
       invokeStage("bbox_detection", bboxContent, undefined, PROMPT_BBOX_DETECTION,
-        { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_BBOX }, { pageId, jobId })
+        { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_BBOX, validateResult: assertBboxInvokeResult }, { pageId, jobId })
         .then(async r => {
           const data = parseJsonResponse(r.content);
-          const regs: any[] = normaliseBboxRegions(Array.isArray(data.regions) ? data.regions : []);
+          const regs: any[] = validateBboxRegions(data);
           await updateDocumentPage(pageId, { contentRegions: regs });
           return regs;
         }),
@@ -983,19 +1128,26 @@ async function _runJob(jobId: number): Promise<void> {
 
 export type RetryStage = "layout_analysis" | "bbox_detection" | "ocr_extraction";
 
+export type RetryPageMetadata = {
+  reviewerUserId?: number;
+  savedCorrectionFields?: string[];
+};
+
 export async function retryPageStages(
   pageId: number,
   stages: RetryStage[],
   hitlId?: number,
-): Promise<{ confidence: number; stagesFailed: string[] }> {
+  metadata: RetryPageMetadata = {},
+): Promise<{ confidence: number; stagesFailed: string[]; stageErrors: Record<string, string> }> {
   const page = await getPageById(pageId);
   if (!page) throw new Error(`Page ${pageId} not found`);
   if (!page.rawPngUrl) throw new Error(`Page ${pageId} has no image on disk`);
 
-  const [doc, prevPage, nextPage] = await Promise.all([
+  const [doc, prevPage, nextPage, currentOcrBefore] = await Promise.all([
     getDocumentById(page.documentId),
     getPageByDocumentAndNumber(page.documentId, page.pageNumber - 1),
     getPageByDocumentAndNumber(page.documentId, page.pageNumber + 1),
+    getOcrResultByPageId(pageId),
   ]);
   const [prevOcr, nextOcr] = await Promise.all([
     prevPage ? getOcrResultByPageId(prevPage.id) : Promise.resolve(null),
@@ -1018,7 +1170,42 @@ export async function retryPageStages(
   const ocrImgPath = (page.wasPreprocessed && page.preprocessedPngUrl) ? page.preprocessedPngUrl : page.rawPngUrl!;
   const imgPart = await imageContent(ocrImgPath);
   const stagesFailed: string[] = [];
+  const stageErrors: Record<string, string> = {};
+  let layoutType = page.layoutType ?? undefined;
   let ocrConfidence = 0;
+  let retryOcrResultId: number | null = currentOcrBefore?.id ?? null;
+  const modelTrace: Record<string, string> = {};
+  const retryStartedAt = Date.now();
+  const savedCorrectionFields = [...new Set(metadata.savedCorrectionFields ?? [])];
+  const corrected = (currentOcrBefore?.correctedStructuredData as Record<string, unknown> | null) ?? {};
+  const usedReviewedLayout = savedCorrectionFields.includes("layout") || page.layoutType != null;
+  const usedReviewedRegions = savedCorrectionFields.includes("regions") || page.contentRegions != null;
+  const usedReviewedStructure = savedCorrectionFields.some(f => ["text", "structure", "json"].includes(f))
+    || currentOcrBefore?.correctedText != null
+    || corrected.structure_correction != null
+    || corrected.json_correction != null;
+  let retryAttemptId: number | null = null;
+  try {
+    const attempt = await createHitlRetryAttempt({
+      hitlItemId: hitlId ?? null,
+      pageId,
+      requestedStages: stages,
+      savedCorrectionFields,
+      usedReviewedLayout,
+      usedReviewedRegions,
+      usedReviewedStructure,
+      status: "running",
+      confidence: null,
+      stagesFailed: [],
+      stageErrors: {},
+      modelTrace: {},
+      ocrResultId: retryOcrResultId,
+      createdBy: metadata.reviewerUserId ?? null,
+    } as any);
+    retryAttemptId = attempt.id;
+  } catch (err: any) {
+    console.warn(`[Pipeline] Page ${pageId} retry tracking start failed: ${err?.message ?? String(err)}`);
+  }
 
   await PAGE_LLM_SEMAPHORE.acquirePriority();
   console.log(`[Pipeline] Page ${pageId} retry: acquired LLM slot (stages: ${stages.join(", ")})`);
@@ -1028,44 +1215,59 @@ export async function retryPageStages(
       try {
         const content: UserContentPart[] = [imgPart, { type: "text", text: "Classify the layout type and structure of this page. Reply with ONLY a JSON object — start with { and end with }." }];
         const r = await invokeStage("layout_analysis", content, surroundingContext, PROMPT_LAYOUT_ANALYSIS,
-          { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_LAYOUT }, { pageId, jobId: doc?.ingestionJobId ?? undefined });
-        const data = parseJsonResponse(r.content);
-        await updateDocumentPage(pageId, { layoutType: (data.layout_type as string) || undefined });
+          { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_LAYOUT, validateResult: assertLayoutInvokeResult }, { pageId, jobId: doc?.ingestionJobId ?? undefined });
+        modelTrace.layout_analysis = r.model;
+        const data = validateLayoutData(parseJsonResponse(r.content));
+        layoutType = (data.layout_type as string) || undefined;
+        await updateDocumentPage(pageId, { layoutType });
       } catch (err: any) {
-        if (isConfigError(err)) throw err;
+        const msg = stageErrorMessage(err);
         stagesFailed.push("layout_analysis");
-        console.warn(`[Pipeline] Page ${pageId} retry layout_analysis: ${err.message}`);
+        stageErrors.layout_analysis = msg;
+        console.warn(`[Pipeline] Page ${pageId} retry layout_analysis: ${msg}`);
       }
     }
 
     // bbox_detection — use existing regions if not re-running
-    let regions: any[] = stages.includes("bbox_detection") ? [] : ((page.contentRegions as any[]) ?? []);
+    let regions: any[] = stages.includes("bbox_detection")
+      ? []
+      : (Array.isArray(page.contentRegions) ? (page.contentRegions as any[]) : []);
     if (stages.includes("bbox_detection")) {
       try {
         const content: UserContentPart[] = [imgPart, { type: "text", text: "Identify all distinct content regions on this page. Reply with ONLY a JSON object — start with { and end with }." }];
         const r = await invokeStage("bbox_detection", content, surroundingContext, PROMPT_BBOX_DETECTION,
-          { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_BBOX }, { pageId, jobId: doc?.ingestionJobId ?? undefined });
+          { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_BBOX, validateResult: assertBboxInvokeResult }, { pageId, jobId: doc?.ingestionJobId ?? undefined });
+        modelTrace.bbox_detection = r.model;
         const data = parseJsonResponse(r.content);
-        regions = normaliseBboxRegions(Array.isArray(data.regions) ? data.regions : []);
+        regions = validateBboxRegions(data);
         await updateDocumentPage(pageId, { contentRegions: regions });
       } catch (err: any) {
-        if (isConfigError(err)) throw err;
+        const msg = stageErrorMessage(err);
         stagesFailed.push("bbox_detection");
-        console.warn(`[Pipeline] Page ${pageId} retry bbox_detection: ${err.message}`);
+        stageErrors.bbox_detection = msg;
+        console.warn(`[Pipeline] Page ${pageId} retry bbox_detection: ${msg}`);
       }
     }
 
     // ocr_extraction
     if (stages.includes("ocr_extraction")) {
       try {
-        const regionCtx = regions.length > 0
-          ? `Content regions already detected: ${JSON.stringify(regions.slice(0, 5))}`
+        const layoutCtx = layoutType
+          ? `Reviewed page_layout: ${layoutType}`
           : undefined;
-        const fullContext = [surroundingContext, regionCtx].filter(Boolean).join("\n\n") || undefined;
-        const content: UserContentPart[] = [imgPart, { type: "text", text: "Extract all readable text from this page in reading order. Reply with ONLY a JSON object — start with { and end with }." }];
+        const regionCtx = regions.length > 0
+          ? `Reviewed content_regions (${regions.length}) in percent coordinates; use sequence order when present: ${JSON.stringify(regions.slice(0, 50))}`
+          : undefined;
+        const reviewedContext = [layoutCtx, regionCtx].filter(Boolean).join("\n");
+        const fullContext = [surroundingContext, reviewedContext].filter(Boolean).join("\n\n") || undefined;
+        const content: UserContentPart[] = [imgPart, {
+          type: "text",
+          text: "Extract all readable text from this page in reading order. Use reviewed page_layout and content_regions from context as authoritative HITL corrections. If regions are present, process them in sequence order, then include any remaining readable text outside the boxes. Reply with ONLY a JSON object - start with { and end with }.",
+        }];
         const r = await invokeStage("ocr_extraction", content, fullContext, PROMPT_OCR_EXTRACTION,
           { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_OCR }, { pageId, jobId: doc?.ingestionJobId ?? undefined });
-        const data = parseJsonResponse(r.content);
+        modelTrace.ocr_extraction = r.model;
+        const data = parseRetryOcrResponse(r.content);
         ocrConfidence = typeof data.confidence === "number" ? data.confidence : 0;
 
         const rawText = buildRawText(data);
@@ -1074,28 +1276,33 @@ export async function retryPageStages(
         const printedPageLabel = extractPrintedPageLabel(data);
 
         const existing = await getOcrResultByPageId(pageId);
+        const retryAudit: any = { timestamp: new Date().toISOString(), action: "retry", model: r.model };
+        if (data.retry_parse_warning) retryAudit.warning = String(data.retry_parse_warning);
         if (existing) {
           await updateOcrResult(existing.id, {
             structuredData: data, rawText, markdownText, normalisedText, confidence: ocrConfidence,
             status: "pass1_complete", pass1Model: r.model,
             auditLog: [...((existing.auditLog as any[]) ?? []),
-              { timestamp: new Date().toISOString(), action: "retry", model: r.model }],
+              retryAudit],
           } as any);
         } else {
-          await createOcrResult({
+          const created = await createOcrResult({
             pageId, structuredData: data, rawText, markdownText, normalisedText, confidence: ocrConfidence,
             status: "pass1_complete", pass1Model: r.model,
-            auditLog: [{ timestamp: new Date().toISOString(), action: "retry", model: r.model }],
+            auditLog: [retryAudit],
           } as any);
+          retryOcrResultId = created.id;
         }
+        if (existing) retryOcrResultId = existing.id;
         await updateDocumentPage(pageId, {
           ocrCompleted: true, ocrConfidence,
           printedPageLabel: printedPageLabel ?? "[unnumbered]",
         });
       } catch (err: any) {
-        if (isConfigError(err)) throw err;
+        const msg = stageErrorMessage(err);
         stagesFailed.push("ocr_extraction");
-        console.warn(`[Pipeline] Page ${pageId} retry ocr_extraction: ${err.message}`);
+        stageErrors.ocr_extraction = msg;
+        console.warn(`[Pipeline] Page ${pageId} retry ocr_extraction: ${msg}`);
       }
     }
   } finally {
@@ -1114,13 +1321,33 @@ export async function retryPageStages(
     } else {
       const parts = ["Retry attempted"];
       if (stagesFailed.length > 0) parts.push(`failed: ${stagesFailed.join(", ")}`);
+      for (const stage of stagesFailed) {
+        if (stageErrors[stage]) parts.push(`${stage}: ${stageErrors[stage].slice(0, 160)}`);
+      }
       if (ocrConfidence < HITL_CONFIDENCE_THRESHOLD) parts.push(`confidence ${ocrConfidence}%`);
       await updateHitlItem(hitlId, { resolutionNotes: parts.join(" — ") });
     }
   }
 
+  if (retryAttemptId != null) {
+    try {
+      await updateHitlRetryAttempt(retryAttemptId, {
+        status: stagesFailed.length === 0 ? "succeeded" : "failed",
+        confidence: ocrConfidence,
+        stagesFailed,
+        stageErrors,
+        modelTrace,
+        ocrResultId: retryOcrResultId,
+        completedAt: new Date(),
+        durationMs: Date.now() - retryStartedAt,
+      } as any);
+    } catch (err: any) {
+      console.warn(`[Pipeline] Page ${pageId} retry tracking finish failed: ${err?.message ?? String(err)}`);
+    }
+  }
+
   console.log(`[Pipeline] Page ${pageId} retry done (confidence: ${ocrConfidence}, failed: ${stagesFailed.join(", ") || "none"})`);
-  return { confidence: ocrConfidence, stagesFailed };
+  return { confidence: ocrConfidence, stagesFailed, stageErrors };
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

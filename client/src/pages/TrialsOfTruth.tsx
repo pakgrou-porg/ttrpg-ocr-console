@@ -1,13 +1,22 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, type ElementType } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   CheckCircle2, XCircle, ArrowUpCircle, ChevronDown, ChevronRight,
   Loader2, ClipboardList, FileText, Layout, BoxSelect, ListTree, Braces, BookOpen,
-  Trash2, ChevronLeft, Download, RefreshCw, Scissors,
+  Trash2, ChevronLeft, Download, RefreshCw, Scissors, Save,
 } from "lucide-react";
 import { BboxOverlayToggle } from "@/components/BboxOverlay";
+import { BboxRegionEditor, parseRegionJson } from "@/components/BboxRegionEditor";
 import { trpc } from "@/lib/trpc";
 import { useToast } from "@/hooks/use-toast";
 
@@ -51,6 +60,7 @@ function formatExportRecord(item: any) {
     human_corrections: (item.ocr?.correctedStructuredData || item.ocr?.correctedText)
       ? { corrected_text: item.ocr?.correctedText ?? null, corrected_data: item.ocr?.correctedStructuredData ?? null }
       : null,
+    retry_attempts: item.retryAttempts ?? [],
   };
 }
 
@@ -65,6 +75,48 @@ const EMPTY_TEMPLATES: Partial<Record<TabId, string>> = {
   structure: JSON.stringify({ chapter: "", section: "", subsection: "", headings: [], page_summary: "" }, null, 2),
   json:      JSON.stringify({ layout_type: "", content_blocks: [], page_summary: "" }, null, 2),
 };
+
+const LAYOUT_TYPES = [
+  "cover",
+  "title_page",
+  "toc",
+  "chapter_header",
+  "body_text",
+  "stat_block",
+  "table",
+  "illustration_full",
+  "illustration_with_text",
+  "index",
+  "appendix",
+  "mixed",
+  "unknown",
+] as const;
+
+function parseLayoutCorrection(value: string): Record<string, unknown> {
+  if (!value.trim()) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+function layoutLabel(value: string) {
+  return value.split("_").map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
+}
+
+function formatRetryTimestamp(value: string | Date | null | undefined) {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleString();
+}
+
+function retryStatusClass(status: string) {
+  if (status === "succeeded") return "text-green-400";
+  if (status === "failed") return "text-red-400";
+  return "text-yellow-400";
+}
 
 // ── JSON pruning ──────────────────────────────────────────────────────────────
 
@@ -156,8 +208,9 @@ function CorrectionField({ label, value, onChange, onSave, isSaving }: {
             </button>
           )}
           {onSave && (
-            <button onClick={onSave} disabled={isSaving}
-              className="flex items-center gap-1 text-xs px-2 py-0.5 rounded border border-border/40 text-muted-foreground hover:text-foreground hover:border-border transition-colors disabled:opacity-50">
+            <button onClick={onSave} disabled={isSaving || !trimmed}
+              className="flex items-center gap-1 text-xs px-2 py-0.5 rounded border border-border/40 text-muted-foreground hover:text-foreground hover:border-border transition-colors disabled:opacity-50"
+              title={trimmed ? "Save this correction" : "Enter a correction value first"}>
               {isSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle2 className="w-3 h-3" />}
               Save section
             </button>
@@ -189,22 +242,37 @@ function TextTab({ item, correction, onCorrect, onSave, isSaving }: TabProps) {
 
 function LayoutTab({ item, correction, onCorrect, onSave, isSaving }: TabProps) {
   const sd = item.ocr?.structuredData as any;
-  const layoutType = item.page?.layoutType ?? sd?.layout_type;
+  const corrected = parseLayoutCorrection(correction);
+  const layoutType = String(corrected.layout_type ?? corrected.layoutType ?? item.page?.layoutType ?? sd?.layout_type ?? "unknown");
   const layoutMeta = sd?.layout ?? sd?.layout_metadata ?? sd?.page_layout;
+  const setLayoutType = (value: string) => {
+    onCorrect(JSON.stringify({
+      ...corrected,
+      layout_type: value,
+      columns: corrected.columns ?? (layoutMeta as any)?.columns ?? null,
+    }, null, 2));
+  };
 
   return (
     <div className="space-y-3">
-      <div className="flex gap-3 items-center">
+      <div className="flex gap-3 items-center flex-wrap">
         <span className="text-xs text-muted-foreground uppercase tracking-wide">Layout Type</span>
-        <span className="text-sm font-mono px-2 py-0.5 rounded bg-muted/30 border border-border/40">
-          {layoutType ?? <span className="text-muted-foreground/50 italic">not detected</span>}
-        </span>
+        <Select value={layoutType} onValueChange={setLayoutType}>
+          <SelectTrigger size="sm" className="w-[220px] bg-background/50">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {LAYOUT_TYPES.map(type => (
+              <SelectItem key={type} value={type}>{layoutLabel(type)}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
       <div>
         <p className="text-xs text-muted-foreground mb-1">Layout metadata</p>
         <JsonViewer value={layoutMeta ?? null} emptyTemplate={EMPTY_TEMPLATES.layout} />
       </div>
-      <CorrectionField label="Layout correction (JSON or plain description)"
+      <CorrectionField label="Layout correction (JSON)"
         value={correction} onChange={onCorrect} onSave={onSave} isSaving={isSaving} />
     </div>
   );
@@ -306,7 +374,7 @@ function DocumentTab({ item }: { item: any }) {
 
 // ── Main HITL card ────────────────────────────────────────────────────────────
 
-const TABS: { id: TabId; label: string; icon: React.ElementType }[] = [
+const TABS: { id: TabId; label: string; icon: ElementType }[] = [
   { id: "text",      label: "OCR Text",  icon: FileText  },
   { id: "layout",    label: "Layout",    icon: Layout    },
   { id: "regions",   label: "Regions",   icon: BoxSelect },
@@ -363,8 +431,11 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
   const [retryStages, setRetryStages] = useState<Set<RetryStageId>>(new Set(ALL_RETRY_STAGES));
   const retryMut = trpc.hitl.retryPage.useMutation({
     onSuccess: (r) => {
+      const errorDetails = Object.entries(r.stageErrors ?? {})
+        .map(([stage, message]) => `${stage}: ${String(message)}`)
+        .join(" | ");
       const msg = r.stagesFailed.length > 0
-        ? `Retry done — ${r.stagesFailed.join(", ")} failed. Confidence: ${r.confidence}%`
+        ? `Retry done — ${r.stagesFailed.join(", ")} failed. Confidence: ${r.confidence}%${errorDetails ? `\n${errorDetails.slice(0, 300)}` : ""}`
         : `Retry succeeded — confidence ${r.confidence}%`;
       toast({ title: "Retry complete", description: msg });
       onResolved();
@@ -377,11 +448,30 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
 
   const runRetry = () => {
     if (retryStages.size === 0) return;
-    retryMut.mutate({
-      pageId: item.page?.id ?? item.pageId,
-      hitlId: item.id,
-      stages: [...retryStages],
-    });
+    void (async () => {
+      const pageId = item.page?.id ?? item.pageId;
+      const dependencyFields = (["text", "layout", "regions", "structure", "json"] as const)
+        .filter(field => corrections[field].trim());
+      try {
+        for (const field of dependencyFields) {
+          await saveCorrectionMut.mutateAsync({ pageId, field, value: corrections[field] });
+        }
+      } catch {
+        return;
+      }
+      if (dependencyFields.length > 0) {
+        setCorrections(c => ({
+          ...c,
+          ...Object.fromEntries(dependencyFields.map(field => [field, ""])),
+        }));
+      }
+      retryMut.mutate({
+        pageId,
+        hitlId: item.id,
+        stages: [...retryStages],
+        savedCorrectionFields: dependencyFields,
+      });
+    })();
   };
 
   const saveCorrectionMut = trpc.hitl.saveCorrection.useMutation({
@@ -389,7 +479,36 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
     onError: (e) => toast({ title: "Save failed", description: e.message, variant: "destructive" }),
   });
   const saveSection = (field: "text" | "layout" | "regions" | "structure" | "json") => () => {
-    saveCorrectionMut.mutate({ pageId: item.page?.id ?? item.pageId, field, value: corrections[field] });
+    saveCorrectionMut.mutate(
+      { pageId: item.page?.id ?? item.pageId, field, value: corrections[field] },
+      { onSuccess: () => setCorrections(c => ({ ...c, [field]: "" })) },
+    );
+  };
+  const saveActiveOnly = () => {
+    if (activeTab === "document") return;
+    const field = activeTab as "text" | "layout" | "regions" | "structure" | "json";
+    saveCorrectionMut.mutate(
+      { pageId: item.page?.id ?? item.pageId, field, value: corrections[field] },
+      { onSuccess: () => setCorrections(c => ({ ...c, [field]: "" })) },
+    );
+  };
+  const saveActiveAndRetryOcr = () => {
+    if (activeTab !== "layout" && activeTab !== "regions") return;
+    const pageId = item.page?.id ?? item.pageId;
+    saveCorrectionMut.mutate(
+      { pageId, field: activeTab, value: corrections[activeTab] },
+      {
+        onSuccess: () => {
+          setCorrections(c => ({ ...c, [activeTab]: "" }));
+          retryMut.mutate({
+            pageId,
+            hitlId: item.id,
+            stages: ["ocr_extraction"],
+            savedCorrectionFields: [activeTab],
+          });
+        },
+      },
+    );
   };
 
   // Auto-expand and scroll when this card becomes the active keyboard target
@@ -454,8 +573,18 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
   const pageImagePath = item.page?.rawPngUrl
     ? `/api/pipeline/pages/${item.page.rawPngUrl.replace(/.*\/workspace\//, "")}`
     : null;
+  const sourceRegions = (item.page?.contentRegions as any[]) ?? [];
+  const editableRegions = useMemo(
+    () => parseRegionJson(corrections.regions, sourceRegions),
+    [corrections.regions, sourceRegions],
+  );
+  const setEditableRegions = (regions: any[]) => {
+    setCorrections(c => ({ ...c, regions: JSON.stringify(regions, null, 2) }));
+  };
 
   const hasCorrections = Object.values(corrections).some(v => v.trim());
+  const activeEditableTab = activeTab !== "document";
+  const retryAttempts: any[] = Array.isArray(item.retryAttempts) ? item.retryAttempts : [];
 
   return (
     <div ref={cardRef}>
@@ -527,11 +656,19 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
             <div>
               <p className="text-xs text-muted-foreground uppercase tracking-wide mb-2">Page Image</p>
               {pageImagePath ? (
-                <BboxOverlayToggle
-                  imageUrl={pageImagePath}
-                  regions={(item.page?.contentRegions as any[]) ?? []}
-                  imageClassName="w-full rounded border border-border/50 object-contain max-h-[600px]"
-                />
+                activeTab === "regions" ? (
+                  <BboxRegionEditor
+                    imageUrl={pageImagePath}
+                    regions={editableRegions}
+                    onChange={setEditableRegions}
+                  />
+                ) : (
+                  <BboxOverlayToggle
+                    imageUrl={pageImagePath}
+                    regions={editableRegions}
+                    imageClassName="w-full rounded border border-border/50 object-contain max-h-[600px]"
+                  />
+                )
               ) : (
                 <div className="h-48 flex items-center justify-center rounded border border-dashed border-border/50 bg-muted/10 text-muted-foreground text-sm">
                   Image not available
@@ -603,12 +740,62 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
                 );
               })}
               <Button size="sm" variant="outline" className="gap-1.5 ml-auto"
-                onClick={runRetry} disabled={isPending || retryStages.size === 0}>
+                onClick={runRetry} disabled={isPending || saveCorrectionMut.isPending || retryStages.size === 0}>
                 {retryMut.isPending
                   ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Retrying…</>
                   : <><RefreshCw className="w-3.5 h-3.5" /> Retry</>}
               </Button>
+              {activeEditableTab && (
+                <>
+                  <Button size="sm" variant="outline" className="gap-1.5"
+                    onClick={saveActiveOnly} disabled={isPending || saveCorrectionMut.isPending}>
+                    {saveCorrectionMut.isPending
+                      ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving...</>
+                      : <><Save className="w-3.5 h-3.5" /> Save</>}
+                  </Button>
+                  {(activeTab === "layout" || activeTab === "regions") && (
+                    <Button size="sm" variant="outline" className="gap-1.5"
+                      onClick={saveActiveAndRetryOcr} disabled={isPending || saveCorrectionMut.isPending}>
+                      {saveCorrectionMut.isPending || retryMut.isPending
+                        ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Applying...</>
+                        : <><RefreshCw className="w-3.5 h-3.5" /> Save + OCR</>}
+                    </Button>
+                  )}
+                </>
+              )}
             </div>
+            {retryAttempts.length > 0 && (
+              <div className="space-y-1 border-t border-border/30 pt-3">
+                <p className="text-xs text-muted-foreground font-medium">Retry history</p>
+                <div className="space-y-1">
+                  {retryAttempts.slice(0, 4).map(attempt => {
+                    const errors = attempt.stageErrors && Object.keys(attempt.stageErrors).length > 0
+                      ? Object.entries(attempt.stageErrors).map(([stage, message]) => `${stage}: ${String(message)}`).join(" | ")
+                      : "";
+                    return (
+                      <div key={attempt.id} className="text-[11px] rounded border border-border/30 bg-muted/10 p-2 space-y-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={`font-semibold ${retryStatusClass(attempt.status)}`}>{attempt.status}</span>
+                          <span className="text-muted-foreground">{formatRetryTimestamp(attempt.completedAt ?? attempt.startedAt)}</span>
+                          <span className="font-mono text-muted-foreground">
+                            {(attempt.requestedStages ?? []).join(", ") || "no stages"}
+                          </span>
+                          {typeof attempt.confidence === "number" && (
+                            <span className="text-muted-foreground">conf: {attempt.confidence}%</span>
+                          )}
+                        </div>
+                        {(attempt.savedCorrectionFields ?? []).length > 0 && (
+                          <p className="text-muted-foreground">
+                            saved before retry: {(attempt.savedCorrectionFields ?? []).join(", ")}
+                          </p>
+                        )}
+                        {errors && <p className="text-red-300 truncate">{errors}</p>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             <div className="flex items-center justify-between gap-4 flex-wrap">
               <div className="flex items-center gap-3 min-w-0">
@@ -693,6 +880,9 @@ export default function TrialsOfTruth() {
     setSelected(prev => prev.size === (items?.length ?? 0) ? new Set() : new Set(items?.map((i: any) => i.id) ?? []));
 
   const [isExporting, setIsExporting] = useState(false);
+  const [trainingDocumentId, setTrainingDocumentId] = useState("");
+  const [trainingPageStart, setTrainingPageStart] = useState("");
+  const [trainingPageEnd, setTrainingPageEnd] = useState("");
 
   const downloadSelected = () => {
     const toExport = (items ?? []).filter((i: any) => selected.has(i.id));
@@ -704,6 +894,41 @@ export default function TrialsOfTruth() {
     try {
       const data = await utils.hitl.exportOcr.fetch({ status: statusFilter });
       triggerJsonDownload(`ocr-export-${statusFilter}-${Date.now()}.json`, data);
+    } catch (e: any) {
+      toast({ title: "Export failed", description: e.message, variant: "destructive" });
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const downloadTrainingData = async () => {
+    setIsExporting(true);
+    try {
+      const data = await utils.hitl.exportTrainingData.fetch({ status: statusFilter });
+      triggerJsonDownload(`ocr-training-${statusFilter}-${Date.now()}.json`, data);
+    } catch (e: any) {
+      toast({ title: "Export failed", description: e.message, variant: "destructive" });
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const downloadTrainingRange = async () => {
+    const documentId = Number(trainingDocumentId);
+    if (!Number.isInteger(documentId) || documentId <= 0) {
+      toast({ title: "Document ID required", variant: "destructive" });
+      return;
+    }
+    const pageStart = trainingPageStart ? Number(trainingPageStart) : undefined;
+    const pageEnd = trainingPageEnd ? Number(trainingPageEnd) : undefined;
+    setIsExporting(true);
+    try {
+      const data = await utils.hitl.exportTrainingData.fetch({
+        documentId,
+        pageStart: Number.isInteger(pageStart) ? pageStart : undefined,
+        pageEnd: Number.isInteger(pageEnd) ? pageEnd : undefined,
+      });
+      triggerJsonDownload(`ocr-training-doc-${documentId}-${pageStart ?? "first"}-${pageEnd ?? "last"}-${Date.now()}.json`, data);
     } catch (e: any) {
       toast({ title: "Export failed", description: e.message, variant: "destructive" });
     } finally {
@@ -789,8 +1014,8 @@ export default function TrialsOfTruth() {
         </div>
 
         {/* Selection + download bar */}
-        {(items?.length ?? 0) > 0 && (
-          <div className="flex items-center gap-3 flex-wrap text-sm">
+        <div className="flex items-center gap-3 flex-wrap text-sm">
+          {(items?.length ?? 0) > 0 && (
             <label className="flex items-center gap-2 text-muted-foreground cursor-pointer select-none">
               <input type="checkbox"
                 checked={selected.size > 0 && selected.size === (items?.length ?? 0)}
@@ -800,6 +1025,7 @@ export default function TrialsOfTruth() {
               />
               {selected.size === 0 ? "Select all" : `${selected.size} selected`}
             </label>
+          )}
             {selected.size > 0 && (
               <Button variant="outline" size="sm" className="gap-1.5 h-7 text-xs"
                 onClick={downloadSelected}>
@@ -808,12 +1034,47 @@ export default function TrialsOfTruth() {
               </Button>
             )}
             <Button variant="outline" size="sm" className="gap-1.5 h-7 text-xs ml-auto"
-              onClick={downloadAll} disabled={isExporting}>
+              onClick={downloadAll} disabled={isExporting || totalForStatus === 0}>
               {isExporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
               Download All {statusFilter.charAt(0).toUpperCase() + statusFilter.slice(1)}
             </Button>
+            <Button variant="outline" size="sm" className="gap-1.5 h-7 text-xs"
+              onClick={downloadTrainingData} disabled={isExporting || totalForStatus === 0}>
+              {isExporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+              Training Data
+            </Button>
+            <div className="flex items-center gap-1.5 ml-auto sm:ml-0">
+              <Input
+                value={trainingDocumentId}
+                onChange={e => setTrainingDocumentId(e.target.value)}
+                type="number"
+                min="1"
+                placeholder="Doc"
+                className="h-7 w-20 text-xs"
+              />
+              <Input
+                value={trainingPageStart}
+                onChange={e => setTrainingPageStart(e.target.value)}
+                type="number"
+                min="1"
+                placeholder="From"
+                className="h-7 w-20 text-xs"
+              />
+              <Input
+                value={trainingPageEnd}
+                onChange={e => setTrainingPageEnd(e.target.value)}
+                type="number"
+                min="1"
+                placeholder="To"
+                className="h-7 w-20 text-xs"
+              />
+              <Button variant="outline" size="sm" className="gap-1.5 h-7 text-xs"
+                onClick={downloadTrainingRange} disabled={isExporting}>
+                {isExporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+                Range
+              </Button>
+            </div>
           </div>
-        )}
       </div>
 
       {/* Items */}

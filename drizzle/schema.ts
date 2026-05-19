@@ -281,6 +281,7 @@ export const stageInscriptions = pgTable("stage_inscriptions", {
   id: serial("id").primaryKey(),
   stage: varchar("stage", { length: 64 }).notNull().unique(),
   primaryProviderId: integer("primary_provider_id"),
+  secondaryProviderId: integer("secondary_provider_id"),
   fallbackProviderId: integer("fallback_provider_id"),
   promptName: varchar("prompt_name", { length: 128 }),
   promptVersion: integer("prompt_version"),
@@ -293,6 +294,7 @@ export const stageInscriptions = pgTable("stage_inscriptions", {
 }, (t) => ({
   stageIdx: index("stage_inscriptions_stage_idx").on(t.stage),
   primaryProviderIdx: index("stage_inscriptions_primary_idx").on(t.primaryProviderId),
+  secondaryProviderIdx: index("stage_inscriptions_secondary_idx").on(t.secondaryProviderId),
   fallbackProviderIdx: index("stage_inscriptions_fallback_idx").on(t.fallbackProviderId),
 }));
 
@@ -620,6 +622,35 @@ export const hitlQueue = pgTable("hitl_queue", {
 
 export type HitlQueueItem = typeof hitlQueue.$inferSelect;
 export type InsertHitlQueueItem = typeof hitlQueue.$inferInsert;
+
+export const hitlRetryAttempts = pgTable("hitl_retry_attempts", {
+  id: serial("id").primaryKey(),
+  hitlItemId: integer("hitl_item_id"),
+  pageId: integer("page_id").notNull(),
+  requestedStages: jsonb("requested_stages").$type<string[]>().default([]).notNull(),
+  savedCorrectionFields: jsonb("saved_correction_fields").$type<string[]>().default([]).notNull(),
+  usedReviewedLayout: boolean("used_reviewed_layout").default(false).notNull(),
+  usedReviewedRegions: boolean("used_reviewed_regions").default(false).notNull(),
+  usedReviewedStructure: boolean("used_reviewed_structure").default(false).notNull(),
+  status: varchar("status", { length: 32 }).default("running").notNull(),
+  confidence: integer("confidence"),
+  stagesFailed: jsonb("stages_failed").$type<string[]>().default([]).notNull(),
+  stageErrors: jsonb("stage_errors").$type<Record<string, string>>().default({}).notNull(),
+  modelTrace: jsonb("model_trace").$type<Record<string, string>>().default({}).notNull(),
+  ocrResultId: integer("ocr_result_id"),
+  createdBy: integer("created_by"),
+  startedAt: timestamp("started_at").defaultNow().notNull(),
+  completedAt: timestamp("completed_at"),
+  durationMs: integer("duration_ms"),
+}, (t) => ({
+  pageIdIdx: index("hitl_retry_attempts_page_id_idx").on(t.pageId),
+  hitlItemIdIdx: index("hitl_retry_attempts_hitl_item_id_idx").on(t.hitlItemId),
+  statusIdx: index("hitl_retry_attempts_status_idx").on(t.status),
+  startedAtIdx: index("hitl_retry_attempts_started_at_idx").on(t.startedAt),
+}));
+
+export type HitlRetryAttempt = typeof hitlRetryAttempts.$inferSelect;
+export type InsertHitlRetryAttempt = typeof hitlRetryAttempts.$inferInsert;
 
 // ─── Google OAuth Tokens ───────────────────────────────────────────────────────
 //

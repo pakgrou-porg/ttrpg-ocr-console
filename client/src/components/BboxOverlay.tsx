@@ -5,6 +5,7 @@ import { Layers, Eye, EyeOff } from "lucide-react";
 const TYPE_COLORS: Record<string, string> = {
   heading:      "#a855f7",
   subheading:   "#c084fc",
+  text:         "#3b82f6",
   paragraph:    "#3b82f6",
   list:         "#60a5fa",
   list_item:    "#60a5fa",
@@ -29,6 +30,8 @@ export type BboxRegion = {
   type?: string;
   regionType?: string;
   label?: string;
+  reviewId?: string;
+  sequence?: number;
   // nested bbox object (various shapes)
   bbox?:
     | { x: number; y: number; w: number; h: number }

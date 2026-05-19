@@ -8,7 +8,7 @@
       "Bash(git rm *)",
       "Bash(git commit -m ' *)",
       "Bash(git push *)",
-      "Bash(gh pr create --title 'feat: migrate database backend from MySQL to Supabase/PostgreSQL' --body ' *)",
+      "Bash(gh pr create --title 'feat: align database backend with Supabase/PostgreSQL' --body ' *)",
       "PowerShell(gh run view 25400182024 --repo pakgrou-porg/ttrpg-ocr-console)",
       "WebFetch(domain:github.com)",
       "PowerShell($env:PATH = \"$env:APPDATA\\\\npm;$env:PATH\"; cd \"C:\\\\Users\\\\karlm\\\\git_repos\\\\ttrpg-ocr-console\"; pnpm install --no-frozen-lockfile 2>&1 | Select-Object -Last 15)",
