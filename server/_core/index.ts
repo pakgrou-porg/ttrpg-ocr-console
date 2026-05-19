@@ -10,6 +10,7 @@ import { createContext } from "./context";
 import { serveStatic } from "./static";
 import { uploadRouter } from "../uploadRoutes";
 import { uploadIngestRouter } from "../uploadIngestRoute";
+import { sdk } from "./sdk";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -43,7 +44,14 @@ async function startServer() {
   registerGoogleOAuthRoutes(app);
   // Serve pipeline page PNGs for HITL review
   const pipelineWorkspace = process.env.PIPELINE_WORKSPACE ?? "/app/workspace";
-  app.use("/api/pipeline/pages", express.static(pipelineWorkspace, { index: false, dotfiles: "deny" }));
+  app.use("/api/pipeline/pages", async (req, res, next) => {
+    try {
+      await sdk.authenticateRequest(req as any);
+      next();
+    } catch {
+      res.status(401).json({ error: "Unauthorized." });
+    }
+  }, express.static(pipelineWorkspace, { index: false, dotfiles: "deny" }));
   // File upload REST endpoints
   app.use(uploadRouter);
   app.use(uploadIngestRouter);

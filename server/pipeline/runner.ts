@@ -250,6 +250,75 @@ function isConfigError(err: any): boolean {
   return typeof err?.message === "string" && err.message.startsWith("[CONFIG]");
 }
 
+const LAYOUT_TYPES = new Set([
+  "cover",
+  "title_page",
+  "toc",
+  "chapter_header",
+  "body_text",
+  "stat_block",
+  "table",
+  "illustration_full",
+  "illustration_with_text",
+  "index",
+  "appendix",
+  "mixed",
+]);
+
+const LAYOUT_TYPE_ALIASES: Record<string, string> = {
+  one_column: "body_text",
+  single_column: "body_text",
+  two_column: "body_text",
+  three_column: "body_text",
+  multi_column: "body_text",
+  contents: "toc",
+  table_of_contents: "toc",
+  title: "title_page",
+  full_page_art: "illustration_full",
+  illustration: "illustration_with_text",
+};
+
+const REGION_TYPES = new Set([
+  "heading",
+  "subheading",
+  "paragraph",
+  "table",
+  "list",
+  "image",
+  "stat_block",
+  "sidebar",
+  "caption",
+  "header",
+  "footer",
+  "page_number",
+]);
+
+function validateLayoutData(data: Record<string, unknown>): Record<string, unknown> {
+  const rawType = String(data.layout_type ?? "").trim().toLowerCase();
+  const layoutType = LAYOUT_TYPE_ALIASES[rawType] ?? rawType;
+  if (!LAYOUT_TYPES.has(layoutType)) {
+    throw new Error(`Invalid layout_analysis response: unsupported layout_type "${rawType || "<missing>"}"`);
+  }
+
+  const rawColumns = Number(data.columns ?? 1);
+  const columns = Number.isFinite(rawColumns)
+    ? Math.max(1, Math.min(4, Math.round(rawColumns)))
+    : 1;
+
+  return {
+    ...data,
+    layout_type: layoutType,
+    columns,
+    has_table: data.has_table === true,
+    has_image_or_art: data.has_image_or_art === true,
+    has_list: data.has_list === true,
+  };
+}
+
+function assertLayoutInvokeResult(result: { content: string }): void {
+  validateLayoutData(parseJsonResponse(result.content));
+}
+
 /** Normalise a raw model bbox into {x, y, w, h} percentage values (0-100).
  *  Handles {x,y,w,h}, {x,y,width,height}, {x1,y1,x2,y2}, array, and flat
  *  top-level coord variants.  If values exceed 101, treats them as pixels and
@@ -295,6 +364,53 @@ function normaliseBboxRegions(raw: any[]): any[] {
     };
     return { ...r, bbox: norm };
   });
+}
+
+function clampPercent(value: unknown, fallback = 0): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.min(100, Math.round(n * 100) / 100));
+}
+
+function validateBboxRegions(data: Record<string, unknown>): any[] {
+  if (!Array.isArray(data.regions)) {
+    throw new Error("Invalid bbox_detection response: missing regions array");
+  }
+
+  const normalised = normaliseBboxRegions(data.regions);
+  const valid = normalised.flatMap((region: any) => {
+    const bbox = region?.bbox;
+    if (!bbox || typeof bbox !== "object") return [];
+
+    const x = Math.min(clampPercent(bbox.x), 99.9);
+    const y = Math.min(clampPercent(bbox.y), 99.9);
+    const w = clampPercent(bbox.w);
+    const h = clampPercent(bbox.h);
+    if (w <= 0 || h <= 0) return [];
+
+    const clampedW = Math.min(Math.max(0.1, w), 100 - x);
+    const clampedH = Math.min(Math.max(0.1, h), 100 - y);
+    const rawType = String(region.type ?? "paragraph").trim().toLowerCase();
+    const type = REGION_TYPES.has(rawType) ? rawType : "paragraph";
+
+    return [{
+      ...region,
+      type,
+      label: typeof region.label === "string" && region.label.trim()
+        ? region.label.trim().slice(0, 160)
+        : type,
+      bbox: { x, y, w: clampedW, h: clampedH },
+    }];
+  });
+
+  if (valid.length === 0) {
+    throw new Error("Invalid bbox_detection response: no usable regions");
+  }
+  return valid;
+}
+
+function assertBboxInvokeResult(result: { content: string }): void {
+  validateBboxRegions(parseJsonResponse(result.content));
 }
 
 /** Extract the printed page label (e.g. "i", "42") from OCR content blocks. */
@@ -685,17 +801,17 @@ async function _runJob(jobId: number): Promise<void> {
 
     const [layoutSettled, bboxSettled] = await Promise.allSettled([
       invokeStage("layout_analysis", layoutContent, undefined, PROMPT_LAYOUT_ANALYSIS,
-        { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_LAYOUT }, { pageId, jobId })
+        { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_LAYOUT, validateResult: assertLayoutInvokeResult }, { pageId, jobId })
         .then(async r => {
-          const data = parseJsonResponse(r.content);
+          const data = validateLayoutData(parseJsonResponse(r.content));
           await updateDocumentPage(pageId, { layoutType: (data.layout_type as string) || undefined });
           return data;
         }),
       invokeStage("bbox_detection", bboxContent, undefined, PROMPT_BBOX_DETECTION,
-        { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_BBOX }, { pageId, jobId })
+        { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_BBOX, validateResult: assertBboxInvokeResult }, { pageId, jobId })
         .then(async r => {
           const data = parseJsonResponse(r.content);
-          const regs: any[] = normaliseBboxRegions(Array.isArray(data.regions) ? data.regions : []);
+          const regs: any[] = validateBboxRegions(data);
           await updateDocumentPage(pageId, { contentRegions: regs });
           return regs;
         }),
@@ -1028,8 +1144,8 @@ export async function retryPageStages(
       try {
         const content: UserContentPart[] = [imgPart, { type: "text", text: "Classify the layout type and structure of this page. Reply with ONLY a JSON object — start with { and end with }." }];
         const r = await invokeStage("layout_analysis", content, surroundingContext, PROMPT_LAYOUT_ANALYSIS,
-          { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_LAYOUT }, { pageId, jobId: doc?.ingestionJobId ?? undefined });
-        const data = parseJsonResponse(r.content);
+          { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_LAYOUT, validateResult: assertLayoutInvokeResult }, { pageId, jobId: doc?.ingestionJobId ?? undefined });
+        const data = validateLayoutData(parseJsonResponse(r.content));
         await updateDocumentPage(pageId, { layoutType: (data.layout_type as string) || undefined });
       } catch (err: any) {
         if (isConfigError(err)) throw err;
@@ -1044,9 +1160,9 @@ export async function retryPageStages(
       try {
         const content: UserContentPart[] = [imgPart, { type: "text", text: "Identify all distinct content regions on this page. Reply with ONLY a JSON object — start with { and end with }." }];
         const r = await invokeStage("bbox_detection", content, surroundingContext, PROMPT_BBOX_DETECTION,
-          { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_BBOX }, { pageId, jobId: doc?.ingestionJobId ?? undefined });
+          { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_BBOX, validateResult: assertBboxInvokeResult }, { pageId, jobId: doc?.ingestionJobId ?? undefined });
         const data = parseJsonResponse(r.content);
-        regions = normaliseBboxRegions(Array.isArray(data.regions) ? data.regions : []);
+        regions = validateBboxRegions(data);
         await updateDocumentPage(pageId, { contentRegions: regions });
       } catch (err: any) {
         if (isConfigError(err)) throw err;

@@ -932,6 +932,9 @@ export async function deleteLlmProvider(id: number) {
     .set({ primaryProviderId: null })
     .where(eq(stageInscriptions.primaryProviderId, id));
   await db.update(stageInscriptions)
+    .set({ secondaryProviderId: null })
+    .where(eq(stageInscriptions.secondaryProviderId, id));
+  await db.update(stageInscriptions)
     .set({ fallbackProviderId: null })
     .where(eq(stageInscriptions.fallbackProviderId, id));
   await db.delete(llmProviders).where(eq(llmProviders.id, id));

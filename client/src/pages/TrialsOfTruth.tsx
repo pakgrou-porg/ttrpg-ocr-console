@@ -711,6 +711,18 @@ export default function TrialsOfTruth() {
     }
   };
 
+  const downloadTrainingData = async () => {
+    setIsExporting(true);
+    try {
+      const data = await utils.hitl.exportTrainingData.fetch({ status: statusFilter });
+      triggerJsonDownload(`ocr-training-${statusFilter}-${Date.now()}.json`, data);
+    } catch (e: any) {
+      toast({ title: "Export failed", description: e.message, variant: "destructive" });
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       <div>
@@ -811,6 +823,11 @@ export default function TrialsOfTruth() {
               onClick={downloadAll} disabled={isExporting}>
               {isExporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
               Download All {statusFilter.charAt(0).toUpperCase() + statusFilter.slice(1)}
+            </Button>
+            <Button variant="outline" size="sm" className="gap-1.5 h-7 text-xs"
+              onClick={downloadTrainingData} disabled={isExporting}>
+              {isExporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+              Training Data
             </Button>
           </div>
         )}

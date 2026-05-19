@@ -87,9 +87,9 @@ COPY pipeline-config.yaml ./pipeline-config.yaml
 # Expose the application port (default 3000; overridable via PORT env var)
 EXPOSE 3000
 
-# Health-check: ping the /api/trpc/health endpoint every 30 s
+# Health-check: ping the public tRPC liveness endpoint every 30 s
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-  CMD wget -qO- http://localhost:${PORT:-3000}/api/trpc/health || exit 1
+  CMD wget -qO- http://localhost:${PORT:-3000}/api/trpc/health.ping || exit 1
 
 # Run database migrations then start the production server.
 # migrate.mjs is idempotent — it only applies migrations whose hashes are not

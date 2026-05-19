@@ -331,6 +331,7 @@ export interface TopologyStage {
   stage: string;
   inscription: InscriptionInfo | null;
   primaryProvider: ProviderInfo | null;
+  secondaryProvider: ProviderInfo | null;
   fallbackProvider: ProviderInfo | null;
 }
 
@@ -341,6 +342,7 @@ function StageNode({ data }: NodeProps) {
     stage: string;
     inscription: InscriptionInfo | null;
     primaryProvider: ProviderInfo | null;
+    secondaryProvider: ProviderInfo | null;
     fallbackProvider: ProviderInfo | null;
     isIngestion?: boolean;
     isHitl?: boolean;
@@ -428,6 +430,30 @@ function StageNode({ data }: NodeProps) {
                 </TooltipContent>
               </Tooltip>
             )}
+            {d.secondaryProvider && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="flex items-center gap-1.5 px-2 py-1.5 rounded bg-slate-800/60 border border-dashed border-violet-600/40 cursor-default">
+                    {d.secondaryProvider.providerType === "lm_studio" || d.secondaryProvider.providerType === "openai_compatible" ? (
+                      <Cpu className="w-3 h-3 text-violet-300/70 flex-shrink-0" />
+                    ) : (
+                      <Cloud className="w-3 h-3 text-blue-400/60 flex-shrink-0" />
+                    )}
+                    <span className="text-xs text-slate-400 truncate flex-1">
+                      {d.secondaryProvider.modelId || d.secondaryProvider.displayName}
+                    </span>
+                    <Badge variant="outline" className="text-[10px] px-1 py-0 h-4 border-violet-500/50 text-violet-300">Secondary</Badge>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="right" className="max-w-xs">
+                  <p className="font-semibold">{d.secondaryProvider.displayName}</p>
+                  {d.secondaryProvider.modelId && (
+                    <p className="text-xs text-muted-foreground font-mono">{d.secondaryProvider.modelId}</p>
+                  )}
+                  <p className="text-xs text-muted-foreground">Type: {d.secondaryProvider.providerType}</p>
+                </TooltipContent>
+              </Tooltip>
+            )}
             {d.fallbackProvider && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -440,7 +466,7 @@ function StageNode({ data }: NodeProps) {
                     <span className="text-xs text-slate-400 truncate flex-1">
                       {d.fallbackProvider.modelId || d.fallbackProvider.displayName}
                     </span>
-                    <Badge variant="outline" className="text-[10px] px-1 py-0 h-4 border-amber-500/50 text-amber-400">Fallback</Badge>
+                    <Badge variant="outline" className="text-[10px] px-1 py-0 h-4 border-amber-500/50 text-amber-400">Cloud</Badge>
                   </div>
                 </TooltipTrigger>
                 <TooltipContent side="right" className="max-w-xs">
@@ -457,11 +483,11 @@ function StageNode({ data }: NodeProps) {
       </div>
 
       {/* Footer: provider summary */}
-      {hasInscription && (d.primaryProvider || d.fallbackProvider) && (
+      {hasInscription && (d.primaryProvider || d.secondaryProvider || d.fallbackProvider) && (
         <div className={`px-3 py-1 border-t ${meta.borderColor} flex items-center gap-1`}>
           <Users className="w-3 h-3 text-slate-500" />
           <span className="text-[10px] text-slate-500 truncate">
-            {[d.primaryProvider?.displayName, d.fallbackProvider ? `→ ${d.fallbackProvider.displayName}` : null].filter(Boolean).join(" ")}
+            {[d.primaryProvider?.displayName, d.secondaryProvider ? `-> ${d.secondaryProvider.displayName}` : null, d.fallbackProvider ? `-> ${d.fallbackProvider.displayName}` : null].filter(Boolean).join(" ")}
           </span>
         </div>
       )}
@@ -516,6 +542,7 @@ function buildNodesAndEdges(topology: TopologyStage[]): { nodes: Node[]; edges: 
             stage,
             inscription: t?.inscription ?? null,
             primaryProvider: t?.primaryProvider ?? null,
+            secondaryProvider: t?.secondaryProvider ?? null,
             fallbackProvider: t?.fallbackProvider ?? null,
           },
         });
@@ -533,7 +560,7 @@ function buildNodesAndEdges(topology: TopologyStage[]): { nodes: Node[]; edges: 
         x: COL_X_START + pass4Col * COL_X_GAP,
         y: ROW_Y_START + 200 + 3 * ROW_Y_GAP, // below the lowest fallback node
       },
-      data: { stage: "__hitl__", isHitl: true, inscription: null, primaryProvider: null, fallbackProvider: null },
+      data: { stage: "__hitl__", isHitl: true, inscription: null, primaryProvider: null, secondaryProvider: null, fallbackProvider: null },
     });
     edges.push({
       id: "pass4->hitl",

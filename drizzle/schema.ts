@@ -281,6 +281,7 @@ export const stageInscriptions = pgTable("stage_inscriptions", {
   id: serial("id").primaryKey(),
   stage: varchar("stage", { length: 64 }).notNull().unique(),
   primaryProviderId: integer("primary_provider_id"),
+  secondaryProviderId: integer("secondary_provider_id"),
   fallbackProviderId: integer("fallback_provider_id"),
   promptName: varchar("prompt_name", { length: 128 }),
   promptVersion: integer("prompt_version"),
@@ -293,6 +294,7 @@ export const stageInscriptions = pgTable("stage_inscriptions", {
 }, (t) => ({
   stageIdx: index("stage_inscriptions_stage_idx").on(t.stage),
   primaryProviderIdx: index("stage_inscriptions_primary_idx").on(t.primaryProviderId),
+  secondaryProviderIdx: index("stage_inscriptions_secondary_idx").on(t.secondaryProviderId),
   fallbackProviderIdx: index("stage_inscriptions_fallback_idx").on(t.fallbackProviderId),
 }));
 

@@ -225,6 +225,7 @@ CREATE TABLE IF NOT EXISTS "stage_inscriptions" (
   "id"                   serial PRIMARY KEY,
   "stage"                varchar(64)  NOT NULL UNIQUE,
   "primary_provider_id"  integer,
+  "secondary_provider_id" integer,
   "fallback_provider_id" integer,
   "prompt_name"          varchar(128),
   "prompt_version"       integer,
@@ -239,6 +240,7 @@ CREATE TABLE IF NOT EXISTS "stage_inscriptions" (
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "stage_inscriptions_stage_idx"   ON "stage_inscriptions" ("stage");
 CREATE INDEX IF NOT EXISTS "stage_inscriptions_primary_idx" ON "stage_inscriptions" ("primary_provider_id");
+CREATE INDEX IF NOT EXISTS "stage_inscriptions_secondary_idx" ON "stage_inscriptions" ("secondary_provider_id");
 CREATE INDEX IF NOT EXISTS "stage_inscriptions_fallback_idx" ON "stage_inscriptions" ("fallback_provider_id");
 
 --> statement-breakpoint

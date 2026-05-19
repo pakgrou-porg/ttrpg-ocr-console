@@ -42,6 +42,57 @@ const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   return next({ ctx });
 });
 
+type DocumentAccessTarget = { ownerUserId?: number | null; visibility?: string | null };
+type RouterCtx = { user: { id: number; role: string } };
+
+function canAccessDocument(ctx: RouterCtx, doc: DocumentAccessTarget): boolean {
+  return ctx.user.role === "admin" || doc.ownerUserId === ctx.user.id || doc.visibility !== "private";
+}
+
+function canModifyDocument(ctx: RouterCtx, doc: DocumentAccessTarget): boolean {
+  return ctx.user.role === "admin" || doc.ownerUserId === ctx.user.id;
+}
+
+function assertDocumentAccess<T extends DocumentAccessTarget | null | undefined>(ctx: RouterCtx, doc: T): NonNullable<T> {
+  if (!doc) throw new TRPCError({ code: "NOT_FOUND", message: "Document not found." });
+  if (!canAccessDocument(ctx, doc)) throw new TRPCError({ code: "FORBIDDEN", message: "You do not have access to this document." });
+  return doc as NonNullable<T>;
+}
+
+function assertDocumentWriteAccess<T extends DocumentAccessTarget | null | undefined>(ctx: RouterCtx, doc: T): NonNullable<T> {
+  if (!doc) throw new TRPCError({ code: "NOT_FOUND", message: "Document not found." });
+  if (!canModifyDocument(ctx, doc)) throw new TRPCError({ code: "FORBIDDEN", message: "You cannot modify this document." });
+  return doc as NonNullable<T>;
+}
+
+async function getPageWithAccess(ctx: RouterCtx, pageId: number) {
+  const page = await getPageById(pageId);
+  if (!page) throw new TRPCError({ code: "NOT_FOUND", message: "Page not found." });
+  const document = assertDocumentAccess(ctx, await getDocumentById(page.documentId));
+  return { page, document };
+}
+
+async function getPageWithWriteAccess(ctx: RouterCtx, pageId: number) {
+  const page = await getPageById(pageId);
+  if (!page) throw new TRPCError({ code: "NOT_FOUND", message: "Page not found." });
+  const document = assertDocumentWriteAccess(ctx, await getDocumentById(page.documentId));
+  return { page, document };
+}
+
+async function getHitlItemWithAccess(ctx: RouterCtx, id: number) {
+  const item = await getHitlItemById(id);
+  if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "HITL item not found." });
+  const { page, document } = await getPageWithAccess(ctx, item.pageId);
+  return { item, page, document };
+}
+
+async function getHitlItemWithWriteAccess(ctx: RouterCtx, id: number) {
+  const item = await getHitlItemById(id);
+  if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "HITL item not found." });
+  const { page, document } = await getPageWithWriteAccess(ctx, item.pageId);
+  return { item, page, document };
+}
+
 // ─── Health helpers ───────────────────────────────────────────────────────────
 
 // Provider types that are local / LAN-hosted (not metered cloud APIs)
@@ -239,7 +290,7 @@ export const appRouter = router({
 
     getByName: protectedProcedure
       .input(z.object({ name: z.string() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
         return getSystemPromptByName(input.name);
       }),
 
@@ -261,7 +312,7 @@ export const appRouter = router({
     /** Returns the last 3 saved versions of a prompt for history/rollback */
     history: protectedProcedure
       .input(z.object({ name: z.string() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
         return getPromptVersionHistory(input.name);
       }),
 
@@ -329,7 +380,7 @@ export const appRouter = router({
     /** Get config entries by category (e.g., "supabase", "lm_studio", "openrouter") */
     byCategory: adminProcedure
       .input(z.object({ category: z.string() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
         return getSystemConfigByCategory(input.category);
       }),
 
@@ -374,7 +425,7 @@ export const appRouter = router({
     /** Get a single job by ID */
     get: protectedProcedure
       .input(z.object({ id: z.number().int() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
         const job = await getIngestionJobById(input.id);
         if (!job) throw new TRPCError({ code: "NOT_FOUND", message: "Job not found." });
         return job;
@@ -1077,7 +1128,7 @@ export const appRouter = router({
   // ─── Stage Inscriptions (The Assignments) ────────────────────────────────────
   assignments: router({
     /**
-     * List all stage inscriptions with primary and fallback provider info.
+     * List all stage inscriptions with primary, secondary, and cloud fallback provider info.
      * Returns one inscription per stage (or null if no inscription exists).
      */
     list: adminProcedure.query(async () => {
@@ -1087,6 +1138,7 @@ export const appRouter = router({
       return inscriptions.map(i => ({
         ...i,
         primaryProvider: i.primaryProviderId ? providerMap.get(i.primaryProviderId) ?? null : null,
+        secondaryProvider: i.secondaryProviderId ? providerMap.get(i.secondaryProviderId) ?? null : null,
         fallbackProvider: i.fallbackProviderId ? providerMap.get(i.fallbackProviderId) ?? null : null,
       }));
     }),
@@ -1102,6 +1154,7 @@ export const appRouter = router({
         return {
           ...inscription,
           primaryProvider: inscription.primaryProviderId ? providerMap.get(inscription.primaryProviderId) ?? null : null,
+          secondaryProvider: inscription.secondaryProviderId ? providerMap.get(inscription.secondaryProviderId) ?? null : null,
           fallbackProvider: inscription.fallbackProviderId ? providerMap.get(inscription.fallbackProviderId) ?? null : null,
         };
       }),
@@ -1115,6 +1168,7 @@ export const appRouter = router({
       .input(z.object({
         stage: z.enum(PIPELINE_STAGES),
         primaryProviderId: z.number().int().nullable().optional(),
+        secondaryProviderId: z.number().int().nullable().optional(),
         fallbackProviderId: z.number().int().nullable().optional(),
         promptName: z.string().max(128).nullable().optional(),
         promptVersion: z.number().int().nullable().optional(),
@@ -1127,6 +1181,7 @@ export const appRouter = router({
         const id = await upsertStageInscription({
           stage: input.stage,
           primaryProviderId: input.primaryProviderId ?? null,
+          secondaryProviderId: input.secondaryProviderId ?? null,
           fallbackProviderId: input.fallbackProviderId ?? null,
           promptName: input.promptName ?? null,
           promptVersion: input.promptVersion ?? null,
@@ -1143,6 +1198,7 @@ export const appRouter = router({
       .input(z.object({
         id: z.number().int(),
         primaryProviderId: z.number().int().nullable().optional(),
+        secondaryProviderId: z.number().int().nullable().optional(),
         fallbackProviderId: z.number().int().nullable().optional(),
         /** Name of the system_prompts record to use for this stage (from Incantations & Runes) */
         promptName: z.string().max(128).nullable().optional(),
@@ -1188,6 +1244,7 @@ export const appRouter = router({
       return PIPELINE_STAGES.map(stage => {
         const inscription = inscriptionMap.get(stage);
         const primary = inscription?.primaryProviderId ? providerMap.get(inscription.primaryProviderId) : undefined;
+        const secondary = inscription?.secondaryProviderId ? providerMap.get(inscription.secondaryProviderId) : undefined;
         const fallback = inscription?.fallbackProviderId ? providerMap.get(inscription.fallbackProviderId) : undefined;
         return {
           stage,
@@ -1206,6 +1263,14 @@ export const appRouter = router({
             modelId: primary.modelId,
             providerType: primary.providerType,
             isActive: primary.isActive,
+          } : null,
+          secondaryProvider: secondary ? {
+            id: secondary.id,
+            displayName: secondary.displayName,
+            name: secondary.name,
+            modelId: secondary.modelId,
+            providerType: secondary.providerType,
+            isActive: secondary.isActive,
           } : null,
           fallbackProvider: fallback ? {
             id: fallback.id,
@@ -1476,25 +1541,24 @@ export const appRouter = router({
     /** Get a single document by ID */
     getDocument: protectedProcedure
       .input(z.object({ id: z.number().int() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
         const doc = await getDocumentById(input.id);
-        if (!doc) throw new TRPCError({ code: "NOT_FOUND", message: "Document not found in the Library." });
-        return doc;
+        return assertDocumentAccess(ctx, doc);
       }),
 
     /** Get all pages for a document */
     getPages: protectedProcedure
       .input(z.object({ documentId: z.number().int() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
+        assertDocumentAccess(ctx, await getDocumentById(input.documentId));
         return getPagesByDocumentId(input.documentId);
       }),
 
     /** Get a single page with its OCR result */
     getPageWithOcr: protectedProcedure
       .input(z.object({ pageId: z.number().int() }))
-      .query(async ({ input }) => {
-        const page = await getPageById(input.pageId);
-        if (!page) throw new TRPCError({ code: "NOT_FOUND", message: "Page not found." });
+      .query(async ({ ctx, input }) => {
+        const { page } = await getPageWithAccess(ctx, input.pageId);
         const ocrResult = await getOcrResultByPageId(input.pageId);
         return { page, ocrResult: ocrResult ?? null };
       }),
@@ -1549,8 +1613,9 @@ export const appRouter = router({
     /** Get the document created by a specific ingestion job */
     getByJobId: protectedProcedure
       .input(z.object({ jobId: z.number().int() }))
-      .query(async ({ input }) => {
-        return (await getDocumentByJobId(input.jobId)) ?? null;
+      .query(async ({ ctx, input }) => {
+        const doc = await getDocumentByJobId(input.jobId);
+        return doc ? assertDocumentAccess(ctx, doc) : null;
       }),
 
     /** Browse pages for a document, enriched with OCR results, paginated */
@@ -1560,7 +1625,8 @@ export const appRouter = router({
         offset: z.number().int().min(0).default(0),
         limit: z.number().int().min(1).max(50).default(10),
       }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
+        assertDocumentAccess(ctx, await getDocumentById(input.documentId));
         const [pages, total] = await Promise.all([
           getPagesByDocumentIdPaginated(input.documentId, input.offset, input.limit),
           getDocumentPageCount(input.documentId),
@@ -1637,7 +1703,8 @@ export const appRouter = router({
      *  Returns every page in the document with its OCR texts and quality metrics. */
     textQuality: protectedProcedure
       .input(z.object({ documentId: z.number().int() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
+        assertDocumentAccess(ctx, await getDocumentById(input.documentId));
         const pages = await getPagesByDocumentId(input.documentId);
         if (pages.length === 0) return [];
         const pageIds = pages.map(p => p.id);
@@ -1682,7 +1749,7 @@ export const appRouter = router({
         limit: z.number().int().min(1).max(2000).optional(),
         offset: z.number().int().min(0).optional(),
       }).optional())
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
         const items = await getAllHitlItems({
           status: input?.status,
           priority: input?.priority,
@@ -1703,10 +1770,11 @@ export const appRouter = router({
         const ocrByPage = await getOcrResultsByPageIds(pageIds);
         const ocrMap = new Map(ocrByPage.map(r => [r.pageId, r]));
 
-        return items.map(item => {
+        return items.flatMap(item => {
           const page = pageMap.get(item.pageId) ?? null;
           const doc = page ? docMap.get(page.documentId) ?? null : null;
           const ocr = page ? ocrMap.get(page.id) ?? null : null;
+          if (!doc || !canAccessDocument(ctx, doc)) return [];
           return {
             ...item,
             page: page ?? null,
@@ -1720,21 +1788,29 @@ export const appRouter = router({
     /** Get a single HITL item with full context (page, OCR, document) */
     get: protectedProcedure
       .input(z.object({ id: z.number().int() }))
-      .query(async ({ input }) => {
-        const item = await getHitlItemById(input.id);
-        if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "HITL item not found." });
-        const page = await getPageById(item.pageId);
+      .query(async ({ ctx, input }) => {
+        const { item, page, document } = await getHitlItemWithAccess(ctx, input.id);
         const ocrResult = item.ocrResultId ? await getOcrResultById(item.ocrResultId) : await getOcrResultByPageId(item.pageId);
-        let document = null;
-        if (page) {
-          document = await getDocumentById(page.documentId);
-        }
-        return { item, page: page ?? null, ocrResult: ocrResult ?? null, document: document ?? null };
+        return { item, page, ocrResult: ocrResult ?? null, document };
       }),
 
     /** Get HITL stats for the dashboard */
-    stats: protectedProcedure.query(async () => {
-      return getHitlStats();
+    stats: protectedProcedure.query(async ({ ctx }) => {
+      if (ctx.user.role === "admin") return getHitlStats();
+
+      const items = await getAllHitlItems({ limit: 10_000 });
+      const pageIds = [...new Set(items.map(i => i.pageId))];
+      const pages = await getPagesByIds(pageIds);
+      const pageMap = new Map(pages.map(p => [p.id, p]));
+      const docs = await getDocumentsByIds([...new Set(pages.map(p => p.documentId))]);
+      const docMap = new Map(docs.map(d => [d.id, d]));
+      const stats = Object.fromEntries(HITL_STATUSES.map(s => [s, 0])) as Record<string, number>;
+      for (const item of items) {
+        const page = pageMap.get(item.pageId);
+        const doc = page ? docMap.get(page.documentId) : null;
+        if (doc && canAccessDocument(ctx, doc)) stats[item.status] = (stats[item.status] ?? 0) + 1;
+      }
+      return stats;
     }),
 
     /** Flag a page for HITL review */
@@ -1746,7 +1822,8 @@ export const appRouter = router({
         flagCategory: z.string().max(64).optional(),
         priority: z.enum(HITL_PRIORITIES).default("medium"),
       }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        await getPageWithWriteAccess(ctx, input.pageId);
         // Prevent duplicate: if any open item already exists for this page, return it
         const existing = await getHitlItemsByPageId(input.pageId);
         const open = existing.find(i => i.status === "queued" || i.status === "in_progress" || i.status === "escalated");
@@ -1763,7 +1840,8 @@ export const appRouter = router({
         id: z.number().int(),
         assignedTo: z.number().int(),
       }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        await getHitlItemWithWriteAccess(ctx, input.id);
         await updateHitlItem(input.id, { assignedTo: input.assignedTo, status: "in_progress" });
         return { success: true };
       }),
@@ -1777,8 +1855,7 @@ export const appRouter = router({
         resolutionNotes: z.string().max(2048).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        const item = await getHitlItemById(input.id);
-        if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "HITL item not found." });
+        const { item } = await getHitlItemWithWriteAccess(ctx, input.id);
 
         // Update the HITL item
         await updateHitlItem(input.id, {
@@ -1813,6 +1890,7 @@ export const appRouter = router({
         resolutionNotes: z.string().max(2048).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
+        await getHitlItemWithWriteAccess(ctx, input.id);
         await updateHitlItem(input.id, {
           status: "skipped",
           resolutionNotes: input.resolutionNotes,
@@ -1829,6 +1907,7 @@ export const appRouter = router({
         resolutionNotes: z.string().max(2048).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
+        await getHitlItemWithWriteAccess(ctx, input.id);
         await updateHitlItem(input.id, {
           status: "escalated",
           resolutionNotes: input.resolutionNotes,
@@ -1846,6 +1925,7 @@ export const appRouter = router({
         value: z.string(),
       }))
       .mutation(async ({ ctx, input }) => {
+        await getPageWithWriteAccess(ctx, input.pageId);
         const ocr = await getOcrResultByPageId(input.pageId);
         if (!ocr) throw new TRPCError({ code: "NOT_FOUND", message: "No OCR result found for this page." });
         if (input.field === "text") {
@@ -1878,7 +1958,8 @@ export const appRouter = router({
           .min(1)
           .default(["layout_analysis", "bbox_detection", "ocr_extraction"]),
       }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        await getPageWithWriteAccess(ctx, input.pageId);
         const result = await retryPageStages(
           input.pageId,
           input.stages as RetryStage[],
@@ -1901,6 +1982,7 @@ export const appRouter = router({
     bulkResolve: protectedProcedure
       .input(z.object({ ids: z.array(z.number().int()).min(1) }))
       .mutation(async ({ ctx, input }) => {
+        await Promise.all(input.ids.map(id => getHitlItemWithWriteAccess(ctx, id)));
         await Promise.all(input.ids.map(id => updateHitlItem(id, {
           status: "resolved",
           resolvedBy: ctx.user.id,
@@ -1914,21 +1996,38 @@ export const appRouter = router({
       .input(z.object({
         currentId: z.number().int().optional(),
       }).optional())
-      .query(async () => {
+      .query(async ({ ctx }) => {
         // Priority order: critical > high > medium > low, then oldest first
         const items = await getAllHitlItems({
           status: "queued",
-          limit: 1,
+          limit: 100,
           orderByPriority: true,
         });
-        if (items.length > 0) return items[0];
+        for (const item of items) {
+          try {
+            await getHitlItemWithAccess(ctx, item.id);
+            return item;
+          } catch (err: any) {
+            if (err instanceof TRPCError && err.code === "FORBIDDEN") continue;
+            throw err;
+          }
+        }
         // Fall back to in_progress
         const inProgress = await getAllHitlItems({
           status: "in_progress",
-          limit: 1,
+          limit: 100,
           orderByPriority: true,
         });
-        return inProgress[0] ?? null;
+        for (const item of inProgress) {
+          try {
+            await getHitlItemWithAccess(ctx, item.id);
+            return item;
+          } catch (err: any) {
+            if (err instanceof TRPCError && err.code === "FORBIDDEN") continue;
+            throw err;
+          }
+        }
+        return null;
       }),
 
     /** Export OCR results as structured records for model fine-tuning.
@@ -1939,7 +2038,7 @@ export const appRouter = router({
         ids: z.array(z.number().int()).optional(),
         status: z.enum(HITL_STATUSES).optional(),
       }).optional())
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
         const items = input?.ids?.length
           ? await getHitlItemsByIds(input.ids)
           : await getAllHitlItems({ status: input?.status, limit: 10_000 });
@@ -1957,10 +2056,11 @@ export const appRouter = router({
         const ocrByPage = await getOcrResultsByPageIds(pageIds);
         const ocrMap = new Map(ocrByPage.map(r => [r.pageId, r]));
 
-        return items.map(item => {
+        return items.flatMap(item => {
           const page = pageMap.get(item.pageId) ?? null;
           const doc = page ? docMap.get(page.documentId) ?? null : null;
           const ocr = page ? ocrMap.get(page.id) ?? null : null;
+          if (!doc || !canAccessDocument(ctx, doc)) return [];
           const imageUrl = page?.rawPngUrl
             ? `/api/pipeline/pages/${page.rawPngUrl.replace(/.*\/workspace\//, "")}`
             : null;
@@ -1991,6 +2091,99 @@ export const appRouter = router({
               ? { corrected_text: ocr?.correctedText ?? null, corrected_data: ocr?.correctedStructuredData ?? null }
               : null,
           };
+        });
+      }),
+
+    /** Export task-specific review records for prompt regression and OCR tuning. */
+    exportTrainingData: protectedProcedure
+      .input(z.object({
+        ids: z.array(z.number().int()).optional(),
+        status: z.enum(HITL_STATUSES).optional(),
+      }).optional())
+      .query(async ({ ctx, input }) => {
+        const parseCorrection = (value: unknown) => {
+          if (typeof value !== "string") return value ?? null;
+          const trimmed = value.trim();
+          if (!trimmed) return null;
+          try { return JSON.parse(trimmed); } catch { return trimmed; }
+        };
+
+        const items = input?.ids?.length
+          ? await getHitlItemsByIds(input.ids)
+          : await getAllHitlItems({ status: input?.status, limit: 10_000 });
+        if (items.length === 0) return [];
+
+        const pageIds = [...new Set(items.map(i => i.pageId))];
+        const pages = await getPagesByIds(pageIds);
+        const pageMap = new Map(pages.map(p => [p.id, p]));
+        const docs = await getDocumentsByIds([...new Set(pages.map(p => p.documentId))]);
+        const docMap = new Map(docs.map(d => [d.id, d]));
+        const ocrByPage = await getOcrResultsByPageIds(pageIds);
+        const ocrMap = new Map(ocrByPage.map(r => [r.pageId, r]));
+
+        return items.flatMap(item => {
+          const page = pageMap.get(item.pageId) ?? null;
+          const doc = page ? docMap.get(page.documentId) ?? null : null;
+          const ocr = page ? ocrMap.get(page.id) ?? null : null;
+          if (!page || !doc || !canAccessDocument(ctx, doc)) return [];
+
+          const imageUrl = page.rawPngUrl
+            ? `/api/pipeline/pages/${page.rawPngUrl.replace(/.*\/workspace\//, "")}`
+            : null;
+          const corrected = (ocr?.correctedStructuredData as Record<string, unknown> | null) ?? {};
+          const base = {
+            hitl_id: item.id,
+            review_status: item.status,
+            review_reason: item.reason,
+            source: {
+              document_id: doc.id,
+              document_title: doc.title ?? doc.filename,
+              game_system: doc.gameSystem ?? null,
+              page_id: page.id,
+              page_number: page.pageNumber,
+              image_url: imageUrl,
+            },
+          };
+
+          const records: any[] = [];
+          records.push({
+            ...base,
+            task: "layout_analysis",
+            input: { image_url: imageUrl },
+            model_output: {
+              layout_type: page.layoutType ?? null,
+              columns: (ocr?.layoutMetadata as any)?.columns ?? null,
+              has_table: Array.isArray(page.contentRegions) ? page.contentRegions.some((r: any) => r.type === "table" || r.type === "stat_block") : null,
+            },
+            expected: parseCorrection(corrected.layout_correction) ?? {
+              layout_type: page.layoutType ?? null,
+              columns: (ocr?.layoutMetadata as any)?.columns ?? null,
+            },
+          });
+
+          records.push({
+            ...base,
+            task: "bbox_detection",
+            input: { image_url: imageUrl },
+            model_output: page.contentRegions ?? [],
+            expected: parseCorrection(corrected.regions_correction) ?? page.contentRegions ?? [],
+          });
+
+          records.push({
+            ...base,
+            task: "ocr_extraction",
+            input: {
+              image_url: imageUrl,
+              layout_type: page.layoutType ?? null,
+              regions: page.contentRegions ?? [],
+            },
+            model_output: ocr?.structuredData ?? null,
+            expected: parseCorrection(corrected.json_correction)
+              ?? parseCorrection(corrected.structure_correction)
+              ?? (ocr?.correctedText ? { corrected_text: ocr.correctedText } : ocr?.structuredData ?? null),
+          });
+
+          return records;
         });
       }),
   }),
@@ -2025,25 +2218,26 @@ export const appRouter = router({
         imageWidth: z.number().int().optional(),
         imageHeight: z.number().int().optional(),
       }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
         // Verify document exists
         const doc = await getDocumentById(input.documentId);
-        if (!doc) {
-          throw new TRPCError({ code: "NOT_FOUND", message: `Document ${input.documentId} not found.` });
-        }
+        assertDocumentWriteAccess(ctx, doc);
         // Check for phash duplicate across all documents
         if (input.phash) {
           const allPages = await getPagesByDocumentId(input.documentId);
           // Also check across other documents via phash lookup
           const phashDuplicate = await getPageByPhash(input.phash);
           if (phashDuplicate) {
-            return {
-              success: true,
-              pageId: phashDuplicate.id,
-              isDuplicate: true,
-              duplicateOfPageId: phashDuplicate.id,
-              action: "duplicate" as const,
-            };
+            const duplicateDoc = await getDocumentById(phashDuplicate.documentId);
+            if (duplicateDoc && canAccessDocument(ctx, duplicateDoc)) {
+              return {
+                success: true,
+                pageId: phashDuplicate.id,
+                isDuplicate: true,
+                duplicateOfPageId: phashDuplicate.id,
+                action: "duplicate" as const,
+              };
+            }
           }
           // Also check within same document by page number
           const existing = allPages.find(p => p.pageNumber === input.pageNumber);
@@ -2094,14 +2288,11 @@ export const appRouter = router({
         confidenceThreshold: z.number().min(10).max(95).default(70),
         flagReason: z.string().max(512).optional(),
       }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
         const { confidenceThreshold, flagReason, ...ocrData } = input;
 
         // Verify page exists
-        const page = await getPageById(input.pageId);
-        if (!page) {
-          throw new TRPCError({ code: "NOT_FOUND", message: `Page ${input.pageId} not found.` });
-        }
+        await getPageWithWriteAccess(ctx, input.pageId);
 
         // Upsert OCR result
         const existing = await getOcrResultByPageId(input.pageId);
@@ -2174,12 +2365,9 @@ export const appRouter = router({
         priority: z.enum(HITL_PRIORITIES).default("medium"),
         metadata: z.record(z.string(), z.unknown()).optional(),
       }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
         // Verify page exists
-        const page = await getPageById(input.pageId);
-        if (!page) {
-          throw new TRPCError({ code: "NOT_FOUND", message: `Page ${input.pageId} not found.` });
-        }
+        await getPageWithWriteAccess(ctx, input.pageId);
         // Check for existing active flag
         const existingFlags = await getHitlItemsByPageId(input.pageId);
         const activeFlag = existingFlags.find(f => f.status === "queued" || f.status === "in_progress");
@@ -2203,11 +2391,9 @@ export const appRouter = router({
      */
     documentStatus: protectedProcedure
       .input(z.object({ documentId: z.number().int() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
         const doc = await getDocumentById(input.documentId);
-        if (!doc) {
-          throw new TRPCError({ code: "NOT_FOUND", message: `Document ${input.documentId} not found.` });
-        }
+        assertDocumentAccess(ctx, doc);
         const pages = await getPagesByDocumentId(input.documentId);
         const ocrDone = await Promise.all(pages.map(p => getOcrResultByPageId(p.id)));
         const ocrCompleteCount = ocrDone.filter(r => r !== null).length;
