@@ -65,6 +65,24 @@ function assertDocumentWriteAccess<T extends DocumentAccessTarget | null | undef
   return doc as NonNullable<T>;
 }
 
+async function getDocumentOrThrow(documentId: number) {
+  const document = await getDocumentById(documentId);
+  if (!document) throw new TRPCError({ code: "NOT_FOUND", message: `Document ${documentId} not found.` });
+  return document;
+}
+
+async function getPageOrThrow(pageId: number) {
+  const page = await getPageById(pageId);
+  if (!page) throw new TRPCError({ code: "NOT_FOUND", message: `Page ${pageId} not found.` });
+  return page;
+}
+
+async function getHitlItemOrThrow(id: number) {
+  const item = await getHitlItemById(id);
+  if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "HITL item not found." });
+  return item;
+}
+
 async function getPageWithAccess(ctx: RouterCtx, pageId: number) {
   const page = await getPageById(pageId);
   if (!page) throw new TRPCError({ code: "NOT_FOUND", message: "Page not found." });
@@ -1543,6 +1561,7 @@ export const appRouter = router({
       .input(z.object({ id: z.number().int() }))
       .query(async ({ ctx, input }) => {
         const doc = await getDocumentById(input.id);
+        if (!doc) throw new TRPCError({ code: "NOT_FOUND", message: "Document not found in the Library." });
         return assertDocumentAccess(ctx, doc);
       }),
 
@@ -1749,7 +1768,7 @@ export const appRouter = router({
         limit: z.number().int().min(1).max(2000).optional(),
         offset: z.number().int().min(0).optional(),
       }).optional())
-      .query(async ({ ctx, input }) => {
+      .query(async ({ input }) => {
         const items = await getAllHitlItems({
           status: input?.status,
           priority: input?.priority,
@@ -1774,7 +1793,7 @@ export const appRouter = router({
           const page = pageMap.get(item.pageId) ?? null;
           const doc = page ? docMap.get(page.documentId) ?? null : null;
           const ocr = page ? ocrMap.get(page.id) ?? null : null;
-          if (!doc || !canAccessDocument(ctx, doc)) return [];
+          if (!doc) return [];
           return {
             ...item,
             page: page ?? null,
@@ -1788,30 +1807,16 @@ export const appRouter = router({
     /** Get a single HITL item with full context (page, OCR, document) */
     get: protectedProcedure
       .input(z.object({ id: z.number().int() }))
-      .query(async ({ ctx, input }) => {
-        const { item, page, document } = await getHitlItemWithAccess(ctx, input.id);
+      .query(async ({ input }) => {
+        const item = await getHitlItemOrThrow(input.id);
+        const page = await getPageById(item.pageId);
+        const document = page ? await getDocumentById(page.documentId) : null;
         const ocrResult = item.ocrResultId ? await getOcrResultById(item.ocrResultId) : await getOcrResultByPageId(item.pageId);
         return { item, page, ocrResult: ocrResult ?? null, document };
       }),
 
     /** Get HITL stats for the dashboard */
-    stats: protectedProcedure.query(async ({ ctx }) => {
-      if (ctx.user.role === "admin") return getHitlStats();
-
-      const items = await getAllHitlItems({ limit: 10_000 });
-      const pageIds = [...new Set(items.map(i => i.pageId))];
-      const pages = await getPagesByIds(pageIds);
-      const pageMap = new Map(pages.map(p => [p.id, p]));
-      const docs = await getDocumentsByIds([...new Set(pages.map(p => p.documentId))]);
-      const docMap = new Map(docs.map(d => [d.id, d]));
-      const stats = Object.fromEntries(HITL_STATUSES.map(s => [s, 0])) as Record<string, number>;
-      for (const item of items) {
-        const page = pageMap.get(item.pageId);
-        const doc = page ? docMap.get(page.documentId) : null;
-        if (doc && canAccessDocument(ctx, doc)) stats[item.status] = (stats[item.status] ?? 0) + 1;
-      }
-      return stats;
-    }),
+    stats: protectedProcedure.query(async () => getHitlStats()),
 
     /** Flag a page for HITL review */
     flag: protectedProcedure
@@ -1822,8 +1827,8 @@ export const appRouter = router({
         flagCategory: z.string().max(64).optional(),
         priority: z.enum(HITL_PRIORITIES).default("medium"),
       }))
-      .mutation(async ({ ctx, input }) => {
-        await getPageWithWriteAccess(ctx, input.pageId);
+      .mutation(async ({ input }) => {
+        await getPageOrThrow(input.pageId);
         // Prevent duplicate: if any open item already exists for this page, return it
         const existing = await getHitlItemsByPageId(input.pageId);
         const open = existing.find(i => i.status === "queued" || i.status === "in_progress" || i.status === "escalated");
@@ -1840,8 +1845,8 @@ export const appRouter = router({
         id: z.number().int(),
         assignedTo: z.number().int(),
       }))
-      .mutation(async ({ ctx, input }) => {
-        await getHitlItemWithWriteAccess(ctx, input.id);
+      .mutation(async ({ input }) => {
+        await getHitlItemOrThrow(input.id);
         await updateHitlItem(input.id, { assignedTo: input.assignedTo, status: "in_progress" });
         return { success: true };
       }),
@@ -1855,7 +1860,7 @@ export const appRouter = router({
         resolutionNotes: z.string().max(2048).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        const { item } = await getHitlItemWithWriteAccess(ctx, input.id);
+        const item = await getHitlItemOrThrow(input.id);
 
         // Update the HITL item
         await updateHitlItem(input.id, {
@@ -1890,7 +1895,7 @@ export const appRouter = router({
         resolutionNotes: z.string().max(2048).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        await getHitlItemWithWriteAccess(ctx, input.id);
+        await getHitlItemOrThrow(input.id);
         await updateHitlItem(input.id, {
           status: "skipped",
           resolutionNotes: input.resolutionNotes,
@@ -1907,7 +1912,7 @@ export const appRouter = router({
         resolutionNotes: z.string().max(2048).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        await getHitlItemWithWriteAccess(ctx, input.id);
+        await getHitlItemOrThrow(input.id);
         await updateHitlItem(input.id, {
           status: "escalated",
           resolutionNotes: input.resolutionNotes,
@@ -1925,7 +1930,7 @@ export const appRouter = router({
         value: z.string(),
       }))
       .mutation(async ({ ctx, input }) => {
-        await getPageWithWriteAccess(ctx, input.pageId);
+        await getPageOrThrow(input.pageId);
         const ocr = await getOcrResultByPageId(input.pageId);
         if (!ocr) throw new TRPCError({ code: "NOT_FOUND", message: "No OCR result found for this page." });
         if (input.field === "text") {
@@ -1958,8 +1963,8 @@ export const appRouter = router({
           .min(1)
           .default(["layout_analysis", "bbox_detection", "ocr_extraction"]),
       }))
-      .mutation(async ({ ctx, input }) => {
-        await getPageWithWriteAccess(ctx, input.pageId);
+      .mutation(async ({ input }) => {
+        await getPageOrThrow(input.pageId);
         const result = await retryPageStages(
           input.pageId,
           input.stages as RetryStage[],
@@ -1982,7 +1987,7 @@ export const appRouter = router({
     bulkResolve: protectedProcedure
       .input(z.object({ ids: z.array(z.number().int()).min(1) }))
       .mutation(async ({ ctx, input }) => {
-        await Promise.all(input.ids.map(id => getHitlItemWithWriteAccess(ctx, id)));
+        await Promise.all(input.ids.map(id => getHitlItemOrThrow(id)));
         await Promise.all(input.ids.map(id => updateHitlItem(id, {
           status: "resolved",
           resolvedBy: ctx.user.id,
@@ -1996,38 +2001,22 @@ export const appRouter = router({
       .input(z.object({
         currentId: z.number().int().optional(),
       }).optional())
-      .query(async ({ ctx }) => {
+      .query(async () => {
         // Priority order: critical > high > medium > low, then oldest first
         const items = await getAllHitlItems({
           status: "queued",
           limit: 100,
           orderByPriority: true,
         });
-        for (const item of items) {
-          try {
-            await getHitlItemWithAccess(ctx, item.id);
-            return item;
-          } catch (err: any) {
-            if (err instanceof TRPCError && err.code === "FORBIDDEN") continue;
-            throw err;
-          }
-        }
+        if (items.length > 0) return items[0];
+
         // Fall back to in_progress
         const inProgress = await getAllHitlItems({
           status: "in_progress",
           limit: 100,
           orderByPriority: true,
         });
-        for (const item of inProgress) {
-          try {
-            await getHitlItemWithAccess(ctx, item.id);
-            return item;
-          } catch (err: any) {
-            if (err instanceof TRPCError && err.code === "FORBIDDEN") continue;
-            throw err;
-          }
-        }
-        return null;
+        return inProgress[0] ?? null;
       }),
 
     /** Export OCR results as structured records for model fine-tuning.
@@ -2220,8 +2209,7 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         // Verify document exists
-        const doc = await getDocumentById(input.documentId);
-        assertDocumentWriteAccess(ctx, doc);
+        await getDocumentOrThrow(input.documentId);
         // Check for phash duplicate across all documents
         if (input.phash) {
           const allPages = await getPagesByDocumentId(input.documentId);
@@ -2229,7 +2217,7 @@ export const appRouter = router({
           const phashDuplicate = await getPageByPhash(input.phash);
           if (phashDuplicate) {
             const duplicateDoc = await getDocumentById(phashDuplicate.documentId);
-            if (duplicateDoc && canAccessDocument(ctx, duplicateDoc)) {
+            if (duplicateDoc && (duplicateDoc.id === input.documentId || canAccessDocument(ctx, duplicateDoc))) {
               return {
                 success: true,
                 pageId: phashDuplicate.id,
@@ -2288,11 +2276,11 @@ export const appRouter = router({
         confidenceThreshold: z.number().min(10).max(95).default(70),
         flagReason: z.string().max(512).optional(),
       }))
-      .mutation(async ({ ctx, input }) => {
+      .mutation(async ({ input }) => {
         const { confidenceThreshold, flagReason, ...ocrData } = input;
 
         // Verify page exists
-        await getPageWithWriteAccess(ctx, input.pageId);
+        await getPageOrThrow(input.pageId);
 
         // Upsert OCR result
         const existing = await getOcrResultByPageId(input.pageId);
@@ -2365,9 +2353,9 @@ export const appRouter = router({
         priority: z.enum(HITL_PRIORITIES).default("medium"),
         metadata: z.record(z.string(), z.unknown()).optional(),
       }))
-      .mutation(async ({ ctx, input }) => {
+      .mutation(async ({ input }) => {
         // Verify page exists
-        await getPageWithWriteAccess(ctx, input.pageId);
+        await getPageOrThrow(input.pageId);
         // Check for existing active flag
         const existingFlags = await getHitlItemsByPageId(input.pageId);
         const activeFlag = existingFlags.find(f => f.status === "queued" || f.status === "in_progress");
