@@ -459,10 +459,14 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
       } catch {
         return;
       }
-      if (dependencyFields.length > 0) {
+      // Don't clear layout/regions corrections — the visual editors use them
+      // as the source of truth and would revert to stale data if cleared.
+      // Text/structure/json can be cleared; the card is dismissed on retry success anyway.
+      const fieldsToClear = dependencyFields.filter(f => !KEEP_ON_SAVE.has(f));
+      if (fieldsToClear.length > 0) {
         setCorrections(c => ({
           ...c,
-          ...Object.fromEntries(dependencyFields.map(field => [field, ""])),
+          ...Object.fromEntries(fieldsToClear.map(field => [field, ""])),
         }));
       }
       retryMut.mutate({
@@ -478,10 +482,16 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
     onSuccess: () => toast({ title: "Section saved" }),
     onError: (e) => toast({ title: "Save failed", description: e.message, variant: "destructive" }),
   });
+  // Tabs backed by a visual editor (BboxRegionEditor / layout selector): keep the
+  // correction value after save so the editor doesn't revert to stale source data.
+  // Text / structure / json are free-text fields with no visual dependency — clear
+  // them on success so the indicator dot goes away.
+  const KEEP_ON_SAVE = new Set(["layout", "regions"]);
+
   const saveSection = (field: "text" | "layout" | "regions" | "structure" | "json") => () => {
     saveCorrectionMut.mutate(
       { pageId: item.page?.id ?? item.pageId, field, value: corrections[field] },
-      { onSuccess: () => setCorrections(c => ({ ...c, [field]: "" })) },
+      { onSuccess: () => { if (!KEEP_ON_SAVE.has(field)) setCorrections(c => ({ ...c, [field]: "" })); } },
     );
   };
   const saveActiveOnly = () => {
@@ -489,7 +499,7 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
     const field = activeTab as "text" | "layout" | "regions" | "structure" | "json";
     saveCorrectionMut.mutate(
       { pageId: item.page?.id ?? item.pageId, field, value: corrections[field] },
-      { onSuccess: () => setCorrections(c => ({ ...c, [field]: "" })) },
+      { onSuccess: () => { if (!KEEP_ON_SAVE.has(field)) setCorrections(c => ({ ...c, [field]: "" })); } },
     );
   };
   const saveActiveAndRetryOcr = () => {
@@ -499,7 +509,7 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
       { pageId, field: activeTab, value: corrections[activeTab] },
       {
         onSuccess: () => {
-          setCorrections(c => ({ ...c, [activeTab]: "" }));
+          // Keep the correction value visible (card dismissed by retryMut.onSuccess → onResolved)
           retryMut.mutate({
             pageId,
             hitlId: item.id,

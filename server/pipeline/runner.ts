@@ -75,11 +75,14 @@ const PROMPT_OCR_EXTRACTION = `You are an OCR text extraction system for TTRPG d
 Extract ALL readable text from the page image in reading order.
 ${STRICT_RULES}
 
-Required output schema (include every readable text block):
-{"confidence":91,"content_blocks":[{"type":"…","text":"…","sequence":1}],"page_summary":"…"}
+Required output schema — you MUST produce this exact structure:
+{"confidence":91,"content_blocks":[{"type":"heading","text":"Chapter 1","sequence":1},{"type":"paragraph","text":"Body text here.","sequence":2}],"page_summary":"One sentence summary."}
+
+CRITICAL: The output MUST contain a "content_blocks" array. Do NOT output a flat "text" field.
+Every line, heading, paragraph, list item, and caption is a separate block with a "type" and "text" field.
 
 confidence is an integer 0–100 reflecting extraction accuracy.
-type must be one of: heading, subheading, paragraph, list_item, table, caption, stat_line, page_number, sidebar
+type must be one of: heading, subheading, paragraph, list_item, table, caption, stat_line, page_number, sidebar, header, footer
 
 MULTI-COLUMN PAGES: Extract every column completely. Read left-to-right across columns, top-to-bottom within each column. Never stop mid-page — if context indicates N columns, produce content_blocks from all N columns.
 
@@ -425,6 +428,39 @@ function validateBboxRegions(data: Record<string, unknown>): any[] {
 
 function assertBboxInvokeResult(result: { content: string }): void {
   validateBboxRegions(parseJsonResponse(result.content));
+}
+
+/**
+ * Ensure OCR output always has a `content_blocks` array.
+ * Some models return a flat `{"confidence":N,"text":"…"}` instead of the
+ * required `{"confidence":N,"content_blocks":[…],"page_summary":"…"}`.
+ * When that happens, split the text on double-newlines and wrap each chunk
+ * into a paragraph block so downstream consumers always see structured data.
+ */
+function coerceOcrData(data: Record<string, unknown>): Record<string, unknown> {
+  if (Array.isArray(data.content_blocks) && (data.content_blocks as any[]).length > 0) {
+    return data; // already structured
+  }
+
+  // Gather any flat text the model provided
+  const flatText = typeof data.text === "string" && data.text.trim()
+    ? data.text.trim()
+    : Object.values(data)
+        .filter((v): v is string => typeof v === "string" && v.length > 20)
+        .join("\n\n");
+
+  if (!flatText) return data;
+
+  // Split on blank lines and classify very short leading lines as headings
+  const chunks = flatText.split(/\n{2,}/).filter(c => c.trim().length > 0);
+  const content_blocks = chunks.map((chunk, i) => {
+    const trimmed = chunk.trim();
+    const isLikelyHeading = trimmed.length < 80 && !trimmed.endsWith(".");
+    return { type: isLikelyHeading && i === 0 ? "heading" : "paragraph", text: trimmed, sequence: i + 1 };
+  });
+
+  console.warn("[Pipeline] OCR model returned flat text — coerced to content_blocks");
+  return { ...data, content_blocks };
 }
 
 /** Extract the printed page label (e.g. "i", "42") from OCR content blocks. */
@@ -889,7 +925,7 @@ async function _runJob(jobId: number): Promise<void> {
       const ocrContent: UserContentPart[] = [imgPart, { type: "text", text: "Extract all readable text from this page in reading order. Reply with ONLY a JSON object — start with { and end with }." }];
       const r = await invokeStage("ocr_extraction", ocrContent, regionContext, PROMPT_OCR_EXTRACTION,
         { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_OCR }, { pageId, jobId });
-      const data = parseJsonResponse(r.content);
+      const data = coerceOcrData(parseJsonResponse(r.content));
       // Track whether the model actually provided a confidence score.
       // When it's absent we don't treat the page as low-confidence — we rely
       // on native-text similarity instead.  confidenceFromModel=null lets the
@@ -1267,7 +1303,7 @@ export async function retryPageStages(
         const r = await invokeStage("ocr_extraction", content, fullContext, PROMPT_OCR_EXTRACTION,
           { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_OCR }, { pageId, jobId: doc?.ingestionJobId ?? undefined });
         modelTrace.ocr_extraction = r.model;
-        const data = parseRetryOcrResponse(r.content);
+        const data = coerceOcrData(parseRetryOcrResponse(r.content));
         ocrConfidence = typeof data.confidence === "number" ? data.confidence : 0;
 
         const rawText = buildRawText(data);
