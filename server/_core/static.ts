@@ -5,8 +5,6 @@ import { ENV } from "./env";
 
 function buildRuntimeConfigScript(): string {
   const config = {
-    VITE_APP_ID: ENV.appId,
-    VITE_OAUTH_PORTAL_URL: ENV.oAuthPortalUrl,
     GOOGLE_CLIENT_ID: ENV.googleClientId,
     GOOGLE_API_KEY: ENV.googleApiKey,
   };

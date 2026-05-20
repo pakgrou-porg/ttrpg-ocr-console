@@ -221,6 +221,7 @@ export const PIPELINE_STAGES = [
   "document_registration",
   "document_intelligence",
   "pdf_to_png",
+  "pdf_text_extract",
   "layout_analysis",
   "layout_classification",
   "bbox_detection",
@@ -250,6 +251,7 @@ export const STAGE_PHASES: Record<PipelineStage, 1 | 2 | 3 | 0> = {
   document_registration: 1,
   document_intelligence: 1,
   pdf_to_png: 1,
+  pdf_text_extract: 1,
   layout_analysis: 1,
   layout_classification: 1,
   bbox_detection: 1,
@@ -279,6 +281,7 @@ export const stageInscriptions = pgTable("stage_inscriptions", {
   id: serial("id").primaryKey(),
   stage: varchar("stage", { length: 64 }).notNull().unique(),
   primaryProviderId: integer("primary_provider_id"),
+  secondaryProviderId: integer("secondary_provider_id"),
   fallbackProviderId: integer("fallback_provider_id"),
   promptName: varchar("prompt_name", { length: 128 }),
   promptVersion: integer("prompt_version"),
@@ -291,6 +294,7 @@ export const stageInscriptions = pgTable("stage_inscriptions", {
 }, (t) => ({
   stageIdx: index("stage_inscriptions_stage_idx").on(t.stage),
   primaryProviderIdx: index("stage_inscriptions_primary_idx").on(t.primaryProviderId),
+  secondaryProviderIdx: index("stage_inscriptions_secondary_idx").on(t.secondaryProviderId),
   fallbackProviderIdx: index("stage_inscriptions_fallback_idx").on(t.fallbackProviderId),
 }));
 
@@ -490,6 +494,10 @@ export const documentPages = pgTable("document_pages", {
   ocrConfidence: integer("ocr_confidence"),
   /** Page label as printed on the page (e.g. "i", "42") — differs from the sequential PDF pageNumber */
   printedPageLabel: varchar("printed_page_label", { length: 32 }),
+  /** Raw text extracted directly from the PDF text layer by pdftotext (null for image-only pages). */
+  nativeText: text("native_text"),
+  /** True when pdftotext found a usable embedded text layer on this page. */
+  hasEmbeddedText: boolean("has_embedded_text").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (t) => ({
@@ -515,6 +523,12 @@ export const ocrResults = pgTable("ocr_results", {
   pageId: integer("page_id").notNull(),
   rawText: text("raw_text"),
   markdownText: text("markdown_text"),
+  /** Cleaned + normalised text: page_number blocks suppressed, ligatures expanded,
+   *  line-break hyphens joined, whitespace collapsed. Derived from rawText; rawText is never modified. */
+  normalisedText: text("normalised_text"),
+  /** Token-level F1 similarity (0–1) between OCR rawText and the native PDF text layer.
+   *  Null when no embedded text layer was present on this page. */
+  nativeSimilarity: real("native_similarity"),
   structuredData: jsonb("structured_data").$type<Record<string, unknown>>(),
   layoutMetadata: jsonb("layout_metadata").$type<Record<string, unknown>>(),
   confidence: integer("confidence").default(0),
@@ -580,6 +594,8 @@ export const HITL_FLAG_CATEGORIES = [
   "layout_ambiguous",
   "content_type_conflict",
   "continuity_error",
+  "stage_failure",
+  "native_text_divergence",
   "manual_flag",
 ] as const;
 export type HitlFlagCategory = (typeof HITL_FLAG_CATEGORIES)[number];
@@ -606,6 +622,35 @@ export const hitlQueue = pgTable("hitl_queue", {
 
 export type HitlQueueItem = typeof hitlQueue.$inferSelect;
 export type InsertHitlQueueItem = typeof hitlQueue.$inferInsert;
+
+export const hitlRetryAttempts = pgTable("hitl_retry_attempts", {
+  id: serial("id").primaryKey(),
+  hitlItemId: integer("hitl_item_id"),
+  pageId: integer("page_id").notNull(),
+  requestedStages: jsonb("requested_stages").$type<string[]>().default([]).notNull(),
+  savedCorrectionFields: jsonb("saved_correction_fields").$type<string[]>().default([]).notNull(),
+  usedReviewedLayout: boolean("used_reviewed_layout").default(false).notNull(),
+  usedReviewedRegions: boolean("used_reviewed_regions").default(false).notNull(),
+  usedReviewedStructure: boolean("used_reviewed_structure").default(false).notNull(),
+  status: varchar("status", { length: 32 }).default("running").notNull(),
+  confidence: integer("confidence"),
+  stagesFailed: jsonb("stages_failed").$type<string[]>().default([]).notNull(),
+  stageErrors: jsonb("stage_errors").$type<Record<string, string>>().default({}).notNull(),
+  modelTrace: jsonb("model_trace").$type<Record<string, string>>().default({}).notNull(),
+  ocrResultId: integer("ocr_result_id"),
+  createdBy: integer("created_by"),
+  startedAt: timestamp("started_at").defaultNow().notNull(),
+  completedAt: timestamp("completed_at"),
+  durationMs: integer("duration_ms"),
+}, (t) => ({
+  pageIdIdx: index("hitl_retry_attempts_page_id_idx").on(t.pageId),
+  hitlItemIdIdx: index("hitl_retry_attempts_hitl_item_id_idx").on(t.hitlItemId),
+  statusIdx: index("hitl_retry_attempts_status_idx").on(t.status),
+  startedAtIdx: index("hitl_retry_attempts_started_at_idx").on(t.startedAt),
+}));
+
+export type HitlRetryAttempt = typeof hitlRetryAttempts.$inferSelect;
+export type InsertHitlRetryAttempt = typeof hitlRetryAttempts.$inferInsert;
 
 // ─── Google OAuth Tokens ───────────────────────────────────────────────────────
 //

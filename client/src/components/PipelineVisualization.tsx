@@ -55,6 +55,16 @@ export const STAGE_META: Record<string, {
   phase: 1 | 2 | 3;
 }> = {
   // ── Phase 1: Ingestion & Layout ───────────────────────────────────────────
+  pdf_text_extract: {
+    label: "Native PDF Text",
+    description: "Phase 1 — extracts embedded text directly from the PDF using pdftotext; detects pages with a usable text layer (≥50 printable chars) and computes token-level F1 similarity against OCR output as an automated quality baseline",
+    icon: FileText,
+    color: "text-violet-300",
+    bgColor: "bg-violet-950/60",
+    borderColor: "border-violet-500/60",
+    group: "phase1",
+    phase: 1,
+  },
   document_intelligence: {
     label: "Document Intelligence",
     description: "Phase 1 — identifies document type, canonical title, publisher, and generates a summary from the first 10 pages; drives layout strategy for all subsequent pages",
@@ -235,8 +245,8 @@ export const STAGE_META: Record<string, {
 const PIPELINE_FLOW: string[][] = [
   // Col 0 — ingestion (virtual)
   ["__ingestion__"],
-  // Col 1 — Phase 1: document intelligence
-  ["document_intelligence"],
+  // Col 1 — Phase 1: batch pre-processing (whole-document, before per-page loop)
+  ["pdf_text_extract", "document_intelligence"],
   // Col 2 — Phase 1: layout
   ["layout_analysis", "bbox_detection", "content_type_classify"],
   // Col 3 — Phase 2: extraction
@@ -252,8 +262,11 @@ const PIPELINE_FLOW: string[][] = [
 ];
 
 const FLOW_EDGES: Array<{ from: string; to: string; style?: "normal" | "fallback" | "conditional" }> = [
-  // Ingestion → Document Intelligence
+  // Ingestion → batch pre-processing
+  { from: "__ingestion__", to: "pdf_text_extract" },
   { from: "__ingestion__", to: "document_intelligence" },
+  // Native text baseline feeds OCR quality scoring (conditional — only when embedded text found)
+  { from: "pdf_text_extract", to: "ocr_extraction", style: "conditional" },
   // Document Intelligence → Phase 1 layout
   { from: "document_intelligence", to: "layout_analysis" },
   { from: "document_intelligence", to: "bbox_detection" },
@@ -318,6 +331,7 @@ export interface TopologyStage {
   stage: string;
   inscription: InscriptionInfo | null;
   primaryProvider: ProviderInfo | null;
+  secondaryProvider: ProviderInfo | null;
   fallbackProvider: ProviderInfo | null;
 }
 
@@ -328,6 +342,7 @@ function StageNode({ data }: NodeProps) {
     stage: string;
     inscription: InscriptionInfo | null;
     primaryProvider: ProviderInfo | null;
+    secondaryProvider: ProviderInfo | null;
     fallbackProvider: ProviderInfo | null;
     isIngestion?: boolean;
     isHitl?: boolean;
@@ -415,6 +430,30 @@ function StageNode({ data }: NodeProps) {
                 </TooltipContent>
               </Tooltip>
             )}
+            {d.secondaryProvider && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="flex items-center gap-1.5 px-2 py-1.5 rounded bg-slate-800/60 border border-dashed border-violet-600/40 cursor-default">
+                    {d.secondaryProvider.providerType === "lm_studio" || d.secondaryProvider.providerType === "openai_compatible" ? (
+                      <Cpu className="w-3 h-3 text-violet-300/70 flex-shrink-0" />
+                    ) : (
+                      <Cloud className="w-3 h-3 text-blue-400/60 flex-shrink-0" />
+                    )}
+                    <span className="text-xs text-slate-400 truncate flex-1">
+                      {d.secondaryProvider.modelId || d.secondaryProvider.displayName}
+                    </span>
+                    <Badge variant="outline" className="text-[10px] px-1 py-0 h-4 border-violet-500/50 text-violet-300">Secondary</Badge>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="right" className="max-w-xs">
+                  <p className="font-semibold">{d.secondaryProvider.displayName}</p>
+                  {d.secondaryProvider.modelId && (
+                    <p className="text-xs text-muted-foreground font-mono">{d.secondaryProvider.modelId}</p>
+                  )}
+                  <p className="text-xs text-muted-foreground">Type: {d.secondaryProvider.providerType}</p>
+                </TooltipContent>
+              </Tooltip>
+            )}
             {d.fallbackProvider && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -427,7 +466,7 @@ function StageNode({ data }: NodeProps) {
                     <span className="text-xs text-slate-400 truncate flex-1">
                       {d.fallbackProvider.modelId || d.fallbackProvider.displayName}
                     </span>
-                    <Badge variant="outline" className="text-[10px] px-1 py-0 h-4 border-amber-500/50 text-amber-400">Fallback</Badge>
+                    <Badge variant="outline" className="text-[10px] px-1 py-0 h-4 border-amber-500/50 text-amber-400">Cloud</Badge>
                   </div>
                 </TooltipTrigger>
                 <TooltipContent side="right" className="max-w-xs">
@@ -444,11 +483,11 @@ function StageNode({ data }: NodeProps) {
       </div>
 
       {/* Footer: provider summary */}
-      {hasInscription && (d.primaryProvider || d.fallbackProvider) && (
+      {hasInscription && (d.primaryProvider || d.secondaryProvider || d.fallbackProvider) && (
         <div className={`px-3 py-1 border-t ${meta.borderColor} flex items-center gap-1`}>
           <Users className="w-3 h-3 text-slate-500" />
           <span className="text-[10px] text-slate-500 truncate">
-            {[d.primaryProvider?.displayName, d.fallbackProvider ? `→ ${d.fallbackProvider.displayName}` : null].filter(Boolean).join(" ")}
+            {[d.primaryProvider?.displayName, d.secondaryProvider ? `-> ${d.secondaryProvider.displayName}` : null, d.fallbackProvider ? `-> ${d.fallbackProvider.displayName}` : null].filter(Boolean).join(" ")}
           </span>
         </div>
       )}
@@ -462,10 +501,10 @@ const nodeTypes = { stage: StageNode };
 
 // ─── Layout helpers ──────────────────────────────────────────────────────────
 
-const COL_X_START = 40;
-const COL_X_GAP = 290;
-const ROW_Y_START = 40;
-const ROW_Y_GAP = 170;
+const COL_X_START = 60;
+const COL_X_GAP = 360;   // nodes are ~240px wide; 120px breathing room between columns
+const ROW_Y_START = 180; // raised so 4-node columns don't clip off the top of the canvas
+const ROW_Y_GAP = 160;
 
 function buildNodesAndEdges(topology: TopologyStage[]): { nodes: Node[]; edges: Edge[] } {
   const topologyMap = new Map<string, TopologyStage>();
@@ -490,7 +529,7 @@ function buildNodesAndEdges(topology: TopologyStage[]): { nodes: Node[]; edges: 
         nodes.push({
           id: stage,
           type: "stage",
-          position: { x, y: 180 },
+          position: { x, y: ROW_Y_START + 200 }, // centre of a 1-node column
           data: { stage, isIngestion: true, assignments: [] },
         });
       } else {
@@ -503,6 +542,7 @@ function buildNodesAndEdges(topology: TopologyStage[]): { nodes: Node[]; edges: 
             stage,
             inscription: t?.inscription ?? null,
             primaryProvider: t?.primaryProvider ?? null,
+            secondaryProvider: t?.secondaryProvider ?? null,
             fallbackProvider: t?.fallbackProvider ?? null,
           },
         });
@@ -518,9 +558,9 @@ function buildNodesAndEdges(topology: TopologyStage[]): { nodes: Node[]; edges: 
       type: "stage",
       position: {
         x: COL_X_START + pass4Col * COL_X_GAP,
-        y: ROW_Y_START + 3 * ROW_Y_GAP + 200,
+        y: ROW_Y_START + 200 + 3 * ROW_Y_GAP, // below the lowest fallback node
       },
-      data: { stage: "__hitl__", isHitl: true, inscription: null, primaryProvider: null, fallbackProvider: null },
+      data: { stage: "__hitl__", isHitl: true, inscription: null, primaryProvider: null, secondaryProvider: null, fallbackProvider: null },
     });
     edges.push({
       id: "pass4->hitl",

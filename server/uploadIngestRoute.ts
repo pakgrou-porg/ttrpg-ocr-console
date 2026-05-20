@@ -7,10 +7,9 @@
  */
 
 import { randomBytes } from "crypto";
-import { mkdir } from "fs/promises";
-import { createWriteStream } from "fs";
+import { mkdir, open, unlink } from "fs/promises";
+import { mkdirSync } from "fs";
 import { join } from "path";
-import { pipeline } from "stream/promises";
 import { Router, type Request, type Response, type NextFunction } from "express";
 import multer from "multer";
 import { createIngestionJob } from "./db";
@@ -20,6 +19,7 @@ import type { User } from "../drizzle/schema";
 
 const router = Router();
 const WORKSPACE = process.env.PIPELINE_WORKSPACE ?? "/app/workspace";
+const UPLOAD_DIR = join(WORKSPACE, "uploads");
 const MAX_UPLOAD_MB = 200;
 
 async function requireAuth(req: Request & { authenticatedUser?: User }, res: Response, next: NextFunction) {
@@ -32,7 +32,26 @@ async function requireAuth(req: Request & { authenticatedUser?: User }, res: Res
 }
 
 const upload = multer({
-  storage: multer.memoryStorage(),
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => {
+      try {
+        mkdirSync(UPLOAD_DIR, { recursive: true });
+        cb(null, UPLOAD_DIR);
+      } catch (err) {
+        cb(err as Error, UPLOAD_DIR);
+      }
+    },
+    filename: (_req, file, cb) => {
+      const extByMime: Record<string, string> = {
+        "application/pdf": ".pdf",
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/webp": ".webp",
+        "image/tiff": ".tiff",
+      };
+      cb(null, `${randomBytes(12).toString("hex")}${extByMime[file.mimetype] ?? ".bin"}`);
+    },
+  }),
   limits: { fileSize: MAX_UPLOAD_MB * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     const ok = /^(application\/pdf|image\/(png|jpeg|webp|tiff))$/.test(file.mimetype);
@@ -40,8 +59,15 @@ const upload = multer({
   },
 });
 
-function isPdfBuffer(buf: Buffer) {
-  return buf.length >= 5 && buf.subarray(0, 5).toString("ascii") === "%PDF-";
+async function isPdfFile(path: string) {
+  const handle = await open(path, "r");
+  try {
+    const buffer = Buffer.alloc(5);
+    const { bytesRead } = await handle.read(buffer, 0, 5, 0);
+    return bytesRead === 5 && buffer.toString("ascii") === "%PDF-";
+  } finally {
+    await handle.close();
+  }
 }
 
 router.post(
@@ -53,29 +79,17 @@ router.post(
       const file = req.file;
       if (!file) return res.status(400).json({ error: "No file provided." });
 
-      // PDF magic-byte check
-      if (file.mimetype === "application/pdf" && !isPdfBuffer(file.buffer)) {
+      if (file.mimetype === "application/pdf" && !(await isPdfFile(file.path))) {
+        await unlink(file.path).catch(() => undefined);
         return res.status(400).json({ error: "File does not appear to be a valid PDF." });
       }
 
-      const uploadDir = join(WORKSPACE, "uploads");
-      await mkdir(uploadDir, { recursive: true });
-
-      const ext = file.originalname.match(/\.[^.]+$/)?.[0] ?? ".pdf";
-      const fileName = `${randomBytes(12).toString("hex")}${ext}`;
-      const destPath = join(uploadDir, fileName);
-
-      // Write buffer to disk
-      const ws = createWriteStream(destPath);
-      await pipeline(
-        (async function* () { yield file.buffer; })(),
-        ws,
-      );
+      await mkdir(UPLOAD_DIR, { recursive: true });
 
       const gameSystem = (req.body.gameSystem as string | undefined)?.trim() || undefined;
 
       const jobId = await createIngestionJob({
-        sourceFile: destPath,
+        sourceFile: file.path,
         gameSystem,
         totalPages: 0,
         storageProvider: "local",
@@ -85,6 +99,7 @@ router.post(
 
       return res.status(201).json({ success: true, jobId, filename: file.originalname });
     } catch (err: any) {
+      if (req.file?.path) await unlink(req.file.path).catch(() => undefined);
       console.error("[upload/ingest] Error:", err);
       return res.status(500).json({ error: "Upload failed." });
     }

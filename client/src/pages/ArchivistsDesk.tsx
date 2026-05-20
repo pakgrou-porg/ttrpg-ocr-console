@@ -70,6 +70,18 @@ function HitlStatusBadge({ status }: { status: string }) {
 
 
 
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+/** Convert a pipeline workspace filesystem path to a browser-accessible URL.
+ *  Strips everything up to and including the workspace directory component so
+ *  the path can be served by the /api/pipeline/pages static handler. */
+function pipelinePageUrl(fsPath: string | null | undefined): string | null {
+  if (!fsPath) return null;
+  // Strip leading filesystem prefix up to and including any "workspace/" segment
+  const relative = fsPath.replace(/^.*[\\/]workspace[\\/]/, "");
+  return `/api/pipeline/pages/${relative}`;
+}
+
 // ─── Image Viewer ───────────────────────────────────────────────────────────
 
 function ImageViewer({ imageUrl, pageNumber }: { imageUrl: string | null | undefined; pageNumber: number }) {
@@ -423,7 +435,10 @@ export default function ArchivistsDesk() {
               <div className="flex-1 rounded-lg border border-border/50 overflow-hidden bg-card/30">
                 {itemDetail.page ? (
                   <ImageViewer
-                    imageUrl={itemDetail.page.preprocessedPngUrl ?? itemDetail.page.rawPngUrl}
+                    imageUrl={
+                      pipelinePageUrl(itemDetail.page.preprocessedPngUrl) ??
+                      pipelinePageUrl(itemDetail.page.rawPngUrl)
+                    }
                     pageNumber={itemDetail.page.pageNumber}
                   />
                 ) : (

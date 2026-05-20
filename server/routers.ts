@@ -9,11 +9,11 @@ import { invokeLLM } from "./_core/llm";
 import {
   getUserProfile, upsertUserProfile,
   getAllSystemPrompts, getSystemPromptByName, upsertSystemPrompt, seedDefaultPrompts, getPromptVersionHistory,
-  getAllUsers, getUserById, updateUserRole,
+  getAllUsers, getUserById, updateUserRole, deleteUser,
   getUserPermissions, setUserPermission, deleteUserPermission, getAllPermissionsForAllUsers,
   createInvitation, getAllInvitations, revokeInvitation,
   getAllSystemConfig, getSystemConfigByCategory, upsertSystemConfig, deleteSystemConfig,
-  getAllIngestionJobs, getActiveIngestionJobs, getIngestionJobById, createIngestionJob, updateIngestionJobStatus, getIngestionJobStats, deleteIngestionJob, clearIngestionJobsByStatus, cancelIngestionJobChain, purgeJobPages, clearHitlItems,
+  getAllIngestionJobs, getActiveIngestionJobs, getIngestionJobById, createIngestionJob, updateIngestionJobStatus, getIngestionJobStats, deleteIngestionJob, clearIngestionJobsByStatus, cancelIngestionJobChain, purgeJobPages, clearHitlItems, wipeProcessingData,
   recordTelemetryEvent, getTelemetryEvents, getTelemetrySummary,
   pingDatabase,
   getAllLlmProviders, getLlmProviderById, createLlmProvider, updateLlmProvider, deleteLlmProvider,
@@ -25,6 +25,7 @@ import {
   getPagesByIds, getDocumentsByIds, getOcrResultsByPageIds,
   getOcrResultByPageId, getOcrResultById, createOcrResult, updateOcrResult,
   getHitlItemById, getHitlItemsByIds, getHitlItemsByPageId, getAllHitlItems, createHitlItem, updateHitlItem, getHitlStats,
+  getHitlRetryAttemptsByPageId, getHitlRetryAttemptsByPageIds,
   getAllGameSystems, createGameSystem, updateGameSystem, deleteGameSystem,
   getLlmMetricsByPage, getLlmMetricsJobSummary, getLlmMetricsPageSummary, getLlmProviderMetricsSummary,
   getContentSummariesByDocument, updateContentSummary,
@@ -41,6 +42,141 @@ const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   }
   return next({ ctx });
 });
+
+type DocumentAccessTarget = { ownerUserId?: number | null; visibility?: string | null };
+type RouterCtx = { user: { id: number; role: string } };
+
+const REVIEW_LAYOUT_TYPES = new Set([
+  "cover",
+  "title_page",
+  "toc",
+  "chapter_header",
+  "body_text",
+  "stat_block",
+  "table",
+  "illustration_full",
+  "illustration_with_text",
+  "index",
+  "appendix",
+  "mixed",
+  "unknown",
+]);
+
+function canAccessDocument(ctx: RouterCtx, doc: DocumentAccessTarget): boolean {
+  return ctx.user.role === "admin" || doc.ownerUserId === ctx.user.id || doc.visibility !== "private";
+}
+
+function canModifyDocument(ctx: RouterCtx, doc: DocumentAccessTarget): boolean {
+  return ctx.user.role === "admin" || doc.ownerUserId === ctx.user.id;
+}
+
+function assertDocumentAccess<T extends DocumentAccessTarget | null | undefined>(ctx: RouterCtx, doc: T): NonNullable<T> {
+  if (!doc) throw new TRPCError({ code: "NOT_FOUND", message: "Document not found." });
+  if (!canAccessDocument(ctx, doc)) throw new TRPCError({ code: "FORBIDDEN", message: "You do not have access to this document." });
+  return doc as NonNullable<T>;
+}
+
+function assertDocumentWriteAccess<T extends DocumentAccessTarget | null | undefined>(ctx: RouterCtx, doc: T): NonNullable<T> {
+  if (!doc) throw new TRPCError({ code: "NOT_FOUND", message: "Document not found." });
+  if (!canModifyDocument(ctx, doc)) throw new TRPCError({ code: "FORBIDDEN", message: "You cannot modify this document." });
+  return doc as NonNullable<T>;
+}
+
+async function getDocumentOrThrow(documentId: number) {
+  const document = await getDocumentById(documentId);
+  if (!document) throw new TRPCError({ code: "NOT_FOUND", message: `Document ${documentId} not found.` });
+  return document;
+}
+
+async function getPageOrThrow(pageId: number) {
+  const page = await getPageById(pageId);
+  if (!page) throw new TRPCError({ code: "NOT_FOUND", message: `Page ${pageId} not found.` });
+  return page;
+}
+
+async function getHitlItemOrThrow(id: number) {
+  const item = await getHitlItemById(id);
+  if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "HITL item not found." });
+  return item;
+}
+
+function parseReviewValue(value: string): unknown {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return trimmed;
+  }
+}
+
+function extractLayoutType(value: unknown): string | null {
+  if (typeof value === "string") return REVIEW_LAYOUT_TYPES.has(value) ? value : null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const obj = value as Record<string, unknown>;
+  const raw = obj.layout_type ?? obj.layoutType ?? obj.page_layout ?? obj.pageLayout;
+  return typeof raw === "string" && REVIEW_LAYOUT_TYPES.has(raw) ? raw : null;
+}
+
+function normaliseReviewRegions(value: unknown) {
+  if (!Array.isArray(value)) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Region corrections must be a JSON array." });
+  }
+  return value.map((region, index) => {
+    if (!region || typeof region !== "object" || Array.isArray(region)) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: `Region ${index + 1} must be an object.` });
+    }
+
+    const source = region as Record<string, any>;
+    const bbox = source.bbox && typeof source.bbox === "object" && !Array.isArray(source.bbox)
+      ? source.bbox as Record<string, any>
+      : source;
+    const x = Number(bbox.x ?? bbox.left ?? bbox.x1);
+    const y = Number(bbox.y ?? bbox.top ?? bbox.y1);
+    const w = Number(bbox.w ?? bbox.width ?? (bbox.x2 != null ? Number(bbox.x2) - x : undefined));
+    const h = Number(bbox.h ?? bbox.height ?? (bbox.y2 != null ? Number(bbox.y2) - y : undefined));
+    if (![x, y, w, h].every(Number.isFinite) || w <= 0 || h <= 0) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: `Region ${index + 1} has invalid bbox coordinates.` });
+    }
+
+    const regionType = String(source.regionType ?? source.type ?? "unknown");
+    return {
+      ...source,
+      sequence: Number.isFinite(Number(source.sequence)) ? Number(source.sequence) : index + 1,
+      type: regionType,
+      regionType,
+      bbox: { x, y, w, h },
+    };
+  });
+}
+
+async function getPageWithAccess(ctx: RouterCtx, pageId: number) {
+  const page = await getPageById(pageId);
+  if (!page) throw new TRPCError({ code: "NOT_FOUND", message: "Page not found." });
+  const document = assertDocumentAccess(ctx, await getDocumentById(page.documentId));
+  return { page, document };
+}
+
+async function getPageWithWriteAccess(ctx: RouterCtx, pageId: number) {
+  const page = await getPageById(pageId);
+  if (!page) throw new TRPCError({ code: "NOT_FOUND", message: "Page not found." });
+  const document = assertDocumentWriteAccess(ctx, await getDocumentById(page.documentId));
+  return { page, document };
+}
+
+async function getHitlItemWithAccess(ctx: RouterCtx, id: number) {
+  const item = await getHitlItemById(id);
+  if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "HITL item not found." });
+  const { page, document } = await getPageWithAccess(ctx, item.pageId);
+  return { item, page, document };
+}
+
+async function getHitlItemWithWriteAccess(ctx: RouterCtx, id: number) {
+  const item = await getHitlItemById(id);
+  if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "HITL item not found." });
+  const { page, document } = await getPageWithWriteAccess(ctx, item.pageId);
+  return { item, page, document };
+}
 
 // ─── Health helpers ───────────────────────────────────────────────────────────
 
@@ -239,7 +375,7 @@ export const appRouter = router({
 
     getByName: protectedProcedure
       .input(z.object({ name: z.string() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
         return getSystemPromptByName(input.name);
       }),
 
@@ -261,7 +397,7 @@ export const appRouter = router({
     /** Returns the last 3 saved versions of a prompt for history/rollback */
     history: protectedProcedure
       .input(z.object({ name: z.string() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
         return getPromptVersionHistory(input.name);
       }),
 
@@ -329,7 +465,7 @@ export const appRouter = router({
     /** Get config entries by category (e.g., "supabase", "lm_studio", "openrouter") */
     byCategory: adminProcedure
       .input(z.object({ category: z.string() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
         return getSystemConfigByCategory(input.category);
       }),
 
@@ -374,7 +510,7 @@ export const appRouter = router({
     /** Get a single job by ID */
     get: protectedProcedure
       .input(z.object({ id: z.number().int() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
         const job = await getIngestionJobById(input.id);
         if (!job) throw new TRPCError({ code: "NOT_FOUND", message: "Job not found." });
         return job;
@@ -541,6 +677,14 @@ export const appRouter = router({
         return { success: true };
       }),
 
+    deleteUser: adminProcedure
+      .input(z.object({ userId: z.number().int() }))
+      .mutation(async ({ ctx, input }) => {
+        if (input.userId === ctx.user.id) throw new Error("You cannot delete your own account.");
+        await deleteUser(input.userId);
+        return { success: true };
+      }),
+
     setPermission: adminProcedure
       .input(z.object({
         userId: z.number().int(),
@@ -613,6 +757,14 @@ export const appRouter = router({
           .join(" "),
       }));
     }),
+
+    /** Wipe all processing data (jobs, docs, pages, OCR, HITL, summaries, metrics).
+     *  Preserves users, providers, inscriptions, game systems, and system config. */
+    wipeProcessingData: adminProcedure
+      .mutation(async () => {
+        const result = await wipeProcessingData();
+        return result;
+      }),
   }),
 
   // ─── LLM Providers (The Artificers) ───────────────────────────────────────
@@ -1061,7 +1213,7 @@ export const appRouter = router({
   // ─── Stage Inscriptions (The Assignments) ────────────────────────────────────
   assignments: router({
     /**
-     * List all stage inscriptions with primary and fallback provider info.
+     * List all stage inscriptions with primary, secondary, and cloud fallback provider info.
      * Returns one inscription per stage (or null if no inscription exists).
      */
     list: adminProcedure.query(async () => {
@@ -1071,6 +1223,7 @@ export const appRouter = router({
       return inscriptions.map(i => ({
         ...i,
         primaryProvider: i.primaryProviderId ? providerMap.get(i.primaryProviderId) ?? null : null,
+        secondaryProvider: i.secondaryProviderId ? providerMap.get(i.secondaryProviderId) ?? null : null,
         fallbackProvider: i.fallbackProviderId ? providerMap.get(i.fallbackProviderId) ?? null : null,
       }));
     }),
@@ -1086,6 +1239,7 @@ export const appRouter = router({
         return {
           ...inscription,
           primaryProvider: inscription.primaryProviderId ? providerMap.get(inscription.primaryProviderId) ?? null : null,
+          secondaryProvider: inscription.secondaryProviderId ? providerMap.get(inscription.secondaryProviderId) ?? null : null,
           fallbackProvider: inscription.fallbackProviderId ? providerMap.get(inscription.fallbackProviderId) ?? null : null,
         };
       }),
@@ -1099,6 +1253,7 @@ export const appRouter = router({
       .input(z.object({
         stage: z.enum(PIPELINE_STAGES),
         primaryProviderId: z.number().int().nullable().optional(),
+        secondaryProviderId: z.number().int().nullable().optional(),
         fallbackProviderId: z.number().int().nullable().optional(),
         promptName: z.string().max(128).nullable().optional(),
         promptVersion: z.number().int().nullable().optional(),
@@ -1111,6 +1266,7 @@ export const appRouter = router({
         const id = await upsertStageInscription({
           stage: input.stage,
           primaryProviderId: input.primaryProviderId ?? null,
+          secondaryProviderId: input.secondaryProviderId ?? null,
           fallbackProviderId: input.fallbackProviderId ?? null,
           promptName: input.promptName ?? null,
           promptVersion: input.promptVersion ?? null,
@@ -1127,6 +1283,7 @@ export const appRouter = router({
       .input(z.object({
         id: z.number().int(),
         primaryProviderId: z.number().int().nullable().optional(),
+        secondaryProviderId: z.number().int().nullable().optional(),
         fallbackProviderId: z.number().int().nullable().optional(),
         /** Name of the system_prompts record to use for this stage (from Incantations & Runes) */
         promptName: z.string().max(128).nullable().optional(),
@@ -1172,6 +1329,7 @@ export const appRouter = router({
       return PIPELINE_STAGES.map(stage => {
         const inscription = inscriptionMap.get(stage);
         const primary = inscription?.primaryProviderId ? providerMap.get(inscription.primaryProviderId) : undefined;
+        const secondary = inscription?.secondaryProviderId ? providerMap.get(inscription.secondaryProviderId) : undefined;
         const fallback = inscription?.fallbackProviderId ? providerMap.get(inscription.fallbackProviderId) : undefined;
         return {
           stage,
@@ -1190,6 +1348,14 @@ export const appRouter = router({
             modelId: primary.modelId,
             providerType: primary.providerType,
             isActive: primary.isActive,
+          } : null,
+          secondaryProvider: secondary ? {
+            id: secondary.id,
+            displayName: secondary.displayName,
+            name: secondary.name,
+            modelId: secondary.modelId,
+            providerType: secondary.providerType,
+            isActive: secondary.isActive,
           } : null,
           fallbackProvider: fallback ? {
             id: fallback.id,
@@ -1460,25 +1626,25 @@ export const appRouter = router({
     /** Get a single document by ID */
     getDocument: protectedProcedure
       .input(z.object({ id: z.number().int() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
         const doc = await getDocumentById(input.id);
         if (!doc) throw new TRPCError({ code: "NOT_FOUND", message: "Document not found in the Library." });
-        return doc;
+        return assertDocumentAccess(ctx, doc);
       }),
 
     /** Get all pages for a document */
     getPages: protectedProcedure
       .input(z.object({ documentId: z.number().int() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
+        assertDocumentAccess(ctx, await getDocumentById(input.documentId));
         return getPagesByDocumentId(input.documentId);
       }),
 
     /** Get a single page with its OCR result */
     getPageWithOcr: protectedProcedure
       .input(z.object({ pageId: z.number().int() }))
-      .query(async ({ input }) => {
-        const page = await getPageById(input.pageId);
-        if (!page) throw new TRPCError({ code: "NOT_FOUND", message: "Page not found." });
+      .query(async ({ ctx, input }) => {
+        const { page } = await getPageWithAccess(ctx, input.pageId);
         const ocrResult = await getOcrResultByPageId(input.pageId);
         return { page, ocrResult: ocrResult ?? null };
       }),
@@ -1533,8 +1699,9 @@ export const appRouter = router({
     /** Get the document created by a specific ingestion job */
     getByJobId: protectedProcedure
       .input(z.object({ jobId: z.number().int() }))
-      .query(async ({ input }) => {
-        return (await getDocumentByJobId(input.jobId)) ?? null;
+      .query(async ({ ctx, input }) => {
+        const doc = await getDocumentByJobId(input.jobId);
+        return doc ? assertDocumentAccess(ctx, doc) : null;
       }),
 
     /** Browse pages for a document, enriched with OCR results, paginated */
@@ -1544,7 +1711,8 @@ export const appRouter = router({
         offset: z.number().int().min(0).default(0),
         limit: z.number().int().min(1).max(50).default(10),
       }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
+        assertDocumentAccess(ctx, await getDocumentById(input.documentId));
         const [pages, total] = await Promise.all([
           getPagesByDocumentIdPaginated(input.documentId, input.offset, input.limit),
           getDocumentPageCount(input.documentId),
@@ -1617,6 +1785,37 @@ export const appRouter = router({
         }
       }),
 
+    /** Per-page text quality data for the Scrivener's Lens review UI.
+     *  Returns every page in the document with its OCR texts and quality metrics. */
+    textQuality: protectedProcedure
+      .input(z.object({ documentId: z.number().int() }))
+      .query(async ({ ctx, input }) => {
+        assertDocumentAccess(ctx, await getDocumentById(input.documentId));
+        const pages = await getPagesByDocumentId(input.documentId);
+        if (pages.length === 0) return [];
+        const pageIds = pages.map(p => p.id);
+        const ocrs = await getOcrResultsByPageIds(pageIds);
+        const ocrMap = new Map(ocrs.map(r => [r.pageId, r]));
+        return pages.map(page => {
+          const ocr = ocrMap.get(page.id) ?? null;
+          return {
+            pageId:           page.id,
+            pageNumber:       page.pageNumber,
+            printedPageLabel: page.printedPageLabel ?? null,
+            layoutType:       page.layoutType ?? null,
+            hasEmbeddedText:  page.hasEmbeddedText,
+            nativeText:       page.nativeText ?? null,
+            contentRegions:   (page.contentRegions ?? []) as any[],
+            isFlagged:        page.isFlagged,
+            ocrConfidence:    ocr?.confidence ?? null,
+            nativeSimilarity: ocr?.nativeSimilarity ?? null,
+            rawText:          ocr?.rawText ?? null,
+            normalisedText:   ocr?.normalisedText ?? null,
+            markdownText:     ocr?.markdownText ?? null,
+          };
+        });
+      }),
+
     /** Get available document statuses */
     documentStatuses: protectedProcedure.query(() => {
       return DOCUMENT_STATUSES.map(s => ({
@@ -1656,15 +1855,22 @@ export const appRouter = router({
 
         const ocrByPage = await getOcrResultsByPageIds(pageIds);
         const ocrMap = new Map(ocrByPage.map(r => [r.pageId, r]));
+        const retryAttempts = await getHitlRetryAttemptsByPageIds(pageIds);
+        const retryMap = new Map<number, typeof retryAttempts>();
+        for (const attempt of retryAttempts) {
+          retryMap.set(attempt.pageId, [...(retryMap.get(attempt.pageId) ?? []), attempt]);
+        }
 
-        return items.map(item => {
+        return items.flatMap(item => {
           const page = pageMap.get(item.pageId) ?? null;
           const doc = page ? docMap.get(page.documentId) ?? null : null;
           const ocr = page ? ocrMap.get(page.id) ?? null : null;
+          if (!doc) return [];
           return {
             ...item,
             page: page ?? null,
             ocr: ocr ?? null,
+            retryAttempts: retryMap.get(item.pageId) ?? [],
             documentTitle: doc?.title ?? doc?.filename ?? "Unknown",
             documentId: page?.documentId ?? null,
           };
@@ -1675,21 +1881,16 @@ export const appRouter = router({
     get: protectedProcedure
       .input(z.object({ id: z.number().int() }))
       .query(async ({ input }) => {
-        const item = await getHitlItemById(input.id);
-        if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "HITL item not found." });
+        const item = await getHitlItemOrThrow(input.id);
         const page = await getPageById(item.pageId);
+        const document = page ? await getDocumentById(page.documentId) : null;
         const ocrResult = item.ocrResultId ? await getOcrResultById(item.ocrResultId) : await getOcrResultByPageId(item.pageId);
-        let document = null;
-        if (page) {
-          document = await getDocumentById(page.documentId);
-        }
-        return { item, page: page ?? null, ocrResult: ocrResult ?? null, document: document ?? null };
+        const retryAttempts = await getHitlRetryAttemptsByPageId(item.pageId);
+        return { item, page, ocrResult: ocrResult ?? null, document, retryAttempts };
       }),
 
     /** Get HITL stats for the dashboard */
-    stats: protectedProcedure.query(async () => {
-      return getHitlStats();
-    }),
+    stats: protectedProcedure.query(async () => getHitlStats()),
 
     /** Flag a page for HITL review */
     flag: protectedProcedure
@@ -1701,6 +1902,7 @@ export const appRouter = router({
         priority: z.enum(HITL_PRIORITIES).default("medium"),
       }))
       .mutation(async ({ input }) => {
+        await getPageOrThrow(input.pageId);
         // Prevent duplicate: if any open item already exists for this page, return it
         const existing = await getHitlItemsByPageId(input.pageId);
         const open = existing.find(i => i.status === "queued" || i.status === "in_progress" || i.status === "escalated");
@@ -1718,6 +1920,7 @@ export const appRouter = router({
         assignedTo: z.number().int(),
       }))
       .mutation(async ({ input }) => {
+        await getHitlItemOrThrow(input.id);
         await updateHitlItem(input.id, { assignedTo: input.assignedTo, status: "in_progress" });
         return { success: true };
       }),
@@ -1731,8 +1934,7 @@ export const appRouter = router({
         resolutionNotes: z.string().max(2048).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        const item = await getHitlItemById(input.id);
-        if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "HITL item not found." });
+        const item = await getHitlItemOrThrow(input.id);
 
         // Update the HITL item
         await updateHitlItem(input.id, {
@@ -1747,14 +1949,50 @@ export const appRouter = router({
           ? await getOcrResultById(item.ocrResultId)
           : await getOcrResultByPageId(item.pageId);
 
-        if (ocrResult && (input.correctedText || input.correctedStructuredData)) {
-          await updateOcrResult(ocrResult.id, {
+        if (input.correctedStructuredData) {
+          const layoutCorrection = input.correctedStructuredData.layout_correction;
+          const layoutType = typeof layoutCorrection === "string"
+            ? extractLayoutType(parseReviewValue(layoutCorrection))
+            : extractLayoutType(layoutCorrection);
+          const pageUpdates: any = {};
+          if (layoutType) pageUpdates.layoutType = layoutType;
+
+          const regionCorrection = input.correctedStructuredData.regions_correction;
+          if (typeof regionCorrection === "string" && regionCorrection.trim()) {
+            pageUpdates.contentRegions = normaliseReviewRegions(parseReviewValue(regionCorrection));
+          } else if (Array.isArray(regionCorrection)) {
+            pageUpdates.contentRegions = normaliseReviewRegions(regionCorrection);
+          }
+          if (Object.keys(pageUpdates).length > 0) {
+            await updateDocumentPage(item.pageId, pageUpdates);
+          }
+        }
+
+        if (input.correctedText || input.correctedStructuredData) {
+          const correctionPayload = {
             correctedText: input.correctedText,
             correctedStructuredData: input.correctedStructuredData,
             correctedBy: ctx.user.id,
             correctedAt: new Date(),
             status: "corrected",
-          });
+          } as any;
+
+          if (!ocrResult) {
+            await createOcrResult({
+              pageId: item.pageId,
+              confidence: 0,
+              ...correctionPayload,
+              auditLog: [{
+                timestamp: new Date().toISOString(),
+                action: "hitl_resolve_correction",
+                detail: "created review OCR record during HITL approval",
+              }],
+          } as any);
+          } else {
+            await updateOcrResult(ocrResult.id, {
+              ...correctionPayload,
+            });
+          }
         }
 
         return { success: true };
@@ -1767,6 +2005,7 @@ export const appRouter = router({
         resolutionNotes: z.string().max(2048).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
+        await getHitlItemOrThrow(input.id);
         await updateHitlItem(input.id, {
           status: "skipped",
           resolutionNotes: input.resolutionNotes,
@@ -1783,6 +2022,7 @@ export const appRouter = router({
         resolutionNotes: z.string().max(2048).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
+        await getHitlItemOrThrow(input.id);
         await updateHitlItem(input.id, {
           status: "escalated",
           resolutionNotes: input.resolutionNotes,
@@ -1800,8 +2040,57 @@ export const appRouter = router({
         value: z.string(),
       }))
       .mutation(async ({ ctx, input }) => {
+        await getPageOrThrow(input.pageId);
+
+        const parsedValue = parseReviewValue(input.value);
+        let structuredCorrection: unknown = parsedValue;
+        if (input.field === "layout") {
+          // Only update documentPage when a non-empty correction is provided.
+          // Empty = remove this correction from correctedStructuredData only;
+          // do NOT null-out the pipeline-computed layoutType (that data is good).
+          if (input.value.trim()) {
+            const layoutType = extractLayoutType(parsedValue);
+            if (layoutType) await updateDocumentPage(input.pageId, { layoutType });
+          }
+        } else if (input.field === "regions") {
+          // Only overwrite contentRegions when the correction is non-empty.
+          // Empty = remove correction from correctedStructuredData only;
+          // do NOT wipe pipeline-computed contentRegions.
+          if (input.value.trim()) {
+            const regions = normaliseReviewRegions(parsedValue);
+            structuredCorrection = regions;
+            await updateDocumentPage(input.pageId, { contentRegions: regions });
+          }
+        } else if ((input.field === "structure" || input.field === "json") && input.value.trim()) {
+          if (!parsedValue || typeof parsedValue !== "object" || Array.isArray(parsedValue)) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `${input.field === "structure" ? "Structure" : "JSON"} corrections must be a JSON object.`,
+            });
+          }
+        }
+
         const ocr = await getOcrResultByPageId(input.pageId);
-        if (!ocr) throw new TRPCError({ code: "NOT_FOUND", message: "No OCR result found for this page." });
+        if (!ocr) {
+          if (!input.value.trim()) return { success: true, savedPageOnly: input.field === "layout" || input.field === "regions" };
+          const key = `${input.field}_correction`;
+          const created = await createOcrResult({
+            pageId: input.pageId,
+            confidence: 0,
+            status: "corrected",
+            correctedText: input.field === "text" ? input.value : undefined,
+            correctedStructuredData: input.field === "text" ? undefined : { [key]: structuredCorrection },
+            correctedBy: ctx.user.id,
+            correctedAt: new Date(),
+            auditLog: [{
+              timestamp: new Date().toISOString(),
+              action: "hitl_save_correction",
+              detail: `created review OCR record for ${input.field}`,
+            }],
+          } as any);
+          return { success: true, ocrResultId: created.id, createdOcrResult: true };
+        }
+
         if (input.field === "text") {
           await updateOcrResult(ocr.id, {
             correctedText: input.value || null,
@@ -1812,7 +2101,7 @@ export const appRouter = router({
           const existing = (ocr.correctedStructuredData as Record<string, unknown>) ?? {};
           const key = `${input.field}_correction`;
           const updated = input.value
-            ? { ...existing, [key]: input.value }
+            ? { ...existing, [key]: structuredCorrection }
             : Object.fromEntries(Object.entries(existing).filter(([k]) => k !== key));
           await updateOcrResult(ocr.id, {
             correctedStructuredData: updated,
@@ -1828,15 +2117,18 @@ export const appRouter = router({
       .input(z.object({
         pageId: z.number().int(),
         hitlId: z.number().int().optional(),
+        savedCorrectionFields: z.array(z.enum(["text", "layout", "regions", "structure", "json"] as const)).optional(),
         stages: z.array(z.enum(["layout_analysis", "bbox_detection", "ocr_extraction"] as const))
           .min(1)
           .default(["layout_analysis", "bbox_detection", "ocr_extraction"]),
       }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        await getPageOrThrow(input.pageId);
         const result = await retryPageStages(
           input.pageId,
           input.stages as RetryStage[],
           input.hitlId,
+          { reviewerUserId: ctx.user.id, savedCorrectionFields: input.savedCorrectionFields ?? [] },
         );
         return { success: true, ...result };
       }),
@@ -1855,6 +2147,7 @@ export const appRouter = router({
     bulkResolve: protectedProcedure
       .input(z.object({ ids: z.array(z.number().int()).min(1) }))
       .mutation(async ({ ctx, input }) => {
+        await Promise.all(input.ids.map(id => getHitlItemOrThrow(id)));
         await Promise.all(input.ids.map(id => updateHitlItem(id, {
           status: "resolved",
           resolvedBy: ctx.user.id,
@@ -1869,18 +2162,17 @@ export const appRouter = router({
         currentId: z.number().int().optional(),
       }).optional())
       .query(async () => {
-        // Priority order: critical > high > medium > low, then oldest first
+        // FIFO review order follows source page/material order when queue creation is sequential.
         const items = await getAllHitlItems({
           status: "queued",
-          limit: 1,
-          orderByPriority: true,
+          limit: 100,
         });
         if (items.length > 0) return items[0];
+
         // Fall back to in_progress
         const inProgress = await getAllHitlItems({
           status: "in_progress",
-          limit: 1,
-          orderByPriority: true,
+          limit: 100,
         });
         return inProgress[0] ?? null;
       }),
@@ -1893,7 +2185,7 @@ export const appRouter = router({
         ids: z.array(z.number().int()).optional(),
         status: z.enum(HITL_STATUSES).optional(),
       }).optional())
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
         const items = input?.ids?.length
           ? await getHitlItemsByIds(input.ids)
           : await getAllHitlItems({ status: input?.status, limit: 10_000 });
@@ -1911,10 +2203,11 @@ export const appRouter = router({
         const ocrByPage = await getOcrResultsByPageIds(pageIds);
         const ocrMap = new Map(ocrByPage.map(r => [r.pageId, r]));
 
-        return items.map(item => {
+        return items.flatMap(item => {
           const page = pageMap.get(item.pageId) ?? null;
           const doc = page ? docMap.get(page.documentId) ?? null : null;
           const ocr = page ? ocrMap.get(page.id) ?? null : null;
+          if (!doc || !canAccessDocument(ctx, doc)) return [];
           const imageUrl = page?.rawPngUrl
             ? `/api/pipeline/pages/${page.rawPngUrl.replace(/.*\/workspace\//, "")}`
             : null;
@@ -1944,6 +2237,149 @@ export const appRouter = router({
             human_corrections: (ocr?.correctedStructuredData || ocr?.correctedText)
               ? { corrected_text: ocr?.correctedText ?? null, corrected_data: ocr?.correctedStructuredData ?? null }
               : null,
+          };
+        });
+      }),
+
+    /** Export per-page review records for prompt regression and OCR tuning. */
+    exportTrainingData: protectedProcedure
+      .input(z.object({
+        ids: z.array(z.number().int()).optional(),
+        status: z.enum(HITL_STATUSES).optional(),
+        documentId: z.number().int().optional(),
+        pageStart: z.number().int().min(1).optional(),
+        pageEnd: z.number().int().min(1).optional(),
+      }).optional())
+      .query(async ({ ctx, input }) => {
+        const parseCorrection = (value: unknown) => {
+          if (typeof value !== "string") return value ?? null;
+          const trimmed = value.trim();
+          if (!trimmed) return null;
+          try { return JSON.parse(trimmed); } catch { return trimmed; }
+        };
+
+        let pages: Awaited<ReturnType<typeof getPagesByIds>> = [];
+        let items: Awaited<ReturnType<typeof getAllHitlItems>> = [];
+
+        if (input?.documentId) {
+          const doc = assertDocumentAccess(ctx, await getDocumentById(input.documentId));
+          pages = (await getPagesByDocumentId(doc.id)).filter(page => {
+            if (input.pageStart && page.pageNumber < input.pageStart) return false;
+            if (input.pageEnd && page.pageNumber > input.pageEnd) return false;
+            return true;
+          });
+          const allItems = await getAllHitlItems({ limit: 10_000 });
+          const pageIdSet = new Set(pages.map(p => p.id));
+          items = allItems.filter(item => pageIdSet.has(item.pageId));
+        } else {
+          items = input?.ids?.length
+            ? await getHitlItemsByIds(input.ids)
+            : await getAllHitlItems({ status: input?.status, limit: 10_000 });
+          if (items.length === 0) return [];
+          pages = await getPagesByIds([...new Set(items.map(i => i.pageId))]);
+        }
+
+        if (pages.length === 0) return [];
+
+        const docs = await getDocumentsByIds([...new Set(pages.map(p => p.documentId))]);
+        const docMap = new Map(docs.map(d => [d.id, d]));
+        const pageIds = pages.map(p => p.id);
+        const ocrByPage = await getOcrResultsByPageIds(pageIds);
+        const ocrMap = new Map(ocrByPage.map(r => [r.pageId, r]));
+        const retryAttempts = await getHitlRetryAttemptsByPageIds(pageIds);
+        const retryMap = new Map<number, typeof retryAttempts>();
+        for (const attempt of retryAttempts) {
+          retryMap.set(attempt.pageId, [...(retryMap.get(attempt.pageId) ?? []), attempt]);
+        }
+        const itemMap = new Map<number, any>();
+        for (const item of items) {
+          if (!itemMap.has(item.pageId)) itemMap.set(item.pageId, item);
+        }
+
+        return pages.flatMap(page => {
+          const doc = docMap.get(page.documentId) ?? null;
+          const ocr = ocrMap.get(page.id) ?? null;
+          const item = itemMap.get(page.id) ?? null;
+          if (!page || !doc || !canAccessDocument(ctx, doc)) return [];
+
+          const imageUrl = page.rawPngUrl
+            ? `/api/pipeline/pages/${page.rawPngUrl.replace(/.*\/workspace\//, "")}`
+            : null;
+          const corrected = (ocr?.correctedStructuredData as Record<string, unknown> | null) ?? {};
+          const layoutExpected = parseCorrection(corrected.layout_correction) ?? {
+            layout_type: page.layoutType ?? null,
+            columns: (ocr?.layoutMetadata as any)?.columns ?? null,
+          };
+          const regionsExpected = parseCorrection(corrected.regions_correction) ?? page.contentRegions ?? [];
+          const ocrExpected = parseCorrection(corrected.json_correction)
+            ?? parseCorrection(corrected.structure_correction)
+            ?? (ocr?.correctedText ? { corrected_text: ocr.correctedText } : ocr?.structuredData ?? null);
+
+          return {
+            schema_version: "hitl_page_training_v1",
+            source: {
+              document_id: doc.id,
+              document_title: doc.title ?? doc.filename,
+              publisher: doc.publisher ?? null,
+              document_type: doc.documentType ?? null,
+              game_system: doc.gameSystem ?? null,
+              page_id: page.id,
+              page_number: page.pageNumber,
+              printed_page_label: page.printedPageLabel ?? null,
+              image_url: imageUrl,
+              image_width: page.imageWidth ?? null,
+              image_height: page.imageHeight ?? null,
+              phash: page.phash ?? null,
+            },
+            review: item ? {
+              hitl_id: item.id,
+              status: item.status,
+              priority: item.priority,
+              reason: item.reason,
+              flag_category: item.flagCategory ?? null,
+              resolution_notes: item.resolutionNotes ?? null,
+            } : null,
+            model_trace: {
+              pass1_model: ocr?.pass1Model ?? null,
+              pass2_model: ocr?.pass2Model ?? null,
+              confidence: ocr?.confidence ?? null,
+              audit_log: ocr?.auditLog ?? null,
+              retry_attempts: retryMap.get(page.id) ?? [],
+            },
+            labels: {
+              page_layout: layoutExpected,
+              regions: regionsExpected,
+              ocr_text: ocr?.correctedText ?? ocr?.rawText ?? null,
+              ocr_structured: ocrExpected,
+            },
+            tasks: {
+              layout_analysis: {
+                input: { image_url: imageUrl },
+                model_output: {
+                  layout_type: page.layoutType ?? null,
+                  columns: (ocr?.layoutMetadata as any)?.columns ?? null,
+                  has_table: Array.isArray(page.contentRegions) ? page.contentRegions.some((r: any) => r.type === "table" || r.type === "stat_block") : null,
+                },
+                expected: layoutExpected,
+              },
+              bbox_detection: {
+                input: { image_url: imageUrl, page_layout: layoutExpected },
+                model_output: page.contentRegions ?? [],
+                expected: regionsExpected,
+              },
+              ocr_extraction: {
+                input: {
+                  image_url: imageUrl,
+                  page_layout: layoutExpected,
+                  regions: regionsExpected,
+                },
+                model_output: {
+                  raw_text: ocr?.rawText ?? null,
+                  structured_data: ocr?.structuredData ?? null,
+                },
+                expected: ocrExpected,
+              },
+            },
           };
         });
       }),
@@ -1979,25 +2415,25 @@ export const appRouter = router({
         imageWidth: z.number().int().optional(),
         imageHeight: z.number().int().optional(),
       }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
         // Verify document exists
-        const doc = await getDocumentById(input.documentId);
-        if (!doc) {
-          throw new TRPCError({ code: "NOT_FOUND", message: `Document ${input.documentId} not found.` });
-        }
+        await getDocumentOrThrow(input.documentId);
         // Check for phash duplicate across all documents
         if (input.phash) {
           const allPages = await getPagesByDocumentId(input.documentId);
           // Also check across other documents via phash lookup
           const phashDuplicate = await getPageByPhash(input.phash);
           if (phashDuplicate) {
-            return {
-              success: true,
-              pageId: phashDuplicate.id,
-              isDuplicate: true,
-              duplicateOfPageId: phashDuplicate.id,
-              action: "duplicate" as const,
-            };
+            const duplicateDoc = await getDocumentById(phashDuplicate.documentId);
+            if (duplicateDoc && (duplicateDoc.id === input.documentId || canAccessDocument(ctx, duplicateDoc))) {
+              return {
+                success: true,
+                pageId: phashDuplicate.id,
+                isDuplicate: true,
+                duplicateOfPageId: phashDuplicate.id,
+                action: "duplicate" as const,
+              };
+            }
           }
           // Also check within same document by page number
           const existing = allPages.find(p => p.pageNumber === input.pageNumber);
@@ -2052,10 +2488,7 @@ export const appRouter = router({
         const { confidenceThreshold, flagReason, ...ocrData } = input;
 
         // Verify page exists
-        const page = await getPageById(input.pageId);
-        if (!page) {
-          throw new TRPCError({ code: "NOT_FOUND", message: `Page ${input.pageId} not found.` });
-        }
+        await getPageOrThrow(input.pageId);
 
         // Upsert OCR result
         const existing = await getOcrResultByPageId(input.pageId);
@@ -2130,10 +2563,7 @@ export const appRouter = router({
       }))
       .mutation(async ({ input }) => {
         // Verify page exists
-        const page = await getPageById(input.pageId);
-        if (!page) {
-          throw new TRPCError({ code: "NOT_FOUND", message: `Page ${input.pageId} not found.` });
-        }
+        await getPageOrThrow(input.pageId);
         // Check for existing active flag
         const existingFlags = await getHitlItemsByPageId(input.pageId);
         const activeFlag = existingFlags.find(f => f.status === "queued" || f.status === "in_progress");
@@ -2157,11 +2587,9 @@ export const appRouter = router({
      */
     documentStatus: protectedProcedure
       .input(z.object({ documentId: z.number().int() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
         const doc = await getDocumentById(input.documentId);
-        if (!doc) {
-          throw new TRPCError({ code: "NOT_FOUND", message: `Document ${input.documentId} not found.` });
-        }
+        assertDocumentAccess(ctx, doc);
         const pages = await getPagesByDocumentId(input.documentId);
         const ocrDone = await Promise.all(pages.map(p => getOcrResultByPageId(p.id)));
         const ocrCompleteCount = ocrDone.filter(r => r !== null).length;
@@ -2276,6 +2704,13 @@ export const appRouter = router({
       .input(z.object({ documentId: z.number().int() }))
       .query(async ({ input }) => {
         return getContentSummariesByDocument(input.documentId);
+      }),
+
+    listByDocumentIds: adminProcedure
+      .input(z.object({ documentIds: z.array(z.number().int()).min(1).max(100) }))
+      .query(async ({ input }) => {
+        const all = await Promise.all(input.documentIds.map(id => getContentSummariesByDocument(id)));
+        return all.flat();
       }),
 
     update: adminProcedure

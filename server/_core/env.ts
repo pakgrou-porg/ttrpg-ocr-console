@@ -45,13 +45,9 @@ if (process.env.CREDENTIAL_ENCRYPTION_KEY && process.env.CREDENTIAL_ENCRYPTION_K
 }
 
 export const ENV = {
-  appId: optionalEnv("VITE_APP_ID"),
   cookieSecret,
   credentialEncryptionKey,
   databaseUrl: optionalEnv("DATABASE_URL"),
-  oAuthServerUrl: optionalEnv("OAUTH_SERVER_URL"),
-  oAuthPortalUrl: optionalEnv("VITE_OAUTH_PORTAL_URL", "https://manus.im"),
-  ownerOpenId: optionalEnv("OWNER_OPEN_ID"),
   isProduction: process.env.NODE_ENV === "production",
   forgeApiUrl: optionalEnv("BUILT_IN_FORGE_API_URL"),
   forgeApiKey: optionalEnv("BUILT_IN_FORGE_API_KEY"),
@@ -65,4 +61,7 @@ export const ENV = {
   googleApiKey: optionalEnv("GOOGLE_API_KEY"),
   // Canonical public URL — must match the Google OAuth redirect URI
   appUrl: optionalEnv("APP_URL", "http://localhost:3000"),
+  // Bootstrap admin — any user whose email matches this is automatically promoted
+  // to admin on first (and every subsequent) login. Set to the deployer's email.
+  adminEmail: optionalEnv("ADMIN_EMAIL"),
 };

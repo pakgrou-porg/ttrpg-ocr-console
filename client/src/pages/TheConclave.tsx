@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Shield, Users, Plus, Trash2, Check, X, ChevronDown, ChevronUp, Mail, Crown } from "lucide-react";
+import { Shield, Users, Plus, Trash2, Check, X, ChevronDown, ChevronUp, Mail, Crown, AlertTriangle, Loader2 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,10 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 import { useLocation } from "wouter";
 
@@ -71,6 +75,20 @@ export default function TheConclave() {
 
   const revokeInvitation = trpc.admin.revokeInvitation.useMutation({
     onSuccess: () => { utils.admin.listInvitations.invalidate(); toast.success("Invitation revoked."); },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const deleteUser = trpc.admin.deleteUser.useMutation({
+    onSuccess: () => { utils.admin.listUsers.invalidate(); toast.success("Scholar removed from the Kodex."); },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const [wipeConfirmOpen, setWipeConfirmOpen] = useState(false);
+  const wipeMutation = trpc.admin.wipeProcessingData.useMutation({
+    onSuccess: (data) => {
+      const total = Object.values(data.deletedCounts).reduce((s, n) => s + n, 0);
+      toast.success(`Processing data wiped — ${total} records removed.`);
+    },
     onError: (e) => toast.error(e.message),
   });
 
@@ -187,20 +205,33 @@ export default function TheConclave() {
                       <p className="text-xs text-muted-foreground truncate">{u.email ?? "—"}</p>
                     </div>
 
-                    {/* Role toggle */}
+                    {/* Role toggle + delete */}
                     {!isOwner && (
-                      <Select
-                        value={u.role}
-                        onValueChange={(v) => setRole.mutate({ userId: u.id, role: v as "user" | "admin" })}
-                      >
-                        <SelectTrigger className="w-36 h-7 text-xs">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="user">Scholar</SelectItem>
-                          <SelectItem value="admin">Arch-Magister</SelectItem>
-                        </SelectContent>
-                      </Select>
+                      <>
+                        <Select
+                          value={u.role}
+                          onValueChange={(v) => setRole.mutate({ userId: u.id, role: v as "user" | "admin" })}
+                        >
+                          <SelectTrigger className="w-36 h-7 text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="user">Scholar</SelectItem>
+                            <SelectItem value="admin">Arch-Magister</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <button
+                          onClick={() => {
+                            if (confirm(`Remove ${u.name ?? u.email ?? "this scholar"} from the Kodex? This cannot be undone.`))
+                              deleteUser.mutate({ userId: u.id });
+                          }}
+                          disabled={deleteUser.isPending}
+                          className="p-1.5 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                          title="Remove scholar"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </>
                     )}
 
                     {/* Expand permissions */}
@@ -346,6 +377,71 @@ export default function TheConclave() {
           </div>
         )}
       </section>
+
+      {/* Danger Zone */}
+      <section className="space-y-3">
+        <h2 className="text-lg font-semibold flex items-center gap-2 text-destructive">
+          <AlertTriangle className="w-5 h-5" />
+          Danger Zone
+        </h2>
+        <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-5 flex items-center justify-between gap-6">
+          <div>
+            <p className="font-medium text-sm">Wipe All Processing Data</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Deletes all ingestion jobs, documents, pages, OCR results, HITL items, content summaries,
+              and LLM timing metrics. Preserves users, providers, stage inscriptions, game systems, and
+              system config.
+            </p>
+          </div>
+          <Button
+            variant="destructive"
+            size="sm"
+            className="flex-shrink-0 gap-2"
+            onClick={() => setWipeConfirmOpen(true)}
+            disabled={wipeMutation.isPending}
+          >
+            {wipeMutation.isPending
+              ? <Loader2 className="w-4 h-4 animate-spin" />
+              : <Trash2 className="w-4 h-4" />}
+            Wipe Data
+          </Button>
+        </div>
+      </section>
+
+      {/* Wipe confirmation dialog */}
+      <AlertDialog open={wipeConfirmOpen} onOpenChange={setWipeConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="w-5 h-5" />
+              Wipe All Processing Data?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-2">
+              <span className="block">This will permanently delete:</span>
+              <ul className="list-disc list-inside text-sm space-y-0.5 ml-2">
+                <li>All ingestion jobs and their status</li>
+                <li>All documents, pages, and OCR results</li>
+                <li>All HITL review queue items</li>
+                <li>All content summaries and structural breaks</li>
+                <li>All LLM timing metrics and processing attempts</li>
+              </ul>
+              <span className="block pt-1 font-medium text-foreground">
+                Users, providers, inscriptions, and config are untouched.
+                This cannot be undone.
+              </span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => wipeMutation.mutate()}
+            >
+              Yes, wipe everything
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

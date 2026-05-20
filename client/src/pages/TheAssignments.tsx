@@ -52,6 +52,7 @@ const STAGE_PHASE_MAP: Record<string, string> = {
   content_type_classify:   "Phase 1 — Ingestion & Layout",
   child_image_extraction:  "Phase 1 — Ingestion & Layout",
   ocr_extraction:          "Phase 2 — OCR Extraction",
+  tabular_extraction:      "Phase 2 — OCR Extraction",
   content_break_detect:    "Phase 2 — OCR Extraction",
   quality_validation:      "Phase 2 — OCR Extraction",
   pass_comparison:         "Phase 2 — OCR Extraction",
@@ -214,6 +215,7 @@ interface InscriptionDialogProps {
   inscription: {
     id?: number;
     primaryProviderId?: number | null;
+    secondaryProviderId?: number | null;
     fallbackProviderId?: number | null;
     promptName?: string | null;
     temperature?: number | null;
@@ -228,6 +230,9 @@ interface InscriptionDialogProps {
 function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose, onSaved }: InscriptionDialogProps) {
   const [primaryProviderId, setPrimaryProviderId] = useState<string>(
     inscription?.primaryProviderId ? String(inscription.primaryProviderId) : "none"
+  );
+  const [secondaryProviderId, setSecondaryProviderId] = useState<string>(
+    inscription?.secondaryProviderId ? String(inscription.secondaryProviderId) : "none"
   );
   const [fallbackProviderId, setFallbackProviderId] = useState<string>(
     inscription?.fallbackProviderId ? String(inscription.fallbackProviderId) : "none"
@@ -271,6 +276,7 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
     upsertMutation.mutate({
       stage: stage as any,
       primaryProviderId: primaryProviderId && primaryProviderId !== "none" ? Number(primaryProviderId) : null,
+      secondaryProviderId: secondaryProviderId && secondaryProviderId !== "none" ? Number(secondaryProviderId) : null,
       fallbackProviderId: fallbackProviderId && fallbackProviderId !== "none" ? Number(fallbackProviderId) : null,
       promptName: autoPromptName,
       promptVersion: isLatest ? null : Number(selectedVersion),
@@ -294,7 +300,7 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
             Inscribe Stage: {stageLabel}
           </DialogTitle>
           <DialogDescription>
-            Configure the primary and fallback providers for{" "}
+            Configure the primary, secondary, and cloud fallback providers for{" "}
             <span className="font-mono text-xs">{stage}</span>, along with generation settings.
           </DialogDescription>
         </DialogHeader>
@@ -336,11 +342,48 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
             </p>
           </div>
 
+          {/* Secondary Provider */}
+          <div className="space-y-2">
+            <Label className="flex items-center gap-2">
+              <Cpu className="h-4 w-4 text-violet-300" />
+              Secondary Provider
+              <span className="text-muted-foreground text-xs font-normal">(optional)</span>
+            </Label>
+            <Select value={secondaryProviderId} onValueChange={setSecondaryProviderId}>
+              <SelectTrigger className="w-full h-auto min-h-10 py-2 [&>span]:flex-1 [&>span]:min-w-0">
+                <SelectValue placeholder="Select secondary provider...">
+                  {secondaryProviderId && secondaryProviderId !== "none"
+                    ? (() => {
+                        const p = activeProviders.find(p => String(p.id) === secondaryProviderId);
+                        return p ? (
+                          <span className="flex flex-col items-start gap-0.5 text-left">
+                            <span className="font-medium text-sm leading-tight">{p.displayName || p.name}</span>
+                            {p.modelId && <span className="text-xs text-muted-foreground leading-tight font-mono truncate max-w-full">{p.modelId}</span>}
+                          </span>
+                        ) : null;
+                      })()
+                    : null}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">None</SelectItem>
+                {activeProviders.map(p => (
+                  <SelectItem key={p.id} value={String(p.id)}>
+                    {providerLabel(p)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Tried after the primary provider and before the cloud fallback. Use this for a second local model profile.
+            </p>
+          </div>
+
           {/* Fallback Provider */}
           <div className="space-y-2">
             <Label className="flex items-center gap-2">
               <Cloud className="h-4 w-4 text-blue-400" />
-              Fallback Provider
+              Cloud Fallback Provider
               <span className="text-muted-foreground text-xs font-normal">(optional)</span>
             </Label>
             <Select value={fallbackProviderId} onValueChange={setFallbackProviderId}>
@@ -369,7 +412,7 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground">
-              Used when the primary provider fails or is unavailable. Typically a cloud model.
+              Used only after the primary and secondary providers fail or return invalid output.
             </p>
           </div>
 
@@ -591,7 +634,7 @@ export default function TheAssignments() {
             Stage Inscriptions
           </h1>
           <p className="text-muted-foreground mt-1">
-            Assign a primary and fallback provider to each pipeline stage, and configure the stage-specific
+            Assign primary, secondary, and cloud fallback providers to each pipeline stage, and configure the stage-specific
             system prompt and generation settings. A single provider can be used across multiple stages.
           </p>
         </div>
@@ -616,6 +659,7 @@ export default function TheAssignments() {
           inscription={editingInscription ? {
             id: editingInscription.id,
             primaryProviderId: editingInscription.primaryProvider?.id ?? null,
+            secondaryProviderId: editingInscription.secondaryProvider?.id ?? null,
             fallbackProviderId: editingInscription.fallbackProvider?.id ?? null,
             promptName: editingInscription.promptName ?? null,
             temperature: editingInscription.temperature,
@@ -721,10 +765,26 @@ export default function TheAssignments() {
                                   </div>
                                 )}
 
+                                {/* Secondary Provider */}
+                                {inscription.secondaryProvider ? (
+                                  <div className="flex items-center gap-2">
+                                    <Badge variant="outline" className="text-[10px] border-violet-500/50 text-violet-300 bg-violet-950/20 flex-shrink-0">Secondary</Badge>
+                                    {providerIcon(inscription.secondaryProvider.providerType)}
+                                    <span className="text-sm text-muted-foreground truncate">
+                                      {providerLabel(inscription.secondaryProvider)}
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center gap-2 text-muted-foreground">
+                                    <Badge variant="outline" className="text-[10px] border-dashed flex-shrink-0">Secondary</Badge>
+                                    <span className="text-xs italic">No secondary configured</span>
+                                  </div>
+                                )}
+
                                 {/* Fallback Provider */}
                                 {inscription.fallbackProvider ? (
                                   <div className="flex items-center gap-2">
-                                    <Badge variant="outline" className="text-[10px] border-amber-500/50 text-amber-400 bg-amber-950/20 flex-shrink-0">Fallback</Badge>
+                                    <Badge variant="outline" className="text-[10px] border-amber-500/50 text-amber-400 bg-amber-950/20 flex-shrink-0">Cloud</Badge>
                                     {providerIcon(inscription.fallbackProvider.providerType)}
                                     <span className="text-sm text-muted-foreground truncate">
                                       {providerLabel(inscription.fallbackProvider)}
@@ -732,8 +792,8 @@ export default function TheAssignments() {
                                   </div>
                                 ) : (
                                   <div className="flex items-center gap-2 text-muted-foreground">
-                                    <Badge variant="outline" className="text-[10px] border-dashed flex-shrink-0">Fallback</Badge>
-                                    <span className="text-xs italic">No fallback configured</span>
+                                    <Badge variant="outline" className="text-[10px] border-dashed flex-shrink-0">Cloud</Badge>
+                                    <span className="text-xs italic">No cloud fallback configured</span>
                                   </div>
                                 )}
 

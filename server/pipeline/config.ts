@@ -37,7 +37,10 @@ const DEFAULTS: PipelineConfig = {
   pipeline: {
     pdfDpi: 150,
     hitlConfidenceThreshold: 80,
-    maxLlmConcurrency: 4,
+    // One page in-flight at a time. Within each page, layout_analysis and
+    // bbox_detection run concurrently (2 LLM calls), which already fills a
+    // 2-slot local model. Raise to 2 for a 4-slot model.
+    maxLlmConcurrency: 1,
   },
   binarize: {
     enabled: true,

@@ -10,6 +10,7 @@ import {
   createDocument, updateDocument,
   createDocumentPage, updateDocumentPage,
   createOcrResult, updateOcrResult, createHitlItem, updateHitlItem,
+  createHitlRetryAttempt, updateHitlRetryAttempt,
   getPageById, getDocumentById,
   getOcrResultByPageId,
   getPageByDocumentAndNumber,
@@ -51,7 +52,13 @@ ${STRICT_RULES}
 Required output schema (fill every field with real values from the page):
 {"layout_type":"…","columns":1,"has_table":false,"has_image_or_art":false,"has_list":false}
 
-layout_type must be one of: cover, title_page, toc, chapter_header, body_text, stat_block, table, illustration_full, illustration_with_text, index, appendix, mixed`;
+layout_type must be one of: cover, title_page, toc, chapter_header, body_text, stat_block, table, illustration_full, illustration_with_text, index, appendix, mixed
+
+CRITICAL layout type rules:
+- title_page: the page bearing the book/product title, author, publisher, edition, and/or copyright notice — even if it has no other body text
+- toc: a Table of Contents page — a list of chapter/section names paired with page numbers, regardless of column count
+- cover: the front or back cover image
+- Do NOT use "two_column" or any column count as a layout_type — "columns" is a separate numeric field`;
 
 const PROMPT_BBOX_DETECTION = `You are a document content-region detector for TTRPG publications.
 Identify distinct content regions in the page image and estimate each region's bounding box.
@@ -68,11 +75,14 @@ const PROMPT_OCR_EXTRACTION = `You are an OCR text extraction system for TTRPG d
 Extract ALL readable text from the page image in reading order.
 ${STRICT_RULES}
 
-Required output schema (include every readable text block):
-{"confidence":91,"content_blocks":[{"type":"…","text":"…","sequence":1}],"page_summary":"…"}
+Required output schema — you MUST produce this exact structure:
+{"confidence":91,"content_blocks":[{"type":"heading","text":"Chapter 1","sequence":1},{"type":"paragraph","text":"Body text here.","sequence":2}],"page_summary":"One sentence summary."}
+
+CRITICAL: The output MUST contain a "content_blocks" array. Do NOT output a flat "text" field.
+Every line, heading, paragraph, list item, and caption is a separate block with a "type" and "text" field.
 
 confidence is an integer 0–100 reflecting extraction accuracy.
-type must be one of: heading, subheading, paragraph, list_item, table, caption, stat_line, page_number, sidebar
+type must be one of: heading, subheading, paragraph, list_item, table, caption, stat_line, page_number, sidebar, header, footer
 
 MULTI-COLUMN PAGES: Extract every column completely. Read left-to-right across columns, top-to-bottom within each column. Never stop mid-page — if context indicates N columns, produce content_blocks from all N columns.
 
@@ -102,6 +112,16 @@ const FEW_SHOT_LAYOUT: InvokeOptions["fewShotExamples"] = [
   {
     user: "Classify the layout type and structure of this page. Reply with ONLY a JSON object — start with { and end with }.",
     assistant: '{"layout_type":"body_text","columns":2,"has_table":true,"has_image_or_art":false,"has_list":true}',
+  },
+  {
+    // Table of Contents — two columns of entries with page numbers; still layout_type "toc"
+    user: "Classify the layout type and structure of this page. Reply with ONLY a JSON object — start with { and end with }.",
+    assistant: '{"layout_type":"toc","columns":2,"has_table":false,"has_image_or_art":false,"has_list":true}',
+  },
+  {
+    // Title page — title, subtitle, author, publisher, edition, copyright
+    user: "Classify the layout type and structure of this page. Reply with ONLY a JSON object — start with { and end with }.",
+    assistant: '{"layout_type":"title_page","columns":1,"has_table":false,"has_image_or_art":false,"has_list":false}',
   },
 ];
 
@@ -201,9 +221,10 @@ const JSON_INVOKE_OPTS: Partial<InvokeOptions> = {
 };
 
 // ── Concurrency limiter ───────────────────────────────────────────────────────
-// Shared across all concurrent jobs — at most 4 pages may be in the LLM-call
-// stages (layout → bbox → OCR) simultaneously to avoid overwhelming the local
-// inference server and triggering 5-minute timeouts.
+// Limits the number of pages processed simultaneously across all active jobs.
+// Within each page, layout_analysis and bbox_detection run concurrently (2 LLM
+// calls in parallel), so maxLlmConcurrency=1 already saturates a 2-slot local
+// model. Set to 2 in pipeline-config.yaml for a 4-slot model.
 
 class Semaphore {
   private slots: number;
@@ -233,6 +254,215 @@ function isConfigError(err: any): boolean {
   return typeof err?.message === "string" && err.message.startsWith("[CONFIG]");
 }
 
+function stageErrorMessage(err: any): string {
+  return (err?.message ?? String(err)).replace(/\s+/g, " ").slice(0, 500);
+}
+
+const LAYOUT_TYPES = new Set([
+  "cover",
+  "title_page",
+  "toc",
+  "chapter_header",
+  "body_text",
+  "stat_block",
+  "table",
+  "illustration_full",
+  "illustration_with_text",
+  "index",
+  "appendix",
+  "mixed",
+]);
+
+const LAYOUT_TYPE_ALIASES: Record<string, string> = {
+  one_column: "body_text",
+  single_column: "body_text",
+  two_column: "body_text",
+  three_column: "body_text",
+  multi_column: "body_text",
+  contents: "toc",
+  table_of_contents: "toc",
+  title: "title_page",
+  full_page_art: "illustration_full",
+  illustration: "illustration_with_text",
+};
+
+const REGION_TYPES = new Set([
+  "heading",
+  "subheading",
+  "paragraph",
+  "text",          // alias for paragraph used by some models and the editor
+  "table",
+  "list",
+  "list_item",
+  "image",
+  "illustration",  // alias for image
+  "map",
+  "graphic",
+  "advertisement",
+  "stat_block",
+  "stat_line",
+  "sidebar",
+  "callout",
+  "caption",
+  "header",
+  "footer",
+  "page_number",
+  "unknown",
+]);
+
+function validateLayoutData(data: Record<string, unknown>): Record<string, unknown> {
+  const rawType = String(data.layout_type ?? "").trim().toLowerCase();
+  const layoutType = LAYOUT_TYPE_ALIASES[rawType] ?? rawType;
+  if (!LAYOUT_TYPES.has(layoutType)) {
+    throw new Error(`Invalid layout_analysis response: unsupported layout_type "${rawType || "<missing>"}"`);
+  }
+
+  const rawColumns = Number(data.columns ?? 1);
+  const columns = Number.isFinite(rawColumns)
+    ? Math.max(1, Math.min(4, Math.round(rawColumns)))
+    : 1;
+
+  return {
+    ...data,
+    layout_type: layoutType,
+    columns,
+    has_table: data.has_table === true,
+    has_image_or_art: data.has_image_or_art === true,
+    has_list: data.has_list === true,
+  };
+}
+
+function assertLayoutInvokeResult(result: { content: string }): void {
+  validateLayoutData(parseJsonResponse(result.content));
+}
+
+/** Normalise a raw model bbox into {x, y, w, h} percentage values (0-100).
+ *  Handles {x,y,w,h}, {x,y,width,height}, {x1,y1,x2,y2}, array, and flat
+ *  top-level coord variants.  If values exceed 101, treats them as pixels and
+ *  scales to 0-100 using the observed page extent. */
+function normaliseBboxRegions(raw: any[]): any[] {
+  type Box = { x: number; y: number; w: number; h: number };
+
+  function extractBox(r: any): Box | null {
+    const b = r?.bbox;
+    let box: Box | null = null;
+    if (Array.isArray(b) && b.length >= 4) {
+      box = { x: b[0], y: b[1], w: b[2], h: b[3] };
+    } else if (b && typeof b === "object") {
+      if (b.w !== undefined && b.h !== undefined) box = { x: b.x ?? 0, y: b.y ?? 0, w: b.w, h: b.h };
+      else if (b.width !== undefined && b.height !== undefined) box = { x: b.x ?? 0, y: b.y ?? 0, w: b.width, h: b.height };
+      else if (b.x1 !== undefined && b.x2 !== undefined) box = { x: b.x1, y: b.y1 ?? 0, w: b.x2 - b.x1, h: b.y2 - b.y1 };
+      else if (b.left !== undefined && b.right !== undefined) box = { x: b.left, y: b.top ?? 0, w: b.right - b.left, h: b.bottom - b.top };
+    } else if (r.x !== undefined && r.y !== undefined) {
+      if (r.w !== undefined && r.h !== undefined) box = { x: r.x, y: r.y, w: r.w, h: r.h };
+      else if (r.width !== undefined && r.height !== undefined) box = { x: r.x, y: r.y, w: r.width, h: r.height };
+    }
+    if (!box || box.w <= 0 || box.h <= 0) return null;
+    return box;
+  }
+
+  const pairs = raw.map(r => ({ r, box: extractBox(r) })).filter(p => p.box !== null) as Array<{ r: any; box: Box }>;
+  if (pairs.length === 0) return raw; // leave untouched if nothing parseable
+
+  const maxX = Math.max(...pairs.map(p => p.box.x + p.box.w));
+  const maxY = Math.max(...pairs.map(p => p.box.y + p.box.h));
+  const isPixels = maxX > 101 || maxY > 101;
+  const scaleX = isPixels && maxX > 0 ? 100 / maxX : 1;
+  const scaleY = isPixels && maxY > 0 ? 100 / maxY : 1;
+
+  return raw.map(r => {
+    const box = extractBox(r);
+    if (!box) return r;
+    const norm: Box = {
+      x: Math.round(box.x * scaleX * 100) / 100,
+      y: Math.round(box.y * scaleY * 100) / 100,
+      w: Math.round(box.w * scaleX * 100) / 100,
+      h: Math.round(box.h * scaleY * 100) / 100,
+    };
+    return { ...r, bbox: norm };
+  });
+}
+
+function clampPercent(value: unknown, fallback = 0): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.min(100, Math.round(n * 100) / 100));
+}
+
+function validateBboxRegions(data: Record<string, unknown>): any[] {
+  if (!Array.isArray(data.regions)) {
+    throw new Error("Invalid bbox_detection response: missing regions array");
+  }
+
+  const normalised = normaliseBboxRegions(data.regions);
+  const valid = normalised.flatMap((region: any) => {
+    const bbox = region?.bbox;
+    if (!bbox || typeof bbox !== "object") return [];
+
+    const x = Math.min(clampPercent(bbox.x), 99.9);
+    const y = Math.min(clampPercent(bbox.y), 99.9);
+    const w = clampPercent(bbox.w);
+    const h = clampPercent(bbox.h);
+    if (w <= 0 || h <= 0) return [];
+
+    const clampedW = Math.min(Math.max(0.1, w), 100 - x);
+    const clampedH = Math.min(Math.max(0.1, h), 100 - y);
+    const rawType = String(region.type ?? "paragraph").trim().toLowerCase();
+    const type = REGION_TYPES.has(rawType) ? rawType : "paragraph";
+
+    return [{
+      ...region,
+      type,
+      label: typeof region.label === "string" && region.label.trim()
+        ? region.label.trim().slice(0, 160)
+        : type,
+      bbox: { x, y, w: clampedW, h: clampedH },
+    }];
+  });
+
+  if (valid.length === 0) {
+    throw new Error("Invalid bbox_detection response: no usable regions");
+  }
+  return valid;
+}
+
+function assertBboxInvokeResult(result: { content: string }): void {
+  validateBboxRegions(parseJsonResponse(result.content));
+}
+
+/**
+ * Ensure OCR output always has a `content_blocks` array.
+ * Some models return a flat `{"confidence":N,"text":"…"}` instead of the
+ * required `{"confidence":N,"content_blocks":[…],"page_summary":"…"}`.
+ * When that happens, split the text on double-newlines and wrap each chunk
+ * into a paragraph block so downstream consumers always see structured data.
+ */
+function coerceOcrData(data: Record<string, unknown>): Record<string, unknown> {
+  if (Array.isArray(data.content_blocks) && (data.content_blocks as any[]).length > 0) {
+    return data; // already structured
+  }
+
+  // Gather any flat text the model provided
+  const flatText = typeof data.text === "string" && data.text.trim()
+    ? data.text.trim()
+    : Object.values(data)
+        .filter((v): v is string => typeof v === "string" && v.length > 20)
+        .join("\n\n");
+
+  if (!flatText) return data;
+
+  // Split on blank lines and classify very short leading lines as headings
+  const chunks = flatText.split(/\n{2,}/).filter(c => c.trim().length > 0);
+  const content_blocks = chunks.map((chunk, i) => {
+    const trimmed = chunk.trim();
+    const isLikelyHeading = trimmed.length < 80 && !trimmed.endsWith(".");
+    return { type: isLikelyHeading && i === 0 ? "heading" : "paragraph", text: trimmed, sequence: i + 1 };
+  });
+
+  console.warn("[Pipeline] OCR model returned flat text — coerced to content_blocks");
+  return { ...data, content_blocks };
+}
+
 /** Extract the printed page label (e.g. "i", "42") from OCR content blocks. */
 function extractPrintedPageLabel(data: Record<string, unknown>): string | null {
   if (!Array.isArray(data.content_blocks)) return null;
@@ -241,31 +471,79 @@ function extractPrintedPageLabel(data: Record<string, unknown>): string | null {
   return label || null;
 }
 
-/** Build the rawText string from OCR content blocks (tables rendered as TSV). */
+/** Extract readable text from a single OCR block (shared by buildRawText variants). */
+function blockToText(b: any): string {
+  if (b.type === "table") {
+    const caption = b.caption ? `[Table: ${b.caption}]\n` : "[Table]\n";
+    const headers = Array.isArray(b.headers) ? b.headers.join("\t") + "\n" : "";
+    const rows = Array.isArray(b.rows)
+      ? (b.rows as any[][]).map((r: any[]) => r.join("\t")).join("\n")
+      : "";
+    return caption + headers + rows;
+  }
+  return b.text ?? b.content ?? "";
+}
+
+/**
+ * Build the rawText string from OCR structured data.
+ * Handles three model output shapes:
+ *   1. Standard: {"content_blocks":[…]}
+ *   2. Single block at root: {"type":"text","text":"…","bbox":{…}}
+ *   3. Fallback: any root-level string fields joined together
+ */
 function buildRawText(data: Record<string, unknown>): string {
-  if (!Array.isArray(data.content_blocks)) return JSON.stringify(data);
-  return (data.content_blocks as any[]).map((b: any) => {
-    if (b.type === "table") {
-      const caption = b.caption ? `[Table: ${b.caption}]\n` : "[Table]\n";
-      const headers = Array.isArray(b.headers) ? b.headers.join("\t") + "\n" : "";
-      const rows = Array.isArray(b.rows)
-        ? (b.rows as any[][]).map((r: any[]) => r.join("\t")).join("\n")
-        : "";
-      return caption + headers + rows;
-    }
-    return b.text ?? "";
-  }).filter(Boolean).join("\n\n");
+  if (Array.isArray(data.content_blocks)) {
+    return (data.content_blocks as any[]).map(blockToText).filter(Boolean).join("\n\n");
+  }
+  // Model returned a single block at the root level (schema non-compliance)
+  if (typeof data.text === "string" && data.text.length > 0) return data.text as string;
+  // Try extracting any string values from the root object
+  const texts = Object.values(data)
+    .filter((v): v is string => typeof v === "string" && v.length > 10);
+  return texts.length > 0 ? texts.join("\n\n") : "";
+}
+
+function parseRetryOcrResponse(content: string): Record<string, unknown> {
+  try {
+    return parseJsonResponse(content);
+  } catch (err: any) {
+    const text = content.trim();
+    if (!text) throw err;
+    return {
+      content_blocks: [{ type: "text", text }],
+      page_summary: text.slice(0, 240),
+      confidence: 25,
+      retry_parse_warning: stageErrorMessage(err),
+    };
+  }
+}
+
+/**
+ * Like buildRawText but strips page-furniture blocks (page_number etc.).
+ * Used as the input to normaliseText.
+ */
+function buildCleanText(data: Record<string, unknown>): string {
+  if (!Array.isArray(data.content_blocks)) return buildRawText(data);
+  return buildRawText({
+    ...data,
+    content_blocks: (data.content_blocks as any[]).filter(
+      (b: any) => !NOISE_BLOCK_TYPES.has(b.type),
+    ),
+  });
 }
 
 /**
  * Build a layout-preserving Markdown string from OCR content blocks.
  * Tables become GFM pipe tables; headings become # / ## / ###.
+ * Page-furniture blocks (page_number) are suppressed.
  * Falls back to buildRawText when content_blocks is absent.
  */
 function buildMarkdownText(data: Record<string, unknown>): string {
   if (!Array.isArray(data.content_blocks)) return buildRawText(data);
 
-  return (data.content_blocks as any[]).map((b: any) => {
+  return (data.content_blocks as any[])
+    .filter((b: any) => !NOISE_BLOCK_TYPES.has(b.type))
+    .map((b: any) => {
     switch (b.type) {
       case "heading":    return `## ${b.text ?? ""}`;
       case "subheading": return `### ${b.text ?? ""}`;
@@ -340,6 +618,12 @@ function mergeTabularExtraction(
 }
 
 const HITL_CONFIDENCE_THRESHOLD = pipelineConfig.pipeline.hitlConfidenceThreshold;
+
+/** F1 score below this triggers HITL for pages that have a native PDF text layer. */
+const NATIVE_SIMILARITY_THRESHOLD = 0.75;
+
+/** Content-block types that are page furniture, not body content. Suppressed in cleanText/markdown. */
+const NOISE_BLOCK_TYPES = new Set(["page_number"]);
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
@@ -424,6 +708,28 @@ async function _runJob(jobId: number): Promise<void> {
   let pageFiles = await convertToPages(sourceFile, pagesDir, firstPage, Math.min(lastPage, totalDocPages));
   if (pageFiles.length === 0) throw new Error("No pages produced from source file");
 
+  // ── Stage: pdf_text_extract ───────────────────────────────────────────────
+  // Must run while sourceFile is still on disk — Drive temp files are deleted
+  // immediately after this block. Non-fatal: image-only PDFs produce no usable
+  // text and simply leave every entry in nativePageTexts as null.
+  const nativePageTexts: Array<string | null> = new Array(pageFiles.length).fill(null);
+  if (/\.pdf$/i.test(sourceFile)) {
+    await updateIngestionJobStatus(jobId, { currentStage: "pdf_text_extract" });
+    try {
+      const rawTexts = await extractNativePdfTextBatch(
+        sourceFile, firstPage, Math.min(lastPage, totalDocPages),
+      );
+      for (let i = 0; i < pageFiles.length; i++) {
+        const t = rawTexts[i] ?? "";
+        nativePageTexts[i] = hasUsableEmbeddedText(t) ? t : null;
+      }
+      const embeddedCount = nativePageTexts.filter(t => t !== null).length;
+      console.log(`[Pipeline] Job ${jobId}: native PDF text — ${embeddedCount}/${pageFiles.length} pages have embedded text`);
+    } catch (err: any) {
+      console.warn(`[Pipeline] Job ${jobId}: pdf_text_extract failed (non-fatal): ${err.message}`);
+    }
+  }
+
   // Delete the Drive temp download now that pages are extracted
   if (tempDownloadPath) await deleteLocalFile(tempDownloadPath);
 
@@ -439,6 +745,14 @@ async function _runJob(jobId: number): Promise<void> {
       rawPngUrl: pageFiles[i],
     });
     pageIds.push(page.id);
+  }
+
+  // Persist native text and embedded-text flag now that page IDs are known
+  for (let i = 0; i < pageIds.length; i++) {
+    const nt = nativePageTexts[i];
+    if (nt !== null) {
+      await updateDocumentPage(pageIds[i], { nativeText: nt, hasEmbeddedText: true });
+    }
   }
 
   // ── Stage: preprocess (binarize/denoise) — optional ──────────────────────
@@ -524,6 +838,8 @@ async function _runJob(jobId: number): Promise<void> {
     const rawPagePath = rawPageFiles[i];   // original full-colour — use for visual content stages
     const stagesFailed: string[] = [];
     let ocrConfidence = 0;
+    let confidenceFromModel: number | null = null; // null = model didn't provide a score
+    let nativeSimilarity: number | null = null;
     let ocrResultId: number | null = null;
     let currentRawText: string | null = null; // set when OCR succeeds; used by content_break_detect
 
@@ -538,33 +854,50 @@ async function _runJob(jobId: number): Promise<void> {
     console.log(`[Pipeline] Job ${jobId}: page ${pageNum} acquired LLM slot`);
     try {
 
-    // layout_analysis
+    // layout_analysis + bbox_detection — run concurrently.
+    // Both stages read the same page image and are fully independent of each
+    // other, so they can occupy both Artificer slots simultaneously.  OCR then
+    // receives both results as context, improving multi-column extraction quality.
     let layoutData: Record<string, unknown> = {};
-    try {
-      const layoutContent: UserContentPart[] = [imgPart, { type: "text", text: "Classify the layout type and structure of this page. Reply with ONLY a JSON object — start with { and end with }." }];
-      const r = await invokeStage("layout_analysis", layoutContent, undefined, PROMPT_LAYOUT_ANALYSIS,
-        { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_LAYOUT }, { pageId, jobId });
-      layoutData = parseJsonResponse(r.content);
-      await updateDocumentPage(pageId, { layoutType: (layoutData.layout_type as string) || undefined });
-    } catch (err: any) {
-      if (isConfigError(err)) throw err; // fatal — halt job
-      stagesFailed.push("layout_analysis");
-      console.warn(`[Pipeline] Job ${jobId} p${pageNum} layout_analysis: ${err.message}`);
+    let regions: any[] = [];
+
+    const layoutContent: UserContentPart[] = [imgPart, { type: "text", text: "Classify the layout type and structure of this page. Reply with ONLY a JSON object — start with { and end with }." }];
+    const bboxContent: UserContentPart[] = [imgPart, { type: "text", text: "Identify all distinct content regions on this page. Reply with ONLY a JSON object — start with { and end with }." }];
+
+    const [layoutSettled, bboxSettled] = await Promise.allSettled([
+      invokeStage("layout_analysis", layoutContent, undefined, PROMPT_LAYOUT_ANALYSIS,
+        { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_LAYOUT, validateResult: assertLayoutInvokeResult }, { pageId, jobId })
+        .then(async r => {
+          const data = validateLayoutData(parseJsonResponse(r.content));
+          await updateDocumentPage(pageId, { layoutType: (data.layout_type as string) || undefined });
+          return data;
+        }),
+      invokeStage("bbox_detection", bboxContent, undefined, PROMPT_BBOX_DETECTION,
+        { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_BBOX, validateResult: assertBboxInvokeResult }, { pageId, jobId })
+        .then(async r => {
+          const data = parseJsonResponse(r.content);
+          const regs: any[] = validateBboxRegions(data);
+          await updateDocumentPage(pageId, { contentRegions: regs });
+          return regs;
+        }),
+    ]);
+
+    // Re-throw config errors (fatal — no provider or broken config)
+    for (const result of [layoutSettled, bboxSettled]) {
+      if (result.status === "rejected" && isConfigError(result.reason)) throw result.reason;
     }
 
-    // bbox_detection (optional — no provider is acceptable, any other config error is fatal)
-    let regions: any[] = [];
-    try {
-      await updateIngestionJobStatus(jobId, { currentStage: "bbox_detection" });
-      const bboxContent: UserContentPart[] = [imgPart, { type: "text", text: "Identify all distinct content regions on this page. Reply with ONLY a JSON object — start with { and end with }." }];
-      const r = await invokeStage("bbox_detection", bboxContent, undefined, PROMPT_BBOX_DETECTION,
-        { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_BBOX }, { pageId, jobId });
-      const data = parseJsonResponse(r.content);
-      regions = Array.isArray(data.regions) ? data.regions : [];
-      await updateDocumentPage(pageId, { contentRegions: regions });
-    } catch (err: any) {
-      if (isConfigError(err)) throw err; // fatal — halt job (bbox stage explicitly configured but broken)
-      console.warn(`[Pipeline] Job ${jobId} p${pageNum} bbox_detection: ${err.message}`);
+    if (layoutSettled.status === "fulfilled") {
+      layoutData = layoutSettled.value;
+    } else {
+      stagesFailed.push("layout_analysis");
+      console.warn(`[Pipeline] Job ${jobId} p${pageNum} layout_analysis: ${layoutSettled.reason?.message}`);
+    }
+
+    if (bboxSettled.status === "fulfilled") {
+      regions = bboxSettled.value;
+    } else {
+      console.warn(`[Pipeline] Job ${jobId} p${pageNum} bbox_detection: ${bboxSettled.reason?.message}`);
     }
 
     // Lazily load the original full-colour image when the page contains visual
@@ -592,16 +925,32 @@ async function _runJob(jobId: number): Promise<void> {
       const ocrContent: UserContentPart[] = [imgPart, { type: "text", text: "Extract all readable text from this page in reading order. Reply with ONLY a JSON object — start with { and end with }." }];
       const r = await invokeStage("ocr_extraction", ocrContent, regionContext, PROMPT_OCR_EXTRACTION,
         { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_OCR }, { pageId, jobId });
-      const data = parseJsonResponse(r.content);
-      ocrConfidence = typeof data.confidence === "number" ? data.confidence : 0;
+      const data = coerceOcrData(parseJsonResponse(r.content));
+      // Track whether the model actually provided a confidence score.
+      // When it's absent we don't treat the page as low-confidence — we rely
+      // on native-text similarity instead.  confidenceFromModel=null lets the
+      // HITL gate below distinguish "model said 0%" from "model was silent".
+      confidenceFromModel = typeof data.confidence === "number" ? data.confidence : null;
+      ocrConfidence = confidenceFromModel ?? 0;
 
       currentRawText = buildRawText(data);
+      const nt = nativePageTexts[i];
+      // Skip similarity when buildRawText produced empty or JSON-like output
+      // (indicates the model returned a non-standard schema — garbage-in would
+      // produce misleadingly low F1 scores and trigger spurious HITL flags).
+      const rawIsUsable = currentRawText.length > 0 && !currentRawText.startsWith("{");
+      nativeSimilarity = (nt !== null && rawIsUsable) ? nativeTextSimilarity(nt, currentRawText) : null;
+      if (nativeSimilarity !== null) {
+        console.log(`[Pipeline] Job ${jobId} p${pageNum} native similarity: ${Math.round(nativeSimilarity * 100)}%`);
+      }
       const ocrResult = await createOcrResult({
         pageId,
         structuredData: data,
         rawText: currentRawText,
         markdownText: buildMarkdownText(data),
+        normalisedText: normaliseText(buildCleanText(data)),
         confidence: ocrConfidence,
+        nativeSimilarity,
         status: "pass1_complete",
         pass1Model: r.model,
         auditLog: [{ timestamp: new Date().toISOString(), action: "pass1", model: r.model }],
@@ -708,29 +1057,42 @@ async function _runJob(jobId: number): Promise<void> {
               structuredData: mergedData,
               rawText: buildRawText(mergedData),
               markdownText: buildMarkdownText(mergedData),
+              normalisedText: normaliseText(buildCleanText(mergedData)),
               auditLog: [...((existing.auditLog as any[]) ?? []),
                 { timestamp: new Date().toISOString(), action: "tabular_extraction", model: tabResult.model }],
             } as any);
           }
         }
       } catch (err: any) {
-        if (isConfigError(err)) throw err;
-        console.warn(`[Pipeline] Job ${jobId} p${pageNum} tabular_extraction: ${err.message}`);
+        if (isConfigError(err)) {
+          // tabular_extraction is optional — a missing inscription means "skip table enhancement"
+          console.warn(`[Pipeline] Job ${jobId} p${pageNum} tabular_extraction: not configured, skipping table extraction`);
+        } else {
+          console.warn(`[Pipeline] Job ${jobId} p${pageNum} tabular_extraction: ${err.message}`);
+        }
       }
     }
 
-    // Queue for HITL review: always if a stage failed or confidence is below threshold
-    const needsHitl = stagesFailed.length > 0 || ocrConfidence < HITL_CONFIDENCE_THRESHOLD;
+    // Queue for HITL review: stage failure, low model confidence (only when the
+    // model actually returned a score), or significant native-text divergence.
+    const poorNativeAlignment = nativeSimilarity !== null && nativeSimilarity < NATIVE_SIMILARITY_THRESHOLD;
+    const lowConfidence = confidenceFromModel !== null && ocrConfidence < HITL_CONFIDENCE_THRESHOLD;
+    const needsHitl = stagesFailed.length > 0 || lowConfidence || poorNativeAlignment;
     if (needsHitl) {
       const reasonParts: string[] = [`Page ${pageNum} of ${totalDocPages}`];
       if (stagesFailed.length > 0) reasonParts.push(`failed stages: ${stagesFailed.join(", ")}`);
-      if (ocrConfidence < HITL_CONFIDENCE_THRESHOLD) reasonParts.push(`low confidence: ${ocrConfidence}%`);
+      if (lowConfidence) reasonParts.push(`low confidence: ${ocrConfidence}%`);
+      if (poorNativeAlignment) reasonParts.push(`native text divergence: ${Math.round(nativeSimilarity! * 100)}% similarity`);
       await createHitlItem({
         pageId,
         ocrResultId: ocrResultId ?? undefined,
         reason: reasonParts.join(" — "),
-        flagCategory: stagesFailed.length > 0 ? "stage_failure" : "low_confidence",
-        priority: stagesFailed.includes("ocr_extraction") || ocrConfidence < 50 ? "high" : "medium",
+        flagCategory: stagesFailed.length > 0 ? "stage_failure"
+          : poorNativeAlignment ? "native_text_divergence"
+          : "low_confidence",
+        priority: stagesFailed.includes("ocr_extraction")
+          || (confidenceFromModel !== null && ocrConfidence < 50)
+          || (poorNativeAlignment && nativeSimilarity! < 0.5) ? "high" : "medium",
       });
     }
 
@@ -802,19 +1164,26 @@ async function _runJob(jobId: number): Promise<void> {
 
 export type RetryStage = "layout_analysis" | "bbox_detection" | "ocr_extraction";
 
+export type RetryPageMetadata = {
+  reviewerUserId?: number;
+  savedCorrectionFields?: string[];
+};
+
 export async function retryPageStages(
   pageId: number,
   stages: RetryStage[],
   hitlId?: number,
-): Promise<{ confidence: number; stagesFailed: string[] }> {
+  metadata: RetryPageMetadata = {},
+): Promise<{ confidence: number; stagesFailed: string[]; stageErrors: Record<string, string> }> {
   const page = await getPageById(pageId);
   if (!page) throw new Error(`Page ${pageId} not found`);
   if (!page.rawPngUrl) throw new Error(`Page ${pageId} has no image on disk`);
 
-  const [doc, prevPage, nextPage] = await Promise.all([
+  const [doc, prevPage, nextPage, currentOcrBefore] = await Promise.all([
     getDocumentById(page.documentId),
     getPageByDocumentAndNumber(page.documentId, page.pageNumber - 1),
     getPageByDocumentAndNumber(page.documentId, page.pageNumber + 1),
+    getOcrResultByPageId(pageId),
   ]);
   const [prevOcr, nextOcr] = await Promise.all([
     prevPage ? getOcrResultByPageId(prevPage.id) : Promise.resolve(null),
@@ -837,7 +1206,42 @@ export async function retryPageStages(
   const ocrImgPath = (page.wasPreprocessed && page.preprocessedPngUrl) ? page.preprocessedPngUrl : page.rawPngUrl!;
   const imgPart = await imageContent(ocrImgPath);
   const stagesFailed: string[] = [];
+  const stageErrors: Record<string, string> = {};
+  let layoutType = page.layoutType ?? undefined;
   let ocrConfidence = 0;
+  let retryOcrResultId: number | null = currentOcrBefore?.id ?? null;
+  const modelTrace: Record<string, string> = {};
+  const retryStartedAt = Date.now();
+  const savedCorrectionFields = [...new Set(metadata.savedCorrectionFields ?? [])];
+  const corrected = (currentOcrBefore?.correctedStructuredData as Record<string, unknown> | null) ?? {};
+  const usedReviewedLayout = savedCorrectionFields.includes("layout") || page.layoutType != null;
+  const usedReviewedRegions = savedCorrectionFields.includes("regions") || page.contentRegions != null;
+  const usedReviewedStructure = savedCorrectionFields.some(f => ["text", "structure", "json"].includes(f))
+    || currentOcrBefore?.correctedText != null
+    || corrected.structure_correction != null
+    || corrected.json_correction != null;
+  let retryAttemptId: number | null = null;
+  try {
+    const attempt = await createHitlRetryAttempt({
+      hitlItemId: hitlId ?? null,
+      pageId,
+      requestedStages: stages,
+      savedCorrectionFields,
+      usedReviewedLayout,
+      usedReviewedRegions,
+      usedReviewedStructure,
+      status: "running",
+      confidence: null,
+      stagesFailed: [],
+      stageErrors: {},
+      modelTrace: {},
+      ocrResultId: retryOcrResultId,
+      createdBy: metadata.reviewerUserId ?? null,
+    } as any);
+    retryAttemptId = attempt.id;
+  } catch (err: any) {
+    console.warn(`[Pipeline] Page ${pageId} retry tracking start failed: ${err?.message ?? String(err)}`);
+  }
 
   await PAGE_LLM_SEMAPHORE.acquirePriority();
   console.log(`[Pipeline] Page ${pageId} retry: acquired LLM slot (stages: ${stages.join(", ")})`);
@@ -847,73 +1251,94 @@ export async function retryPageStages(
       try {
         const content: UserContentPart[] = [imgPart, { type: "text", text: "Classify the layout type and structure of this page. Reply with ONLY a JSON object — start with { and end with }." }];
         const r = await invokeStage("layout_analysis", content, surroundingContext, PROMPT_LAYOUT_ANALYSIS,
-          { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_LAYOUT }, { pageId, jobId: doc?.ingestionJobId ?? undefined });
-        const data = parseJsonResponse(r.content);
-        await updateDocumentPage(pageId, { layoutType: (data.layout_type as string) || undefined });
+          { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_LAYOUT, validateResult: assertLayoutInvokeResult }, { pageId, jobId: doc?.ingestionJobId ?? undefined });
+        modelTrace.layout_analysis = r.model;
+        const data = validateLayoutData(parseJsonResponse(r.content));
+        layoutType = (data.layout_type as string) || undefined;
+        await updateDocumentPage(pageId, { layoutType });
       } catch (err: any) {
-        if (isConfigError(err)) throw err;
+        const msg = stageErrorMessage(err);
         stagesFailed.push("layout_analysis");
-        console.warn(`[Pipeline] Page ${pageId} retry layout_analysis: ${err.message}`);
+        stageErrors.layout_analysis = msg;
+        console.warn(`[Pipeline] Page ${pageId} retry layout_analysis: ${msg}`);
       }
     }
 
     // bbox_detection — use existing regions if not re-running
-    let regions: any[] = stages.includes("bbox_detection") ? [] : ((page.contentRegions as any[]) ?? []);
+    let regions: any[] = stages.includes("bbox_detection")
+      ? []
+      : (Array.isArray(page.contentRegions) ? (page.contentRegions as any[]) : []);
     if (stages.includes("bbox_detection")) {
       try {
         const content: UserContentPart[] = [imgPart, { type: "text", text: "Identify all distinct content regions on this page. Reply with ONLY a JSON object — start with { and end with }." }];
         const r = await invokeStage("bbox_detection", content, surroundingContext, PROMPT_BBOX_DETECTION,
-          { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_BBOX }, { pageId, jobId: doc?.ingestionJobId ?? undefined });
+          { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_BBOX, validateResult: assertBboxInvokeResult }, { pageId, jobId: doc?.ingestionJobId ?? undefined });
+        modelTrace.bbox_detection = r.model;
         const data = parseJsonResponse(r.content);
-        regions = Array.isArray(data.regions) ? data.regions : [];
+        regions = validateBboxRegions(data);
         await updateDocumentPage(pageId, { contentRegions: regions });
       } catch (err: any) {
-        if (isConfigError(err)) throw err;
+        const msg = stageErrorMessage(err);
         stagesFailed.push("bbox_detection");
-        console.warn(`[Pipeline] Page ${pageId} retry bbox_detection: ${err.message}`);
+        stageErrors.bbox_detection = msg;
+        console.warn(`[Pipeline] Page ${pageId} retry bbox_detection: ${msg}`);
       }
     }
 
     // ocr_extraction
     if (stages.includes("ocr_extraction")) {
       try {
-        const regionCtx = regions.length > 0
-          ? `Content regions already detected: ${JSON.stringify(regions.slice(0, 5))}`
+        const layoutCtx = layoutType
+          ? `Reviewed page_layout: ${layoutType}`
           : undefined;
-        const fullContext = [surroundingContext, regionCtx].filter(Boolean).join("\n\n") || undefined;
-        const content: UserContentPart[] = [imgPart, { type: "text", text: "Extract all readable text from this page in reading order. Reply with ONLY a JSON object — start with { and end with }." }];
+        const regionCtx = regions.length > 0
+          ? `Reviewed content_regions (${regions.length}) in percent coordinates; use sequence order when present: ${JSON.stringify(regions.slice(0, 50))}`
+          : undefined;
+        const reviewedContext = [layoutCtx, regionCtx].filter(Boolean).join("\n");
+        const fullContext = [surroundingContext, reviewedContext].filter(Boolean).join("\n\n") || undefined;
+        const content: UserContentPart[] = [imgPart, {
+          type: "text",
+          text: "Extract all readable text from this page in reading order. Use reviewed page_layout and content_regions from context as authoritative HITL corrections. If regions are present, process them in sequence order, then include any remaining readable text outside the boxes. Reply with ONLY a JSON object - start with { and end with }.",
+        }];
         const r = await invokeStage("ocr_extraction", content, fullContext, PROMPT_OCR_EXTRACTION,
           { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_OCR }, { pageId, jobId: doc?.ingestionJobId ?? undefined });
-        const data = parseJsonResponse(r.content);
+        modelTrace.ocr_extraction = r.model;
+        const data = coerceOcrData(parseRetryOcrResponse(r.content));
         ocrConfidence = typeof data.confidence === "number" ? data.confidence : 0;
 
         const rawText = buildRawText(data);
         const markdownText = buildMarkdownText(data);
+        const normalisedText = normaliseText(buildCleanText(data));
         const printedPageLabel = extractPrintedPageLabel(data);
 
         const existing = await getOcrResultByPageId(pageId);
+        const retryAudit: any = { timestamp: new Date().toISOString(), action: "retry", model: r.model };
+        if (data.retry_parse_warning) retryAudit.warning = String(data.retry_parse_warning);
         if (existing) {
           await updateOcrResult(existing.id, {
-            structuredData: data, rawText, markdownText, confidence: ocrConfidence,
+            structuredData: data, rawText, markdownText, normalisedText, confidence: ocrConfidence,
             status: "pass1_complete", pass1Model: r.model,
             auditLog: [...((existing.auditLog as any[]) ?? []),
-              { timestamp: new Date().toISOString(), action: "retry", model: r.model }],
+              retryAudit],
           } as any);
         } else {
-          await createOcrResult({
-            pageId, structuredData: data, rawText, markdownText, confidence: ocrConfidence,
+          const created = await createOcrResult({
+            pageId, structuredData: data, rawText, markdownText, normalisedText, confidence: ocrConfidence,
             status: "pass1_complete", pass1Model: r.model,
-            auditLog: [{ timestamp: new Date().toISOString(), action: "retry", model: r.model }],
+            auditLog: [retryAudit],
           } as any);
+          retryOcrResultId = created.id;
         }
+        if (existing) retryOcrResultId = existing.id;
         await updateDocumentPage(pageId, {
           ocrCompleted: true, ocrConfidence,
           printedPageLabel: printedPageLabel ?? "[unnumbered]",
         });
       } catch (err: any) {
-        if (isConfigError(err)) throw err;
+        const msg = stageErrorMessage(err);
         stagesFailed.push("ocr_extraction");
-        console.warn(`[Pipeline] Page ${pageId} retry ocr_extraction: ${err.message}`);
+        stageErrors.ocr_extraction = msg;
+        console.warn(`[Pipeline] Page ${pageId} retry ocr_extraction: ${msg}`);
       }
     }
   } finally {
@@ -932,13 +1357,33 @@ export async function retryPageStages(
     } else {
       const parts = ["Retry attempted"];
       if (stagesFailed.length > 0) parts.push(`failed: ${stagesFailed.join(", ")}`);
+      for (const stage of stagesFailed) {
+        if (stageErrors[stage]) parts.push(`${stage}: ${stageErrors[stage].slice(0, 160)}`);
+      }
       if (ocrConfidence < HITL_CONFIDENCE_THRESHOLD) parts.push(`confidence ${ocrConfidence}%`);
       await updateHitlItem(hitlId, { resolutionNotes: parts.join(" — ") });
     }
   }
 
+  if (retryAttemptId != null) {
+    try {
+      await updateHitlRetryAttempt(retryAttemptId, {
+        status: stagesFailed.length === 0 ? "succeeded" : "failed",
+        confidence: ocrConfidence,
+        stagesFailed,
+        stageErrors,
+        modelTrace,
+        ocrResultId: retryOcrResultId,
+        completedAt: new Date(),
+        durationMs: Date.now() - retryStartedAt,
+      } as any);
+    } catch (err: any) {
+      console.warn(`[Pipeline] Page ${pageId} retry tracking finish failed: ${err?.message ?? String(err)}`);
+    }
+  }
+
   console.log(`[Pipeline] Page ${pageId} retry done (confidence: ${ocrConfidence}, failed: ${stagesFailed.join(", ") || "none"})`);
-  return { confidence: ocrConfidence, stagesFailed };
+  return { confidence: ocrConfidence, stagesFailed, stageErrors };
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -984,6 +1429,99 @@ async function preprocessPageImages(
   }
 
   return results;
+}
+
+// ── Text normalisation ────────────────────────────────────────────────────────
+
+/** Unicode ligature → ASCII pairs that OCR engines and pdftotext commonly emit. */
+const LIGATURE_MAP: Array<[RegExp, string]> = [
+  [/ﬀ/g, "ff"],   // ﬀ
+  [/ﬁ/g, "fi"],   // ﬁ
+  [/ﬂ/g, "fl"],   // ﬂ
+  [/ﬃ/g, "ffi"],  // ﬃ
+  [/ﬄ/g, "ffl"],  // ﬄ
+  [/ﬅ/g, "st"],   // ﬅ
+  [/ﬆ/g, "st"],   // ﬆ
+  [/­/g, ""],     // soft hyphen — remove entirely
+];
+
+/**
+ * Produce a clean, normalised string suitable for chunking and embedding.
+ * Input should be the output of buildCleanText (noise blocks already filtered).
+ *
+ * Transformations (in order):
+ *   1. Unicode NFC
+ *   2. Ligature expansion + soft-hyphen removal
+ *   3. Dehyphenation: "charac-\nter" → "character"
+ *      Only fires when a letter precedes the hyphen-newline and a lowercase
+ *      letter follows — preserves intentional hyphenated compounds.
+ *   4. Horizontal whitespace collapse (tabs, multiple spaces → single space)
+ *   5. Trailing whitespace trimmed per line
+ *   6. Runs of 3+ blank lines collapsed to two
+ *
+ * rawText is NEVER passed through this function — it must remain verbatim.
+ */
+function normaliseText(text: string): string {
+  if (!text) return text;
+  let t = text.normalize("NFC");
+  for (const [re, rep] of LIGATURE_MAP) t = t.replace(re, rep);
+  t = t.replace(/([a-zA-Z])-\n[ \t]*([a-z])/g, "$1$2");
+  t = t.replace(/[ \t]{2,}/g, " ");
+  t = t.replace(/[ \t]+$/gm, "");
+  t = t.replace(/\n{3,}/g, "\n\n");
+  return t.trim();
+}
+
+/**
+ * Extract embedded text from a block of PDF pages in a single pdftotext call.
+ * Pages are separated by form-feed (\f) in the output; returns one string per
+ * page. Empty strings indicate pages with no embedded text layer.
+ */
+async function extractNativePdfTextBatch(
+  pdfPath: string,
+  firstPage: number,
+  lastPage: number,
+): Promise<string[]> {
+  const { stdout } = await execFileAsync(
+    "pdftotext",
+    ["-f", String(firstPage), "-l", String(lastPage), "-layout", pdfPath, "-"],
+    { timeout: 60_000 },
+  );
+  // pdftotext terminates each page with \f, including the last one
+  const pages = stdout.split("\f");
+  if (pages.length > 0 && pages[pages.length - 1].trim() === "") pages.pop();
+  const count = lastPage - firstPage + 1;
+  while (pages.length < count) pages.push("");
+  return pages.slice(0, count);
+}
+
+/**
+ * Returns true when pdftotext output contains enough printable characters to
+ * be considered a real embedded text layer. Image-only pages produce empty or
+ * near-empty output (whitespace, stray control chars) and return false.
+ */
+function hasUsableEmbeddedText(raw: string): boolean {
+  return raw.replace(/[\s\x00-\x1F\x7F]/g, "").length >= 50;
+}
+
+/**
+ * Token-level F1 similarity between native PDF text and OCR output (0–1).
+ * Tokenises on word boundaries, deduplicates each side, then measures
+ * precision and recall of OCR tokens against the native token set.
+ * Returns 0 when either input produces no tokens.
+ */
+function nativeTextSimilarity(native: string, ocr: string): number {
+  const tokenize = (s: string): string[] => s.toLowerCase().match(/\b[a-z0-9']+\b/g) ?? [];
+  const tokNative = tokenize(native);
+  const tokOcr    = tokenize(ocr);
+  if (tokNative.length === 0 || tokOcr.length === 0) return 0;
+  const uniqNative = Array.from(new Set(tokNative));
+  const setOcr     = new Set(tokOcr);
+  const intersection = uniqNative.filter(t => setOcr.has(t)).length;
+  const precision = intersection / setOcr.size;
+  const recall    = intersection / uniqNative.length;
+  if (precision + recall === 0) return 0;
+  return Math.round((2 * precision * recall / (precision + recall)) * 100) / 100;
 }
 
 async function countPdfPages(pdfPath: string): Promise<number> {

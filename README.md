@@ -19,10 +19,10 @@ The console provides a human-facing interface for every stage of the pipeline:
 | **Oversee the Scribes** | Ingestion job monitoring with per-page progress and LLM timing |
 | **Arcane Mechanisms** | System configuration (providers, stage inscriptions, DB connections) |
 | **Summoning Rituals** | PDF upload and ingestion job creation |
-| **Trials of Truth** | Admin: per-item HITL review with bbox overlay and one-click retry |
+| **Trials of Truth** | Admin: per-item HITL review with bbox overlay, one-click retry, and training-data export |
 | **Incantations & Runes** | System prompt management with version history for all pipeline stages |
 | **The Artificers** | Admin: LLM provider registry with test-connection and model discovery |
-| **The Assignments** | Admin: stage inscription management — provider, fallback, temperature, max tokens |
+| **The Assignments** | Admin: stage inscription management — primary, secondary, cloud fallback, temperature, max tokens |
 | **The Vault Nexus** | Admin: external database connection management |
 | **The Conclave** | Admin: user management, roles, and invitations |
 
@@ -91,6 +91,7 @@ See `.env.example` for the full list. The critical ones:
 | `VITE_OAUTH_PORTAL_URL` | Manus login portal URL |
 | `BUILT_IN_FORGE_API_KEY` | Manus built-in API key (server-side) |
 | `BUILT_IN_FORGE_API_URL` | Manus built-in API URL |
+| `ADMIN_EMAIL` | Bootstrap admin — any user who logs in with this email is automatically promoted to `admin` on every login. Set to the deployer's Google account email (e.g. `karl.miller@gmail.com`). |
 
 ---
 
@@ -100,12 +101,52 @@ The OCR pipeline runs internally as a Node.js process (`server/pipeline/runner.t
 
 The tRPC pipeline endpoints (`pipeline.ingestPage`, `pipeline.submitOcrResult`, `pipeline.flagPage`) remain available for external callers. All pipeline calls require a valid session cookie (use the `SCHEDULED_TASK_COOKIE` environment variable in scheduled task contexts).
 
+### Pipeline Flow
+
+```mermaid
+flowchart TD
+    A([PDF Upload]) --> B[pdf_to_png\nConvert to page images]
+    B --> C[pdf_text_extract\nNative text · hasEmbeddedText]
+    B --> D[document_intelligence\nDoc type · title · summary]
+
+    D --> E[layout_analysis]
+    D --> F[bbox_detection]
+    D --> G[content_type_classify]
+
+    C -. "F1 baseline" .-> H
+
+    E --> H[ocr_extraction\nnormalisedText · nativeSimilarity]
+    F --> H
+    G --> H
+
+    H --> I[content_break_detect]
+    H -->|table pages| J[tabular_extraction]
+
+    I --> K{quality check}
+    J --> K
+
+    K -->|pass| L[artifact_storage]
+    K -->|low conf / divergence| O([HITL Queue])
+    K -->|fail| M[pass3 — cloud retry]
+    M -->|pass| L
+    M -->|fail| N[pass4 — cloud retry]
+    N -->|pass| L
+    N -->|irrecoverable| O
+
+    L --> P[embedding_generation]
+    P --> Q[(Database)]
+    Q --> R([Voice of Arkanum])
+    Q --> S([The Referee])
+```
+
+An interactive version of this diagram — with live provider assignments, fallback chains, and per-stage inscription details — is available at **Oversee the Scribes** in the admin console.
+
 ### Provider & Stage Configuration
 
 Before running the pipeline, configure providers and stage inscriptions:
 
 1. **The Artificers** — add one row per LLM provider instance. Paste a full URL (e.g. `http://10.0.0.1:1234/v1`) into Base URL and it auto-decomposes into host, port, and API prefix. Click **Discover Models** to fetch the model list from the provider and auto-fill `contextLength` and `maxTokens`. Use the **Vision only** toggle to filter to vision-capable models for OCR stages.
-2. **The Assignments** — inscribe each pipeline stage with a primary provider and optional fallback. Each inscription references a named system prompt from Incantations & Runes and carries its own `temperature` and `maxTokens` overrides independent of the provider defaults.
+2. **The Assignments** — inscribe each pipeline stage with primary, secondary, and cloud fallback providers. Each inscription references a named system prompt from Incantations & Runes and carries its own `temperature` and `maxTokens` overrides independent of the provider defaults.
 
 ### Register a Page (after PDF-to-PNG conversion)
 
@@ -197,7 +238,7 @@ Key tables:
 |---|---|
 | `users` | Authenticated users with role (`admin` / `user`) |
 | `llm_providers` | Cloud/local LLM provider registry. Key columns: `displayName`, `modelId`, `baseUrl`, `port`, `apiPrefix`, `supportsChat`, `supportsVision`, `supportsEmbedding`, `defaultTemperature`, `contextLength`, `maxTokens`, `isDefault`, `encryptedApiKey` |
-| `stage_inscriptions` | Maps each pipeline stage to a primary + fallback provider with per-stage `promptName`, `temperature`, `maxTokens`, and `llmSettings` JSON |
+| `stage_inscriptions` | Maps each pipeline stage to primary, secondary, and cloud fallback providers with per-stage `promptName`, `temperature`, `maxTokens`, and `llmSettings` JSON |
 | `system_prompts` | Versioned prompts for all pipeline stages (referenced by `stage_inscriptions.promptName`) |
 | `prompt_versions` | Version history for each system prompt (last 3 versions retained) |
 | `ingestion_jobs` | PDF ingestion job tracking (phase 1/2/3 status) |
@@ -226,7 +267,7 @@ pnpm build        # Production build
 128 tests across:
 - Auth (logout, session handling)
 - Provider CRUD + test connection + model discovery
-- Stage inscriptions (upsert, topology, primary/fallback provider)
+- Stage inscriptions (upsert, topology, primary/secondary/cloud fallback provider)
 - DB connections
 - Library browsing (documents, pages, OCR results)
 - HITL queue management

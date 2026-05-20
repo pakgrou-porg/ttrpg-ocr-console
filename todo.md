@@ -220,7 +220,7 @@
 
 ### Schema Changes
 - [x] Enhance llmProviders table: add displayName, modelId, port, contextLength, maxTokens, defaultTemperature, capabilities, isDefault fields
-- [x] Create stageInscriptions table: stage (unique), primaryProviderId, fallbackProviderId, systemPrompt, temperature, maxTokens, llmSettings, isActive
+- [x] Create stageInscriptions table: stage (unique), primaryProviderId, secondaryProviderId, fallbackProviderId, systemPrompt, temperature, maxTokens, llmSettings, isActive
 - [x] Remove modelAssignments table (replaced by stageInscriptions)
 - [x] Run pnpm db:push after schema changes
 
@@ -252,13 +252,13 @@
 - [x] Add displayName, port, modelId, contextLength, maxTokens, defaultTemperature, capabilities, isDefault to llmProviders
 - [x] Create stageInscriptions table: stage (unique), primaryProviderId, fallbackProviderId, systemPrompt, temperature, maxTokens, llmSettings, isActive
 - [x] Drop modelAssignments table
-- [x] Apply DB migration (db:push + manual ALTER TABLE for MySQL JSON column compatibility)
+- [x] Apply DB migration for the Supabase PostgreSQL schema
 - [x] Update db.ts helpers: getAllStageInscriptions, getStageInscriptionByStage, upsertStageInscription, updateStageInscription, deleteStageInscription
 - [x] Update routers.ts: assignments.list, byStage, upsert, update, delete, stages, topology — all using new inscription shape
 - [x] Update providers.create/update input to include new fields (displayName, modelId, port, etc.)
-- [x] Rewrite TheAssignments.tsx: one row per stage, primary/fallback provider pickers, inline prompt/temperature/maxTokens editing
+- [x] Rewrite TheAssignments.tsx: one row per stage, primary/secondary/cloud fallback provider pickers, inline prompt/temperature/maxTokens editing
 - [x] Update TheArtificers.tsx: new provider fields in Create/Edit dialogs
-- [x] Update PipelineVisualization.tsx: TopologyStage uses inscription+primaryProvider+fallbackProvider shape
+- [x] Update PipelineVisualization.tsx: TopologyStage uses inscription+primaryProvider+secondaryProvider+fallbackProvider shape
 - [x] Update providers.test.ts: add displayName to all providers.create calls, replace assignments.create with assignments.upsert
 - [x] Update features.test.ts: topology tests use new inscription+provider shape
 - [x] All 128 tests passing
@@ -441,7 +441,7 @@
 - [x] TheVaultNexus: removed always-visible Security Notice card (now implicit in description)
 - [x] Dockerfile: multi-stage build (builder + runner) using Node 22 Alpine
 - [x] .dockerignore: added to keep image lean
-- [x] docker-compose.yml: Portainer-ready stack with bundled MySQL 8 service, all env vars documented
+- [x] docker-compose.yml: Portainer-ready stack for external Supabase PostgreSQL, all env vars documented
 - [x] DOCKER_DEPLOY.md: full deployment guide covering CLI, Portainer stack, env vars, migration, update, rollback, backup, and troubleshooting
 - [x] 128/128 tests passing
 - [x] Save checkpoint and push to GitHub
@@ -455,9 +455,9 @@
 
 ## Phase: Deploy Script + env.example
 
-- [x] Clarify MySQL vs Postgres: console uses MySQL 8 (Drizzle mysql2 driver); Supabase/Postgres is the separate pipeline DB
+- [x] Clarify Supabase PostgreSQL as the application database
 - [x] Write env.example with full annotations for all variables
-- [x] Write deploy.sh: validates .env, pulls latest code, waits for MySQL health, runs pnpm db:push migrations, rebuilds console container
+- [x] Write deploy.sh: validates .env, checks console health, and rebuilds the console container
 - [x] deploy.sh supports --skip-pull, --skip-migrate, --down, --reset-db flags
 - [x] deploy.sh falls back to running migrations inside a temp container if pnpm is not on the host
 
@@ -470,7 +470,7 @@
 ## Phase: Fix GitHub Actions Build Failure
 
 - [x] Fix Dockerfile: pnpm install --frozen-lockfile fails in multi-platform CI build — pinned pnpm@10.4.1 via corepack (was pnpm@10 which resolved to a newer incompatible version)
-- [x] Fix release.yml: added actions/setup-node@v4 with Node 22 in test job; added full test job with MySQL service before build; PNPM_VERSION env var pinned to 10.4.1
+- [x] Fix release.yml: added actions/setup-node@v4 with Node 22 in test job; PNPM_VERSION env var pinned to 10.4.1
 - [x] Fix CI test failure: ramblings.generate called real Manus Forge API (BUILT_IN_FORGE_API_KEY not available in CI) — added vi.mock('./_core/llm') in features.test.ts to mock invokeLLM; test now runs in ~400ms instead of 5.7s
 - [x] Fix Dockerfile: corepack prepare pnpm@10.4.1 fails in QEMU-emulated arm64 multi-platform build — replaced with npm install -g pnpm@10.4.1 (deterministic, no network resolution)
 - [x] Fix Dockerfile: --frozen-lockfile fails in multi-platform build (lockfile generated on host, not arm64) — replaced with --no-frozen-lockfile; lockfile integrity validated by CI test job on host before Docker build runs
@@ -499,7 +499,7 @@
 
 ## Phase: Replace drizzle-kit with standalone migration runner
 
-- [x] Write migrate.mjs using drizzle-orm/mysql2 migrator (prod dep, no drizzle-kit needed)
+- [x] Write migrate.mjs using the postgres-js migrator
 - [x] Verify migrate.mjs runs cleanly on dev DB (backfilled 5 missing hashes from pnpm db:push history)
 - [x] Rewrite Dockerfile: remove all .pnpm virtual store COPY lines, replace CMD with node migrate.mjs
 - [x] Push to GitHub, tag v0.1.4, update portainer-stack.yml IMAGE_TAG to 0.1.4
@@ -507,12 +507,12 @@
 ## Phase: Alignment with v0.1.13–v0.1.15 PostgreSQL migration
 
 - [x] Pull and analyze all commits since v0.1.4 (v0.1.5–v0.1.15)
-- [x] Rewrite portainer-stack.yml for PostgreSQL/Supabase (remove MySQL service, join supabase_net, add CREDENTIAL_ENCRYPTION_KEY, all secrets via env vars)
+- [x] Rewrite portainer-stack.yml for PostgreSQL/Supabase (join supabase_net, add CREDENTIAL_ENCRYPTION_KEY, all secrets via env vars)
 - [x] Add sslmode=disable to DATABASE_URL for self-hosted Docker bridge network
-- [x] Fix Dockerfile comment: mysql2 -> postgres-js migrator
+- [x] Fix Dockerfile comment for postgres-js migrator
 - [x] Fix SecretHint destructuring in server/routers.ts (prefix/suffix/length -> keyPrefix/keySuffix/keyLength)
 - [x] Merge v0.1.15 SSL improvements (sslmode driven by connection string), tag v0.1.16, push to GitHub
-- [x] pnpm install updated: mysql2 removed, postgres (postgres-js) added
+- [x] pnpm install updated: postgres (postgres-js) added
 - [x] TypeScript: 0 errors after all fixes
 
 ## Phase: HITL Empty Templates + Page-Level Progress (v0.1.44)

@@ -14,6 +14,7 @@ import {
   documentPages, InsertDocumentPage,
   ocrResults, InsertOcrResult,
   hitlQueue, InsertHitlQueueItem,
+  hitlRetryAttempts, InsertHitlRetryAttempt,
   pageProcessingAttempts, InsertPageProcessingAttempt,
   llmProviders, InsertLlmProvider,
   stageInscriptions, InsertStageInscription,
@@ -63,7 +64,7 @@ export async function upsertUser(user: InsertUser): Promise<void> {
     textFields.forEach(assignNullable);
     if (user.lastSignedIn !== undefined) { values.lastSignedIn = user.lastSignedIn; updateSet.lastSignedIn = user.lastSignedIn; }
     if (user.role !== undefined) { values.role = user.role; updateSet.role = user.role; }
-    else if (user.openId === ENV.ownerOpenId) { values.role = 'admin'; updateSet.role = 'admin'; }
+    else if (ENV.adminEmail && user.email && user.email.toLowerCase() === ENV.adminEmail.toLowerCase()) { values.role = 'admin'; updateSet.role = 'admin'; }
     if (!values.lastSignedIn) values.lastSignedIn = new Date();
     if (Object.keys(updateSet).length === 0) updateSet.lastSignedIn = new Date();
     await db.insert(users).values(values).onConflictDoUpdate({ target: users.openId, set: updateSet as any });
@@ -97,6 +98,12 @@ export async function updateUserRole(userId: number, role: "user" | "admin") {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.update(users).set({ role }).where(eq(users.id, userId));
+}
+
+export async function deleteUser(userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(users).where(eq(users.id, userId));
 }
 
 // ─── User Profiles ────────────────────────────────────────────────────────────
@@ -742,6 +749,42 @@ export async function clearHitlItems(statuses: string[]) {
   }
 }
 
+/**
+ * Wipe all processing data: jobs, documents, pages, OCR results, HITL items,
+ * content summaries, processing attempts, and LLM timing metrics.
+ * Preserves users, LLM providers, stage inscriptions, game systems, system
+ * config, and Google OAuth tokens — i.e. configuration is untouched.
+ */
+export async function wipeProcessingData(): Promise<{ deletedCounts: Record<string, number> }> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  // Delete in FK dependency order: leaf tables first, then parents.
+  const [hitlRetry]= await db.delete(hitlRetryAttempts).returning({ id: hitlRetryAttempts.id });
+  const [hitl]     = await db.delete(hitlQueue).returning({ id: hitlQueue.id });
+  const [ocr]      = await db.delete(ocrResults).returning({ id: ocrResults.id });
+  const [attempts] = await db.delete(pageProcessingAttempts).returning({ id: pageProcessingAttempts.id });
+  const [metrics]  = await db.delete(llmTimingMetrics).returning({ id: llmTimingMetrics.id });
+  const [summaries]= await db.delete(contentSummaries).returning({ id: contentSummaries.id });
+  const [pages]    = await db.delete(documentPages).returning({ id: documentPages.id });
+  const [docs]     = await db.delete(documents).returning({ id: documents.id });
+  const [jobs]     = await db.delete(ingestionJobs).returning({ id: ingestionJobs.id });
+
+  return {
+    deletedCounts: {
+      hitlQueue:               Array.isArray(hitl)     ? hitl.length     : 0,
+      hitlRetryAttempts:       Array.isArray(hitlRetry)? hitlRetry.length: 0,
+      ocrResults:              Array.isArray(ocr)      ? ocr.length      : 0,
+      pageProcessingAttempts:  Array.isArray(attempts) ? attempts.length : 0,
+      llmTimingMetrics:        Array.isArray(metrics)  ? metrics.length  : 0,
+      contentSummaries:        Array.isArray(summaries)? summaries.length: 0,
+      documentPages:           Array.isArray(pages)    ? pages.length    : 0,
+      documents:               Array.isArray(docs)     ? docs.length     : 0,
+      ingestionJobs:           Array.isArray(jobs)     ? jobs.length     : 0,
+    },
+  };
+}
+
 export async function purgeJobPages(jobId: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -759,6 +802,7 @@ export async function purgeJobPages(jobId: number) {
 
     if (pageIds.length > 0) {
       await db.delete(hitlQueue).where(inArray(hitlQueue.pageId, pageIds));
+      await db.delete(hitlRetryAttempts).where(inArray(hitlRetryAttempts.pageId, pageIds));
       await db.delete(ocrResults).where(inArray(ocrResults.pageId, pageIds));
       await db.delete(documentPages).where(inArray(documentPages.id, pageIds));
     }
@@ -891,6 +935,9 @@ export async function deleteLlmProvider(id: number) {
   await db.update(stageInscriptions)
     .set({ primaryProviderId: null })
     .where(eq(stageInscriptions.primaryProviderId, id));
+  await db.update(stageInscriptions)
+    .set({ secondaryProviderId: null })
+    .where(eq(stageInscriptions.secondaryProviderId, id));
   await db.update(stageInscriptions)
     .set({ fallbackProviderId: null })
     .where(eq(stageInscriptions.fallbackProviderId, id));
@@ -1213,7 +1260,7 @@ export async function getAllHitlItems(options?: { status?: string; priority?: st
 
   const order = options?.orderByPriority
     ? [asc(priorityRank), asc(hitlQueue.createdAt)]
-    : [desc(hitlQueue.createdAt)];
+    : [asc(hitlQueue.createdAt)];
 
   const baseQuery = db.select().from(hitlQueue);
   const filtered = conditions.length > 0 ? baseQuery.where(and(...conditions)) : baseQuery;
@@ -1255,6 +1302,39 @@ export async function updateHitlItem(id: number, updates: Partial<InsertHitlQueu
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.update(hitlQueue).set(updates as Partial<InsertHitlQueueItem>).where(eq(hitlQueue.id, id));
+}
+
+export async function createHitlRetryAttempt(attempt: InsertHitlRetryAttempt & Record<string, unknown>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [row] = await db.insert(hitlRetryAttempts)
+    .values(attempt as InsertHitlRetryAttempt)
+    .returning({ id: hitlRetryAttempts.id });
+  const [created] = await db.select().from(hitlRetryAttempts).where(eq(hitlRetryAttempts.id, row.id)).limit(1);
+  return created!;
+}
+
+export async function updateHitlRetryAttempt(id: number, updates: Partial<InsertHitlRetryAttempt> & Record<string, unknown>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(hitlRetryAttempts).set(updates as Partial<InsertHitlRetryAttempt>).where(eq(hitlRetryAttempts.id, id));
+}
+
+export async function getHitlRetryAttemptsByPageId(pageId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(hitlRetryAttempts)
+    .where(eq(hitlRetryAttempts.pageId, pageId))
+    .orderBy(desc(hitlRetryAttempts.startedAt));
+}
+
+export async function getHitlRetryAttemptsByPageIds(pageIds: number[]) {
+  const db = await getDb();
+  if (!db || pageIds.length === 0) return [];
+  const { inArray } = await import("drizzle-orm");
+  return db.select().from(hitlRetryAttempts)
+    .where(inArray(hitlRetryAttempts.pageId, pageIds))
+    .orderBy(desc(hitlRetryAttempts.startedAt));
 }
 
 export async function getHitlStats() {

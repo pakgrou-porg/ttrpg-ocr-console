@@ -64,6 +64,34 @@
       "when": 1747253100000,
       "tag": "0008_markdown_text",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1747339500000,
+      "tag": "0009_native_pdf_text",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1747425900000,
+      "tag": "0010_normalised_text",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1747512300000,
+      "tag": "0011_secondary_stage_provider",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1747598700000,
+      "tag": "0012_hitl_retry_attempts",
+      "breakpoints": true
     }
   ]
 }
