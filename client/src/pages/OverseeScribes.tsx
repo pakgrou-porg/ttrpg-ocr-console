@@ -124,7 +124,7 @@ function PageCard({ page, jobId, onFlagged, timing }: {
   const sd = ocr?.structuredData as any;
   const blocks: any[] = Array.isArray(sd?.content_blocks) ? sd.content_blocks : [];
   const displayText = ocr?.rawText || (blocks.length > 0 ? blocks.map((b: any) => b.text ?? b.content ?? "").join("\n\n") : null);
-  const regions = page.contentRegions ?? sd?.regions;
+  const regions = page.contentRegions;
 
   return (
     <div className="border border-border/40 rounded-lg overflow-hidden bg-card/30">

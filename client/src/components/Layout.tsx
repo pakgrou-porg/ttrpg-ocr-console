@@ -30,7 +30,8 @@ interface NavItem {
   href: string;
   label: string;
   icon: React.ElementType;
-  adminOnly?: boolean;
+  /** Minimum role required to see this item. "reviewer" allows reviewers + admins; "admin" allows admins only. */
+  minRole?: "reviewer" | "admin";
 }
 
 interface NavGroup {
@@ -59,13 +60,13 @@ const innerSanctumChildren: NavItem[] = [
   { href: "/inner-sanctum/oversee-scribes", label: "Oversee the Scribes", icon: Activity },
   { href: "/inner-sanctum/arcane-mechanisms", label: "Arcane Mechanisms", icon: Settings },
   { href: "/inner-sanctum/summoning-rituals", label: "Summoning Rituals", icon: Database },
-  { href: "/inner-sanctum/trials-of-truth", label: "Trials of Truth", icon: ClipboardList, adminOnly: true },
+  { href: "/inner-sanctum/trials-of-truth", label: "Trials of Truth", icon: ClipboardList, minRole: "reviewer" },
   { href: "/inner-sanctum/incantations-runes", label: "Incantations & Runes", icon: Terminal },
-  { href: "/inner-sanctum/the-artificers", label: "The Artificers", icon: Cpu, adminOnly: true },
-  { href: "/inner-sanctum/the-assignments", label: "The Assignments", icon: GitBranch, adminOnly: true },
-  { href: "/inner-sanctum/vault-nexus", label: "The Vault Nexus", icon: Database, adminOnly: true },
-  { href: "/inner-sanctum/the-chronicles", label: "The Chronicles", icon: ScrollText, adminOnly: true },
-  { href: "/inner-sanctum/the-conclave", label: "The Conclave", icon: Shield, adminOnly: true },
+  { href: "/inner-sanctum/the-artificers", label: "The Artificers", icon: Cpu, minRole: "admin" },
+  { href: "/inner-sanctum/the-assignments", label: "The Assignments", icon: GitBranch, minRole: "admin" },
+  { href: "/inner-sanctum/vault-nexus", label: "The Vault Nexus", icon: Database, minRole: "admin" },
+  { href: "/inner-sanctum/the-chronicles", label: "The Chronicles", icon: ScrollText, minRole: "admin" },
+  { href: "/inner-sanctum/the-conclave", label: "The Conclave", icon: Shield, minRole: "admin" },
 ];
 
 const SIDEBAR_STORAGE_KEY = "ttrpg-sidebar-collapsed";
@@ -80,19 +81,27 @@ function getInitials(name?: string | null): string {
     .toUpperCase();
 }
 
+const ROLE_BADGE: Record<string, { label: string; color: string }> = {
+  admin: { label: "ADMIN", color: "text-amber-500/80 border-amber-500/30" },
+  reviewer: { label: "REVIEW", color: "text-sky-500/80 border-sky-500/30" },
+};
+
 /** A nav link that shows tooltip in collapsed mode */
 function NavLink({
   item,
   isActive,
   collapsed,
   isAdmin,
+  isReviewer,
 }: {
   item: NavItem;
   isActive: boolean;
   collapsed: boolean;
   isAdmin: boolean;
+  isReviewer: boolean;
 }) {
   const Icon = item.icon;
+  const roleBadge = item.minRole ? ROLE_BADGE[item.minRole] : null;
   const link = (
     <Link key={item.href} href={item.href}>
       <a
@@ -108,9 +117,9 @@ function NavLink({
         {!collapsed && (
           <>
             <span className="font-medium truncate">{item.label}</span>
-            {item.adminOnly && (
-              <span className="ml-auto text-[10px] font-mono text-amber-500/80 border border-amber-500/30 rounded px-1">
-                ADMIN
+            {roleBadge && (
+              <span className={`ml-auto text-[10px] font-mono border rounded px-1 ${roleBadge.color}`}>
+                {roleBadge.label}
               </span>
             )}
           </>
@@ -125,8 +134,8 @@ function NavLink({
         <TooltipTrigger asChild>{link}</TooltipTrigger>
         <TooltipContent side="right" className="flex items-center gap-2">
           {item.label}
-          {item.adminOnly && (
-            <span className="text-[10px] font-mono text-amber-500">ADMIN</span>
+          {roleBadge && (
+            <span className={`text-[10px] font-mono ${roleBadge.color.split(" ")[0]}`}>{roleBadge.label}</span>
           )}
         </TooltipContent>
       </Tooltip>
@@ -169,6 +178,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const displayName = profile?.displayName ?? user?.name ?? "Scholar";
   const avatarUrl = profile?.avatarUrl ?? undefined;
   const isAdmin = user?.role === "admin";
+  const isReviewer = user?.role === "reviewer";
 
   // In collapsed mode, Inner Sanctum shows its children directly as icons
   const sanctumIcon = Scroll;
@@ -232,6 +242,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 isActive={isActive}
                 collapsed={collapsed}
                 isAdmin={isAdmin}
+                isReviewer={isReviewer}
               />
             );
           })}
@@ -258,7 +269,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 <TooltipContent side="right">The Inner Sanctum</TooltipContent>
               </Tooltip>
               {innerSanctumChildren
-                .filter((item) => !item.adminOnly || isAdmin)
+                .filter((item) => !item.minRole || (item.minRole === "reviewer" ? isAdmin || isReviewer : isAdmin))
                 .map((item) => {
                   const isActive =
                     location === item.href || location.startsWith(item.href);
@@ -269,6 +280,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                       isActive={isActive}
                       collapsed={true}
                       isAdmin={isAdmin}
+                      isReviewer={isReviewer}
                     />
                   );
                 })}
@@ -302,7 +314,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
               {sanctumOpen && (
                 <div className="mt-0.5 ml-3 pl-3 border-l border-border/40 space-y-0.5">
                   {innerSanctumChildren
-                    .filter((item) => !item.adminOnly || isAdmin)
+                    .filter((item) => !item.minRole || (item.minRole === "reviewer" ? isAdmin || isReviewer : isAdmin))
                     .map((item) => {
                       const isActive =
                         location === item.href || location.startsWith(item.href);
@@ -313,6 +325,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                           isActive={isActive}
                           collapsed={false}
                           isAdmin={isAdmin}
+                          isReviewer={isReviewer}
                         />
                       );
                     })}
@@ -418,6 +431,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
                     {isAdmin && (
                       <span className="text-[10px] font-mono text-amber-500 mt-0.5">
                         ⚔ Arch-Magister
+                      </span>
+                    )}
+                    {isReviewer && (
+                      <span className="text-[10px] font-mono text-sky-500 mt-0.5">
+                        ✦ Scribe Reviewer
                       </span>
                     )}
                   </div>

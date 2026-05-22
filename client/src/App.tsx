@@ -6,6 +6,7 @@ import { ThemeProvider } from "./contexts/ThemeContext";
 import { Layout } from "@/components/Layout";
 import { PermissionGate } from "@/components/PermissionGate";
 import { AdminGate } from "@/components/AdminGate";
+import { ReviewerGate } from "@/components/ReviewerGate";
 import Home from "@/pages/Home";
 import EnterArkanum from "@/pages/EnterArkanum";
 import ListenRamblings from "@/pages/ListenRamblings";
@@ -77,9 +78,9 @@ function Router() {
           </PermissionGate>
         </Route>
         <Route path="/inner-sanctum/trials-of-truth">
-          <AdminGate>
+          <ReviewerGate>
             <TrialsOfTruth />
-          </AdminGate>
+          </ReviewerGate>
         </Route>
         <Route path="/inner-sanctum/scriveners-lens">
           <AdminGate>

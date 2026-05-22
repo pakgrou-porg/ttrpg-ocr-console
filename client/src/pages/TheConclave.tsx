@@ -33,7 +33,7 @@ export default function TheConclave() {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteDisplayName, setInviteDisplayName] = useState("");
-  const [inviteRole, setInviteRole] = useState<"user" | "admin">("user");
+  const [inviteRole, setInviteRole] = useState<"user" | "reviewer" | "admin">("user");
 
   // Redirect non-admins
   if (user && user.role !== "admin") {
@@ -141,12 +141,13 @@ export default function TheConclave() {
               </div>
               <div>
                 <label className="text-sm font-medium mb-1.5 block">Role</label>
-                <Select value={inviteRole} onValueChange={(v) => setInviteRole(v as "user" | "admin")}>
+                <Select value={inviteRole} onValueChange={(v) => setInviteRole(v as "user" | "reviewer" | "admin")}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="user">Scholar (User)</SelectItem>
+                    <SelectItem value="reviewer">Scribe Reviewer</SelectItem>
                     <SelectItem value="admin">Arch-Magister (Admin)</SelectItem>
                   </SelectContent>
                 </Select>
@@ -198,8 +199,11 @@ export default function TheConclave() {
                       <div className="flex items-center gap-2">
                         <span className="font-semibold text-sm truncate">{u.name ?? "Unknown Scholar"}</span>
                         {isOwner && <Crown className="w-3.5 h-3.5 text-amber-500" aria-label="You" />}
-                        <Badge variant={u.role === "admin" ? "default" : "secondary"} className="text-[10px] h-4">
-                          {u.role === "admin" ? "Arch-Magister" : "Scholar"}
+                        <Badge
+                          variant={u.role === "admin" ? "default" : u.role === "reviewer" ? "outline" : "secondary"}
+                          className={`text-[10px] h-4 ${u.role === "reviewer" ? "text-sky-500 border-sky-500/40" : ""}`}
+                        >
+                          {u.role === "admin" ? "Arch-Magister" : u.role === "reviewer" ? "Scribe Reviewer" : "Scholar"}
                         </Badge>
                       </div>
                       <p className="text-xs text-muted-foreground truncate">{u.email ?? "—"}</p>
@@ -210,13 +214,14 @@ export default function TheConclave() {
                       <>
                         <Select
                           value={u.role}
-                          onValueChange={(v) => setRole.mutate({ userId: u.id, role: v as "user" | "admin" })}
+                          onValueChange={(v) => setRole.mutate({ userId: u.id, role: v as "user" | "reviewer" | "admin" })}
                         >
-                          <SelectTrigger className="w-36 h-7 text-xs">
+                          <SelectTrigger className="w-40 h-7 text-xs">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
                             <SelectItem value="user">Scholar</SelectItem>
+                            <SelectItem value="reviewer">Scribe Reviewer</SelectItem>
                             <SelectItem value="admin">Arch-Magister</SelectItem>
                           </SelectContent>
                         </Select>

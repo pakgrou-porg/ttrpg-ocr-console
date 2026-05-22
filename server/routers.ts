@@ -670,7 +670,7 @@ export const appRouter = router({
     setRole: adminProcedure
       .input(z.object({
         userId: z.number().int(),
-        role: z.enum(["user", "admin"]),
+        role: z.enum(["user", "reviewer", "admin"]),
       }))
       .mutation(async ({ input }) => {
         await updateUserRole(input.userId, input.role);
@@ -723,7 +723,7 @@ export const appRouter = router({
       .input(z.object({
         email: z.string().email().max(320),
         displayName: z.string().max(128).optional(),
-        role: z.enum(["user", "admin"]).default("user"),
+        role: z.enum(["user", "reviewer", "admin"]).default("user"),
         expiresInDays: z.number().int().min(1).max(90).default(7),
       }))
       .mutation(async ({ ctx, input }) => {
