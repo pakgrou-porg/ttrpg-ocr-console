@@ -71,24 +71,24 @@ type must be one of: heading, subheading, paragraph, table, list, image, stat_bl
 bbox values are percentages of the page width/height (0–100). x,y = top-left corner; w,h = width and height.
 Estimate bounding boxes as precisely as possible from the visual layout.`;
 
-const PROMPT_OCR_EXTRACTION = `You are an OCR text extraction system for TTRPG document pages.
-Extract ALL readable text from the page image in reading order.
+const PROMPT_OCR_EXTRACTION = `Extract text and tabular data from the provided TTRPG region image into structured JSON. Apply semantic hierarchy and game-specific formatting.
 ${STRICT_RULES}
 
-Required output schema — you MUST produce this exact structure:
-{"confidence":91,"content_blocks":[{"type":"heading","text":"Chapter 1","sequence":1},{"type":"paragraph","text":"Body text here.","sequence":2}],"page_summary":"One sentence summary."}
+Domain Rules:
+1. Abbreviations are canonical. Do not expand or correct AC, HP, STR, DEX, CON, INT, WIS, CHA, CR, XP, DC, or dice notation (d4/d20/etc). Follow any lexicon_terms supplied in context for spelling corrections.
+2. Preserve formatting semantics. Translate bold text to rules terms (rule_term blocks), italics to spells/titles.
+3. Obey reading order context provided in content_regions. Extract every column completely for multi-column pages.
+4. CRITICAL: output MUST contain a "content_blocks" array. Do NOT output a flat "text" field.
+5. When a "--- Native PDF text ---" section appears in context, trust it for word-level accuracy (spelling, numbers, punctuation) but derive structure (block types, reading order, column layout) from the image. Do NOT copy native text wholesale.
 
-CRITICAL: The output MUST contain a "content_blocks" array. Do NOT output a flat "text" field.
-Every line, heading, paragraph, list item, and caption is a separate block with a "type" and "text" field.
+Required output schema:
+{"region_sequence":1,"regionType":"text","content_blocks":[{"block_type":"heading","level":1,"text":"Chapter Title"},{"block_type":"paragraph","text":"Body text here."},{"block_type":"stat_line","text":"AC 15, HP 7 (2d6), Speed 30 ft."},{"block_type":"rule_term","term":"Darkvision","definition":"Can see in dim light within 60 ft as if bright light.","formatting":["bold"]}],"reading_order_verified":true,"confidence":91}
 
-confidence is an integer 0–100 reflecting extraction accuracy.
-type must be one of: heading, subheading, paragraph, list_item, table, caption, stat_line, page_number, sidebar, header, footer
-
-MULTI-COLUMN PAGES: Extract every column completely. Read left-to-right across columns, top-to-bottom within each column. Never stop mid-page — if context indicates N columns, produce content_blocks from all N columns.
-
-IMPORTANT — tables MUST use this schema (never flatten a table into a text string):
-{"type":"table","caption":"optional title","headers":["Col1","Col2","Col3"],"rows":[["r1c1","r1c2","r1c3"],["r2c1","r2c2","r2c3"]],"sequence":N}
-If a column value is blank or not applicable use "" (empty string). Preserve ALL columns and ALL rows exactly as they appear.`;
+block_type must be one of: heading, paragraph, stat_line, rule_term
+level is optional — applies to heading only (1 = main heading, 2 = subheading).
+term and definition are required for rule_term blocks.
+formatting is an optional array of strings (bold, italic).
+confidence is an integer 0–100 reflecting extraction accuracy.`;
 
 // ── Few-shot anchors — text-only examples showing direct input→output mapping ─
 // Using the same user wording as the real calls so the model sees the pattern.
@@ -143,11 +143,11 @@ const FEW_SHOT_BBOX: InvokeOptions["fewShotExamples"] = [
 const FEW_SHOT_OCR: InvokeOptions["fewShotExamples"] = [
   {
     user: "Extract all readable text from this page in reading order. Reply with ONLY a JSON object — start with { and end with }.",
-    assistant: '{"confidence":91,"content_blocks":[{"type":"heading","text":"Special Thanks to","sequence":1},{"type":"paragraph","text":"Whenever a project of this size is put together, there are many people who give their time and extra effort to see it through.","sequence":2},{"type":"list_item","text":"To Jon Pickens, who produced many obscure reference books.","sequence":3}],"page_summary":"Acknowledgements page crediting contributors to the book."}',
+    assistant: '{"region_sequence":1,"regionType":"text","content_blocks":[{"block_type":"heading","level":1,"text":"Special Thanks to"},{"block_type":"paragraph","text":"Whenever a project of this size is put together, there are many people who give their time and extra effort to see it through."},{"block_type":"paragraph","text":"To Jon Pickens, who produced many obscure reference books."}],"reading_order_verified":true,"confidence":91}',
   },
   {
     user: "Extract all readable text from this page in reading order. Reply with ONLY a JSON object — start with { and end with }.",
-    assistant: '{"confidence":90,"content_blocks":[{"type":"heading","text":"Intelligence & Spell Knowledge","sequence":1},{"type":"paragraph","text":"The table below shows a wizard\'s chance to know each listed spell and the min/max spells per level based on Intelligence score.","sequence":2},{"type":"table","caption":"Chance to Know Each Listed Spell","headers":["Intelligence","Chance to Know Spell","Min Spells/Level","Max Spells/Level"],"rows":[["9","35%","6",""],["10","45%","7",""],["11","45%","7",""],["12","45%","7",""],["13","55%","9",""],["14","55%","9",""],["15","65%","11",""],["16","65%","11",""],["17","75%","14",""],["18","85%","18",""],["19","95%","All",""],["20","96%","All",""],["21","97%","All",""],["22","98%","All",""],["23","99%","All",""],["24","100%","All",""],["25","100%","All",""]],"sequence":3}],"page_summary":"Intelligence-based spell knowledge table for wizard characters showing chance to know spells and spells per level."}',
+    assistant: '{"region_sequence":1,"regionType":"text","content_blocks":[{"block_type":"heading","level":1,"text":"Ability Scores"},{"block_type":"paragraph","text":"The table below shows a wizard\'s chance to know each listed spell and the min/max spells per level based on Intelligence score."},{"block_type":"rule_term","term":"Darkvision","definition":"A creature with darkvision can see in dim light within a specified radius as if it were bright light.","formatting":["bold"]}],"reading_order_verified":true,"confidence":90}',
   },
 ];
 
@@ -164,18 +164,23 @@ position is the 1-based reading-order index where the break occurs.
 continues_from_previous_page: true when the first sentence is clearly a continuation.
 mid_sentence_break_at_end: true when the final sentence is incomplete (cut off at bottom of page).`;
 
-const PROMPT_TABULAR_EXTRACTION = `You are a table and stat block extraction specialist for TTRPG publications.
-Extract ALL tables, stat blocks, and structured data grids from this page image with complete accuracy.
+const PROMPT_TABULAR_EXTRACTION = `Perform specialized extraction on complex TTRPG tabular data (e.g., multi-row stat blocks, spell lists, merged-cell equipment tables).
 ${STRICT_RULES}
 
-Required output schema:
-{"tables":[{"type":"stat_block","caption":"Goblin","headers":["AC","HP","Speed"],"rows":[["15","7 (2d6)","30 ft."]],"ability_scores":{"STR":8,"DEX":14,"CON":10,"INT":10,"WIS":8,"CHA":8},"challenge_rating":"1/4","xp":50}]}
+Domain Rules:
+1. Preserve row/column relationships precisely. Handle merged headers by listing all spanned sub-headers in merged_cells.
+2. Retain all canonical abbreviations (e.g., MV, HD, AC, THAC0, STR, DEX, CON, INT, WIS, CHA, CR, XP, DC, d4/d20/etc). Never expand them.
+3. Extract footnotes and associate them accurately.
+4. Every row must have the same number of entries as column_headers. Use "" for blank cells.
+5. When a "--- Native PDF text ---" section appears in context, trust it for exact cell values, numbers, and special characters. The image is the authority for table structure; the native text is the authority for cell content.
 
-type must be one of: stat_block, generic, spell_list, equipment, ability_scores
-Preserve ALL columns, ALL rows, ALL headers exactly. Never truncate or merge cells.
-TTRPG abbreviations (AC, HP, STR, DEX, CON, INT, WIS, CHA, CR, XP, DC, d4/d6/d8/d10/d12/d20) must never be expanded.
-For stat_block type: include ability_scores, challenge_rating, and xp when visible.
-If no tables are present, return {"tables":[]}.`;
+table_type must be one of: stat_block, spell_list, equipment, combat, saving_throw, ability_score, class_features, random_table, other
+
+Required output schema (one table object per invocation):
+{"region_sequence":1,"table_type":"stat_block","caption":"Goblin","column_headers":["AC","HP","Speed"],"rows":[{"AC":"15","HP":"7 (2d6)","Speed":"30 ft."}],"merged_cells":[],"footnotes":[],"confidence":90}
+
+merged_cells format: [{"header":"Group Label","spans":["Sub-col1","Sub-col2"]}]
+If no table is present, return {"region_sequence":null,"table_type":"other","caption":null,"column_headers":[],"rows":[],"merged_cells":[],"footnotes":[],"confidence":0}`;
 
 const FEW_SHOT_CONTENT_BREAK: InvokeOptions["fewShotExamples"] = [
   {
@@ -195,15 +200,15 @@ const FEW_SHOT_CONTENT_BREAK: InvokeOptions["fewShotExamples"] = [
 const FEW_SHOT_TABULAR: InvokeOptions["fewShotExamples"] = [
   {
     user: "Extract ALL tables and stat blocks from this page with complete accuracy. Reply with ONLY a JSON object — start with { and end with }.",
-    assistant: '{"tables":[{"type":"stat_block","caption":"Goblin","headers":["AC","HP","Speed"],"rows":[["15 (leather armor, shield)","7 (2d6)","30 ft."]],"ability_scores":{"STR":8,"DEX":14,"CON":10,"INT":10,"WIS":8,"CHA":8},"challenge_rating":"1/4","xp":50}]}',
+    assistant: '{"region_sequence":2,"table_type":"stat_block","caption":"Goblin","column_headers":["AC","HP","Speed"],"rows":[{"AC":"15 (leather armor, shield)","HP":"7 (2d6)","Speed":"30 ft."}],"merged_cells":[],"footnotes":[],"confidence":90}',
   },
   {
     user: "Extract ALL tables and stat blocks from this page with complete accuracy. Reply with ONLY a JSON object — start with { and end with }.",
-    assistant: '{"tables":[{"type":"generic","caption":"Random Trinkets","headers":["d100","Trinket"],"rows":[["01","A mummified goblin hand"],["02","A piece of crystal that faintly glows in the moonlight"],["03","A small cloth doll skewered with needles"],["04","A copper coin minted in an unknown land"]]}]}',
+    assistant: '{"region_sequence":3,"table_type":"random_table","caption":"Random Trinkets","column_headers":["d100","Trinket"],"rows":[{"d100":"01","Trinket":"A mummified goblin hand"},{"d100":"02","Trinket":"A piece of crystal that faintly glows in the moonlight"},{"d100":"03","Trinket":"A small cloth doll skewered with needles"},{"d100":"04","Trinket":"A copper coin minted in an unknown land"}],"merged_cells":[],"footnotes":[],"confidence":95}',
   },
   {
     user: "Extract ALL tables and stat blocks from this page with complete accuracy. Reply with ONLY a JSON object — start with { and end with }.",
-    assistant: '{"tables":[{"type":"spell_list","caption":"Cleric Spells","headers":["Spell Level","Spell Name","Casting Time","Range","Duration"],"rows":[["Cantrip","Guidance","1 action","Touch","Concentration, up to 1 minute"],["Cantrip","Sacred Flame","1 action","60 ft.","Instantaneous"],["1st","Cure Wounds","1 action","Touch","Instantaneous"],["1st","Guiding Bolt","1 action","120 ft.","1 round"]]}]}',
+    assistant: '{"region_sequence":4,"table_type":"spell_list","caption":"Cleric Spells","column_headers":["Spell Level","Spell Name","Casting Time","Range","Duration"],"rows":[{"Spell Level":"Cantrip","Spell Name":"Guidance","Casting Time":"1 action","Range":"Touch","Duration":"Concentration, up to 1 minute"},{"Spell Level":"Cantrip","Spell Name":"Sacred Flame","Casting Time":"1 action","Range":"60 ft.","Duration":"Instantaneous"},{"Spell Level":"1st","Spell Name":"Cure Wounds","Casting Time":"1 action","Range":"Touch","Duration":"Instantaneous"}],"merged_cells":[],"footnotes":[],"confidence":93}',
   },
 ];
 
@@ -466,20 +471,27 @@ function coerceOcrData(data: Record<string, unknown>): Record<string, unknown> {
 /** Extract the printed page label (e.g. "i", "42") from OCR content blocks. */
 function extractPrintedPageLabel(data: Record<string, unknown>): string | null {
   if (!Array.isArray(data.content_blocks)) return null;
-  const block = (data.content_blocks as any[]).find((b: any) => b.type === "page_number");
+  const block = (data.content_blocks as any[]).find((b: any) => (b.block_type ?? b.type) === "page_number");
   const label = block?.text?.trim() ?? null;
   return label || null;
 }
 
 /** Extract readable text from a single OCR block (shared by buildRawText variants). */
 function blockToText(b: any): string {
-  if (b.type === "table") {
+  const btype = b.block_type ?? b.type;
+  if (btype === "table") {
     const caption = b.caption ? `[Table: ${b.caption}]\n` : "[Table]\n";
-    const headers = Array.isArray(b.headers) ? b.headers.join("\t") + "\n" : "";
+    const headers: string[] = Array.isArray(b.headers) ? b.headers : [];
+    const headerLine = headers.length > 0 ? headers.join("\t") + "\n" : "";
     const rows = Array.isArray(b.rows)
-      ? (b.rows as any[][]).map((r: any[]) => r.join("\t")).join("\n")
+      ? (b.rows as any[]).map(r =>
+          Array.isArray(r) ? r.join("\t") : headers.map(h => r[h] ?? "").join("\t"),
+        ).join("\n")
       : "";
-    return caption + headers + rows;
+    return caption + headerLine + rows;
+  }
+  if (btype === "rule_term") {
+    return b.term && b.definition ? `${b.term}: ${b.definition}` : (b.text ?? b.term ?? "");
   }
   return b.text ?? b.content ?? "";
 }
@@ -527,7 +539,7 @@ function buildCleanText(data: Record<string, unknown>): string {
   return buildRawText({
     ...data,
     content_blocks: (data.content_blocks as any[]).filter(
-      (b: any) => !NOISE_BLOCK_TYPES.has(b.type),
+      (b: any) => !NOISE_BLOCK_TYPES.has(b.block_type ?? b.type),
     ),
   });
 }
@@ -542,11 +554,13 @@ function buildMarkdownText(data: Record<string, unknown>): string {
   if (!Array.isArray(data.content_blocks)) return buildRawText(data);
 
   return (data.content_blocks as any[])
-    .filter((b: any) => !NOISE_BLOCK_TYPES.has(b.type))
+    .filter((b: any) => !NOISE_BLOCK_TYPES.has(b.block_type ?? b.type))
     .map((b: any) => {
-    switch (b.type) {
-      case "heading":    return `## ${b.text ?? ""}`;
+    const btype = b.block_type ?? b.type;
+    switch (btype) {
+      case "heading":    return b.level === 2 ? `### ${b.text ?? ""}` : `## ${b.text ?? ""}`;
       case "subheading": return `### ${b.text ?? ""}`;
+      case "rule_term":  return b.term && b.definition ? `**${b.term}**: ${b.definition}` : (b.text ? `**${b.text}**` : "");
       case "table": {
         const lines: string[] = [];
         if (b.caption) lines.push(`**${b.caption}**`);
@@ -556,10 +570,10 @@ function buildMarkdownText(data: Record<string, unknown>): string {
           lines.push(`| ${headers.map(() => "---").join(" | ")} |`);
         }
         if (Array.isArray(b.rows)) {
-          for (const row of b.rows as string[][]) {
-            const cells = headers.length > 0
+          for (const row of b.rows as any[]) {
+            const cells: string[] = Array.isArray(row)
               ? row.slice(0, headers.length).concat(Array(Math.max(0, headers.length - row.length)).fill(""))
-              : row;
+              : headers.map(h => String((row as Record<string, unknown>)[h] ?? ""));
             lines.push(`| ${cells.join(" | ")} |`);
           }
         }
@@ -572,8 +586,51 @@ function buildMarkdownText(data: Record<string, unknown>): string {
 }
 
 /**
+ * Normalise a single table object from any tabular extraction schema version into
+ * a canonical internal shape with array headers and array-of-arrays rows.
+ *
+ * New schema (v2): column_headers (string[]), rows (object[]), table_type, region_sequence
+ * Old schema (v1): headers (string[]), rows (string[][]), type
+ */
+function normaliseSingleTable(t: any): any {
+  const headers: string[] = Array.isArray(t.column_headers) ? t.column_headers
+    : Array.isArray(t.headers) ? t.headers : [];
+  const rawRows: any[] = Array.isArray(t.rows) ? t.rows : [];
+  const rows: string[][] = rawRows.map(row =>
+    Array.isArray(row) ? row
+      : headers.map(h => String((row as Record<string, unknown>)[h] ?? "")),
+  );
+  return {
+    type: t.table_type ?? t.type ?? "other",
+    caption: t.caption ?? t.entity_name ?? null,
+    headers,
+    rows,
+    ...(t.ability_scores    ? { ability_scores: t.ability_scores }     : {}),
+    ...(t.challenge_rating  ? { challenge_rating: t.challenge_rating } : {}),
+    ...(t.xp !== undefined  ? { xp: t.xp }                            : {}),
+    ...(t.region_sequence   ? { region_sequence: t.region_sequence }   : {}),
+    ...(t.merged_cells?.length  ? { merged_cells: t.merged_cells }     : {}),
+    ...(t.footnotes?.length     ? { footnotes: t.footnotes }           : {}),
+  };
+}
+
+/**
+ * Convert any tabular extraction response into a normalised array of table objects.
+ * Handles two schema shapes:
+ *   v1 (old): {"tables":[{type, headers, rows (array-of-arrays)}, …]}
+ *   v2 (new): {table_type, column_headers, rows (array-of-objects), …}  ← single table at root
+ */
+function normaliseTabularData(data: Record<string, unknown>): any[] {
+  if (Array.isArray(data.column_headers)) return [normaliseSingleTable(data)];
+  if (Array.isArray(data.tables)) return (data.tables as any[]).map(normaliseSingleTable);
+  return [];
+}
+
+/**
  * Merge higher-accuracy tabular_extraction results into OCR structured data.
  * Replaces existing table content_blocks in order; appends any extras found.
+ * With the new OCR schema (block_type), OCR won't produce table blocks, so
+ * extracted tables are always appended in that case.
  */
 function mergeTabularExtraction(
   ocrData: Record<string, unknown>,
@@ -583,33 +640,38 @@ function mergeTabularExtraction(
 
   let tableIdx = 0;
   const merged = (ocrData.content_blocks as any[]).map((block: any) => {
-    if (block.type !== "table" || tableIdx >= extractedTables.length) return block;
+    if ((block.block_type ?? block.type) !== "table" || tableIdx >= extractedTables.length) return block;
     const t = extractedTables[tableIdx++];
     return {
       type: "table",
-      caption: t.caption ?? t.entity_name ?? block.caption,
-      headers: t.headers ?? block.headers ?? [],
-      rows: t.rows ?? block.rows ?? [],
-      table_type: t.type,
-      ...(t.ability_scores    ? { ability_scores: t.ability_scores }     : {}),
-      ...(t.challenge_rating  ? { challenge_rating: t.challenge_rating } : {}),
-      ...(t.xp !== undefined  ? { xp: t.xp }                            : {}),
-      sequence: block.sequence,
-    };
-  });
-
-  // Append any extra tables not matched to an OCR block
-  while (tableIdx < extractedTables.length) {
-    const t = extractedTables[tableIdx++];
-    merged.push({
-      type: "table",
-      caption: t.caption ?? t.entity_name,
-      headers: t.headers ?? [],
-      rows: t.rows ?? [],
+      caption: t.caption ?? block.caption,
+      headers: t.headers,
+      rows: t.rows,
       table_type: t.type,
       ...(t.ability_scores   ? { ability_scores: t.ability_scores }     : {}),
       ...(t.challenge_rating ? { challenge_rating: t.challenge_rating } : {}),
       ...(t.xp !== undefined ? { xp: t.xp }                            : {}),
+      ...(t.merged_cells     ? { merged_cells: t.merged_cells }         : {}),
+      ...(t.footnotes        ? { footnotes: t.footnotes }               : {}),
+      sequence: block.sequence,
+    };
+  });
+
+  // Append any extra tables not matched to an existing OCR block (common with
+  // the new OCR schema which does not produce table-typed content_blocks).
+  while (tableIdx < extractedTables.length) {
+    const t = extractedTables[tableIdx++];
+    merged.push({
+      type: "table",
+      caption: t.caption,
+      headers: t.headers,
+      rows: t.rows,
+      table_type: t.type,
+      ...(t.ability_scores   ? { ability_scores: t.ability_scores }     : {}),
+      ...(t.challenge_rating ? { challenge_rating: t.challenge_rating } : {}),
+      ...(t.xp !== undefined ? { xp: t.xp }                            : {}),
+      ...(t.merged_cells     ? { merged_cells: t.merged_cells }         : {}),
+      ...(t.footnotes        ? { footnotes: t.footnotes }               : {}),
       sequence: merged.length + 1,
     });
   }
@@ -921,7 +983,10 @@ async function _runJob(jobId: number): Promise<void> {
         contextParts.push(`Layout analysis determined this page has ${columnCount} columns. Extract text from ALL columns in left-to-right, top-to-bottom reading order — do NOT stop after the first column.`);
       if (regions.length > 0)
         contextParts.push(`Content regions already detected: ${JSON.stringify(regions.slice(0, 5))}`);
-      const regionContext = contextParts.length > 0 ? contextParts.join("\n") : undefined;
+      const nativeText = nativePageTexts[i];
+      if (nativeText)
+        contextParts.push(`--- Native PDF text (ground-truth reference) ---\n${nativeText.slice(0, 6000)}\n--- End native PDF text ---`);
+      const regionContext = contextParts.length > 0 ? contextParts.join("\n\n") : undefined;
       const ocrContent: UserContentPart[] = [imgPart, { type: "text", text: "Extract all readable text from this page in reading order. Reply with ONLY a JSON object — start with { and end with }." }];
       const r = await invokeStage("ocr_extraction", ocrContent, regionContext, PROMPT_OCR_EXTRACTION,
         { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_OCR }, { pageId, jobId });
@@ -1038,9 +1103,13 @@ async function _runJob(jobId: number): Promise<void> {
       try {
         await updateIngestionJobStatus(jobId, { currentStage: "tabular_extraction" });
         const tableRegions = regions.filter((r: any) => r.type === "table" || r.type === "stat_block");
-        const tableCtx = tableRegions.length > 0
-          ? `Table/stat-block regions detected: ${JSON.stringify(tableRegions)}`
-          : undefined;
+        const tableCtxParts: string[] = [];
+        if (tableRegions.length > 0)
+          tableCtxParts.push(`Table/stat-block regions detected: ${JSON.stringify(tableRegions)}`);
+        const nativeTextForTable = nativePageTexts[i];
+        if (nativeTextForTable)
+          tableCtxParts.push(`--- Native PDF text (ground-truth reference) ---\n${nativeTextForTable.slice(0, 6000)}\n--- End native PDF text ---`);
+        const tableCtx = tableCtxParts.length > 0 ? tableCtxParts.join("\n\n") : undefined;
         const tabContent: UserContentPart[] = [
           imgPart,
           { type: "text", text: "Extract ALL tables and stat blocks from this page with complete accuracy. Reply with ONLY a JSON object — start with { and end with }." },
@@ -1048,11 +1117,12 @@ async function _runJob(jobId: number): Promise<void> {
         const tabResult = await invokeStage("tabular_extraction", tabContent, tableCtx, PROMPT_TABULAR_EXTRACTION,
           { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_TABULAR }, { pageId, jobId });
         const tabData = parseJsonResponse(tabResult.content);
+        const extractedTables = normaliseTabularData(tabData);
 
-        if (Array.isArray(tabData.tables) && tabData.tables.length > 0) {
+        if (extractedTables.length > 0) {
           const existing = await getOcrResultByPageId(pageId);
           if (existing?.structuredData) {
-            const mergedData = mergeTabularExtraction(existing.structuredData, tabData.tables);
+            const mergedData = mergeTabularExtraction(existing.structuredData, extractedTables);
             await updateOcrResult(existing.id, {
               structuredData: mergedData,
               rawText: buildRawText(mergedData),
@@ -1294,7 +1364,13 @@ export async function retryPageStages(
         const regionCtx = regions.length > 0
           ? `Reviewed content_regions (${regions.length}) in percent coordinates; use sequence order when present: ${JSON.stringify(regions.slice(0, 50))}`
           : undefined;
-        const reviewedContext = [layoutCtx, regionCtx].filter(Boolean).join("\n");
+        const pageNativeText = typeof (page as any).nativeText === "string" && (page as any).nativeText.trim()
+          ? (page as any).nativeText.trim()
+          : null;
+        const nativeCtx = pageNativeText
+          ? `--- Native PDF text (ground-truth reference) ---\n${pageNativeText.slice(0, 6000)}\n--- End native PDF text ---`
+          : undefined;
+        const reviewedContext = [layoutCtx, regionCtx, nativeCtx].filter(Boolean).join("\n\n");
         const fullContext = [surroundingContext, reviewedContext].filter(Boolean).join("\n\n") || undefined;
         const content: UserContentPart[] = [imgPart, {
           type: "text",
@@ -1303,10 +1379,16 @@ export async function retryPageStages(
         const r = await invokeStage("ocr_extraction", content, fullContext, PROMPT_OCR_EXTRACTION,
           { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_OCR }, { pageId, jobId: doc?.ingestionJobId ?? undefined });
         modelTrace.ocr_extraction = r.model;
+        console.log(`[Pipeline] Page ${pageId} retry ocr_extraction: model=${r.model} durationMs=${r.durationMs} raw=${JSON.stringify(r.content.slice(0, 400))}`);
         const data = coerceOcrData(parseRetryOcrResponse(r.content));
         ocrConfidence = typeof data.confidence === "number" ? data.confidence : 0;
 
         const rawText = buildRawText(data);
+        if (!rawText.trim()) {
+          // Model returned parseable JSON but with no extractable text — treat as
+          // a failed attempt so the existing OCR result is preserved unchanged.
+          throw new Error(`OCR retry produced empty text (confidence=${ocrConfidence}%) — model returned: ${JSON.stringify(r.content.slice(0, 300))}`);
+        }
         const markdownText = buildMarkdownText(data);
         const normalisedText = normaliseText(buildCleanText(data));
         const printedPageLabel = extractPrintedPageLabel(data);
