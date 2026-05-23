@@ -23,6 +23,14 @@ const TYPE_COLORS: Record<string, string> = {
 
 const DEFAULT_COLOR = "#94a3b8";
 
+/** Map legacy/model-output aliases to canonical types. Mirrors server-side REGION_TYPE_ALIASES. */
+const REGION_TYPE_ALIASES: Record<string, string> = {
+  text:      "paragraph",
+  image:     "illustration",
+  list_item: "list",
+  stat_line: "stat_block",
+};
+
 export type BboxRegion = {
   type?: string;
   regionType?: string;
@@ -146,7 +154,8 @@ export function BboxOverlay({
           preserveAspectRatio="none"
         >
           {normalised.map(({ region: r, box: { x, y, w, h } }, i) => {
-            const type = r.type ?? r.regionType ?? "unknown";
+            const rawType = r.type ?? r.regionType ?? "unknown";
+            const type = REGION_TYPE_ALIASES[rawType] ?? rawType;
             const color = TYPE_COLORS[type] ?? DEFAULT_COLOR;
             const labelY = y < 3 ? y + h - 0.5 : y + 2;
             return (

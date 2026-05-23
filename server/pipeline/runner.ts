@@ -70,7 +70,7 @@ ${STRICT_RULES}
 Required output schema (list every visible region):
 {"regions":[{"type":"…","label":"…","bbox":{"x":0,"y":0,"w":100,"h":100}}]}
 
-type must be one of: heading, subheading, paragraph, table, list, image, stat_block, sidebar, caption, header, footer, page_number
+type must be one of: heading, subheading, paragraph, list, sidebar, callout, caption, table, stat_block, illustration, map, graphic, advertisement, header, footer, page_number, unknown
 bbox values are percentages of the page width/height (0–100). x,y = top-left corner; w,h = width and height.
 Estimate bounding boxes as precisely as possible from the visual layout.`;
 
@@ -135,7 +135,7 @@ const FEW_SHOT_BBOX: InvokeOptions["fewShotExamples"] = [
   },
   {
     user: "Identify all distinct content regions on this page. Reply with ONLY a JSON object — start with { and end with }.",
-    assistant: '{"regions":[{"type":"image","label":"Full-page illustration: dungeon battle scene","bbox":{"x":0,"y":0,"w":100,"h":92}},{"type":"caption","label":"Illustration credit text","bbox":{"x":5,"y":93,"w":90,"h":4}}]}',
+    assistant: '{"regions":[{"type":"illustration","label":"Full-page illustration: dungeon battle scene","bbox":{"x":0,"y":0,"w":100,"h":92}},{"type":"caption","label":"Illustration credit text","bbox":{"x":5,"y":93,"w":90,"h":4}}]}',
   },
   {
     user: "Identify all distinct content regions on this page. Reply with ONLY a JSON object — start with { and end with }.",

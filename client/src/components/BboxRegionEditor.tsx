@@ -31,6 +31,21 @@ export const REGION_TYPES = [
   "unknown",
 ] as const;
 
+/** Map legacy/model-output aliases to canonical types. Mirrors server-side REGION_TYPE_ALIASES. */
+const REGION_TYPE_ALIASES: Record<string, string> = {
+  text:      "paragraph",
+  image:     "illustration",
+  list_item: "list",
+  stat_line: "stat_block",
+};
+
+const REGION_TYPES_SET = new Set<string>(REGION_TYPES);
+
+/** Normalise a raw type string: resolve aliases, fall back to "unknown". */
+function normaliseType(raw: string): string {
+  return REGION_TYPE_ALIASES[raw] ?? (REGION_TYPES_SET.has(raw) ? raw : "unknown");
+}
+
 type Box = { x: number; y: number; w: number; h: number };
 type DraftRegion = BboxRegion & {
   id: string;
@@ -106,7 +121,7 @@ function toPercentBoxes(regions: BboxRegion[]): Array<{ region: BboxRegion; box:
 
 function prepareDrafts(regions: BboxRegion[]): DraftRegion[] {
   return toPercentBoxes(regions).map(({ region, box }, index) => {
-    const type = String(region.type ?? region.regionType ?? "unknown");
+    const type = normaliseType(String(region.type ?? region.regionType ?? "unknown"));
     return {
       ...region,
       id: String((region as any).reviewId ?? `${index}-${type}-${box.x}-${box.y}`),
