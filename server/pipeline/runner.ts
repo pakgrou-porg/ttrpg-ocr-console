@@ -687,6 +687,124 @@ const NATIVE_SIMILARITY_THRESHOLD = 0.75;
 /** Content-block types that are page furniture, not body content. Suppressed in cleanText/markdown. */
 const NOISE_BLOCK_TYPES = new Set(["page_number"]);
 
+/** Region types that carry readable text content. */
+const TEXT_REGION_TYPES = new Set(["heading", "subheading", "paragraph", "text", "sidebar", "callout", "caption", "list", "list_item"]);
+/** Region types that carry tabular / structured game data. */
+const TABULAR_REGION_TYPES = new Set(["table", "stat_block", "stat_line"]);
+/** Region types that are purely visual / decorative. */
+const VISUAL_REGION_TYPES_EXPORT = new Set(["illustration", "image", "map", "graphic"]);
+/** Region types that are ornamental / advertising (no semantic content). */
+const DECORATIVE_REGION_TYPES = new Set(["advertisement", "header", "footer", "page_number"]);
+
+/**
+ * Derive a content_complexity summary from layout data, detected regions, and OCR blocks.
+ * This gives downstream consumers a quick signal about what kinds of content appear on the
+ * page without needing to parse the full content_blocks array.
+ */
+function buildContentComplexity(
+  layoutData: Record<string, unknown>,
+  regions: any[],
+  structuredData: Record<string, unknown> | null,
+): Record<string, unknown> {
+  const regionTypeSet = new Set<string>(regions.map((r: any) => String(r.type ?? "unknown")));
+  const regionTypes = Array.from(regionTypeSet).sort();
+
+  const blocks: any[] = Array.isArray(structuredData?.content_blocks) ? structuredData!.content_blocks as any[] : [];
+  const blockTypeSet = new Set<string>(
+    blocks.map((b: any) => String(b.block_type ?? b.type ?? "unknown"))
+      .filter(t => !NOISE_BLOCK_TYPES.has(t)),
+  );
+  const blockTypes = Array.from(blockTypeSet).sort();
+
+  const headingLevelSet = new Set<number>();
+  for (const b of blocks) {
+    if ((b.block_type ?? b.type) === "heading" && typeof b.level === "number") {
+      headingLevelSet.add(b.level);
+    }
+  }
+  const headingLevels = Array.from(headingLevelSet).sort((a, b) => a - b);
+
+  const hasTextContent   = regions.some((r: any) => TEXT_REGION_TYPES.has(r.type))    || blockTypes.some(t => ["heading", "paragraph", "stat_line", "rule_term"].includes(t));
+  const hasTabularContent = regions.some((r: any) => TABULAR_REGION_TYPES.has(r.type)) || layoutData.has_table === true || blockTypes.includes("table");
+  const hasVisualContent  = regions.some((r: any) => VISUAL_REGION_TYPES_EXPORT.has(r.type)) || layoutData.has_image_or_art === true;
+  const hasDecorativeContent = regions.some((r: any) => DECORATIVE_REGION_TYPES.has(r.type));
+
+  return {
+    region_types: regionTypes,
+    has_text_content: hasTextContent,
+    has_tabular_content: hasTabularContent,
+    has_visual_content: hasVisualContent,
+    has_decorative_content: hasDecorativeContent,
+    heading_levels: headingLevels,
+    block_types: blockTypes,
+  };
+}
+
+/**
+ * Assemble the comprehensive per-page JSON output written to documentPages.pageJsonOutput
+ * after all pipeline stages complete.  This is the canonical structured representation of
+ * what was extracted from the page and is used by the document export and RAG layer.
+ */
+function buildPageJsonOutput(params: {
+  pageNumber: number;
+  printedPageLabel: string | null;
+  layoutData: Record<string, unknown>;
+  regions: any[];
+  structuredData: Record<string, unknown> | null;
+  structuralBreaks: any[];
+  continuityFlags: any | null;
+  nativeText: string | null;
+  ocrConfidence: number;
+  nativeSimilarity: number | null;
+  stagesFailed: string[];
+  stagesCompleted: string[];
+}): Record<string, unknown> {
+  const {
+    pageNumber, printedPageLabel, layoutData, regions, structuredData,
+    structuralBreaks, continuityFlags, nativeText, ocrConfidence,
+    nativeSimilarity, stagesFailed, stagesCompleted,
+  } = params;
+
+  const contentBlocks: any[] = Array.isArray(structuredData?.content_blocks)
+    ? (structuredData!.content_blocks as any[]).filter((b: any) => !NOISE_BLOCK_TYPES.has(b.block_type ?? b.type))
+    : [];
+
+  // Sort content regions top-to-bottom, left-to-right for reading order
+  const sortedRegions = [...regions].sort(
+    (a, b) => ((a.bbox?.y ?? 0) - (b.bbox?.y ?? 0)) || ((a.bbox?.x ?? 0) - (b.bbox?.x ?? 0)),
+  );
+
+  return {
+    schema_version: "page_v1",
+    page_number: pageNumber,
+    printed_page_label: printedPageLabel,
+    layout: {
+      layout_type: layoutData.layout_type ?? null,
+      columns: layoutData.columns ?? 1,
+      has_table: layoutData.has_table ?? false,
+      has_image_or_art: layoutData.has_image_or_art ?? false,
+      has_list: layoutData.has_list ?? false,
+    },
+    content_complexity: buildContentComplexity(layoutData, regions, structuredData),
+    structural_position: {
+      structural_breaks: structuralBreaks,
+      continuity: continuityFlags ? {
+        continues_from_previous_page: continuityFlags.continuesFromPreviousPage ?? false,
+        continues_to_next_page:       continuityFlags.continuesToNextPage ?? false,
+        mid_sentence_break_at_end:    continuityFlags.midSentenceBreakAtEnd ?? false,
+        section_continues_from_previous_page: continuityFlags.sectionContinuesFromPreviousPage ?? false,
+      } : null,
+    },
+    content_regions: sortedRegions,
+    content_blocks: contentBlocks,
+    ocr_confidence: ocrConfidence,
+    native_similarity: nativeSimilarity,
+    ...(nativeText ? { native_pdf_text: nativeText } : {}),
+    stages_completed: stagesCompleted,
+    stages_failed: stagesFailed,
+  };
+}
+
 // ── Public entry point ────────────────────────────────────────────────────────
 
 export function startJob(jobId: number): void {
@@ -899,11 +1017,16 @@ async function _runJob(jobId: number): Promise<void> {
     const pagePath = pageFiles[i];         // preprocessed (binarized/grayscale) — use for text stages
     const rawPagePath = rawPageFiles[i];   // original full-colour — use for visual content stages
     const stagesFailed: string[] = [];
+    const stagesCompleted: string[] = [];
     let ocrConfidence = 0;
     let confidenceFromModel: number | null = null; // null = model didn't provide a score
     let nativeSimilarity: number | null = null;
     let ocrResultId: number | null = null;
     let currentRawText: string | null = null; // set when OCR succeeds; used by content_break_detect
+    // Captured for pageJsonOutput assembly at the end of per-page processing
+    let finalOcrStructuredData: Record<string, unknown> | null = null;
+    let capturedStructuralBreaks: any[] = [];
+    let capturedContinuityFlags: any = null;
 
     await updateIngestionJobStatus(jobId, { currentStage: "layout_analysis", processedPages });
 
@@ -951,6 +1074,7 @@ async function _runJob(jobId: number): Promise<void> {
 
     if (layoutSettled.status === "fulfilled") {
       layoutData = layoutSettled.value;
+      stagesCompleted.push("layout_analysis");
     } else {
       stagesFailed.push("layout_analysis");
       console.warn(`[Pipeline] Job ${jobId} p${pageNum} layout_analysis: ${layoutSettled.reason?.message}`);
@@ -958,6 +1082,7 @@ async function _runJob(jobId: number): Promise<void> {
 
     if (bboxSettled.status === "fulfilled") {
       regions = bboxSettled.value;
+      stagesCompleted.push("bbox_detection");
     } else {
       console.warn(`[Pipeline] Job ${jobId} p${pageNum} bbox_detection: ${bboxSettled.reason?.message}`);
     }
@@ -1022,6 +1147,8 @@ async function _runJob(jobId: number): Promise<void> {
       } as any);
       ocrResultId = ocrResult.id;
 
+      finalOcrStructuredData = data;
+      stagesCompleted.push("ocr_extraction");
       const printedPageLabel = extractPrintedPageLabel(data);
       await updateDocumentPage(pageId, {
         ocrCompleted: true, ocrConfidence,
@@ -1058,21 +1185,24 @@ async function _runJob(jobId: number): Promise<void> {
         const contObj = cbData.continuity as any;
         const breaks: any[] = Array.isArray(cbData.structural_breaks) ? cbData.structural_breaks : [];
 
+        capturedStructuralBreaks = breaks.map((b: any) => ({
+          breakType: b.break_type,
+          headingText: b.heading_text ?? "",
+          position: b.position ?? 1,
+        }));
+        if (contObj) {
+          capturedContinuityFlags = {
+            continuesFromPreviousPage:        !!contObj.continues_from_previous_page,
+            continuesToNextPage:              !!contObj.continues_to_next_page,
+            midSentenceBreakAtEnd:            !!contObj.mid_sentence_break_at_end,
+            sectionContinuesFromPreviousPage: !!contObj.section_continues_from_previous_page,
+          };
+        }
         await updateDocumentPage(pageId, {
-          ...(contObj ? {
-            continuityFlags: {
-              continuesFromPreviousPage:        !!contObj.continues_from_previous_page,
-              continuesToNextPage:              !!contObj.continues_to_next_page,
-              midSentenceBreakAtEnd:            !!contObj.mid_sentence_break_at_end,
-              sectionContinuesFromPreviousPage: !!contObj.section_continues_from_previous_page,
-            },
-          } : {}),
-          structuralBreaks: breaks.map((b: any) => ({
-            breakType: b.break_type,
-            headingText: b.heading_text ?? "",
-            position: b.position ?? 1,
-          })),
+          ...(capturedContinuityFlags ? { continuityFlags: capturedContinuityFlags } : {}),
+          structuralBreaks: capturedStructuralBreaks,
         });
+        stagesCompleted.push("content_break_detect");
 
         // Skeleton contentSummaries records — boundaries resolved after all pages are done
         for (const brk of breaks) {
@@ -1123,6 +1253,7 @@ async function _runJob(jobId: number): Promise<void> {
           const existing = await getOcrResultByPageId(pageId);
           if (existing?.structuredData) {
             const mergedData = mergeTabularExtraction(existing.structuredData, extractedTables);
+            finalOcrStructuredData = mergedData;
             await updateOcrResult(existing.id, {
               structuredData: mergedData,
               rawText: buildRawText(mergedData),
@@ -1133,6 +1264,7 @@ async function _runJob(jobId: number): Promise<void> {
             } as any);
           }
         }
+        stagesCompleted.push("tabular_extraction");
       } catch (err: any) {
         if (isConfigError(err)) {
           // tabular_extraction is optional — a missing inscription means "skip table enhancement"
@@ -1142,6 +1274,27 @@ async function _runJob(jobId: number): Promise<void> {
         }
       }
     }
+
+    // ── Assemble pageJsonOutput ─────────────────────────────────────────────
+    // Written to documentPages.pageJsonOutput so the full structured result is
+    // available for document export, RAG, and downstream consumers without
+    // having to join across pages + ocrResults + structural tables.
+    await updateDocumentPage(pageId, {
+      pageJsonOutput: buildPageJsonOutput({
+        pageNumber: pageNum,
+        printedPageLabel: extractPrintedPageLabel(finalOcrStructuredData ?? {}) ?? null,
+        layoutData,
+        regions,
+        structuredData: finalOcrStructuredData,
+        structuralBreaks: capturedStructuralBreaks,
+        continuityFlags: capturedContinuityFlags,
+        nativeText: nativePageTexts[i],
+        ocrConfidence,
+        nativeSimilarity,
+        stagesFailed,
+        stagesCompleted,
+      }),
+    });
 
     // Queue for HITL review: stage failure, low model confidence (only when the
     // model actually returned a score), or significant native-text divergence.

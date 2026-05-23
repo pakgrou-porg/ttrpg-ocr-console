@@ -1816,6 +1816,115 @@ export const appRouter = router({
         });
       }),
 
+    /**
+     * Export the complete structured output for a document: metadata, hierarchical content
+     * structure (chapters → sections → subsections), and per-page JSON assembled from all
+     * pipeline stages.  Pages without a stored pageJsonOutput fall back to a minimal record
+     * built from the columns available at query time.
+     */
+    exportFull: protectedProcedure
+      .input(z.object({ documentId: z.number().int() }))
+      .query(async ({ ctx, input }) => {
+        const doc = assertDocumentAccess(ctx, await getDocumentById(input.documentId));
+        const pages = await getPagesByDocumentId(input.documentId);
+        const summaries = await getContentSummariesByDocument(input.documentId);
+
+        // Batch-fetch OCR results only for pages that lack a stored pageJsonOutput
+        const pagesNeedingOcr = pages.filter(p => !p.pageJsonOutput);
+        const ocrMap = new Map<number, any>();
+        if (pagesNeedingOcr.length > 0) {
+          const ocrs = await getOcrResultsByPageIds(pagesNeedingOcr.map(p => p.id));
+          for (const r of ocrs) ocrMap.set(r.pageId, r);
+        }
+
+        // Build the nested chapter → section → subsection tree from flat content_summaries
+        const LEVEL_DEPTH: Record<string, number> = { chapter: 1, section: 2, subsection: 3, page: 4 };
+        const summaryNodes = summaries.map(s => ({
+          id: s.id,
+          level_type: s.levelType,
+          heading_text: s.headingText ?? null,
+          start_page: s.startPageNumber,
+          end_page: s.endPageNumber ?? null,
+          short_summary: s.shortSummary ?? null,
+          parent_id: s.parentId ?? null,
+          children: [] as any[],
+        }));
+        const nodeMap = new Map(summaryNodes.map(n => [n.id, n]));
+        const rootNodes: any[] = [];
+        for (const node of summaryNodes) {
+          if (node.parent_id && nodeMap.has(node.parent_id)) {
+            nodeMap.get(node.parent_id)!.children.push(node);
+          } else {
+            rootNodes.push(node);
+          }
+        }
+
+        const pageOutputs = pages.map(page => {
+          if (page.pageJsonOutput) {
+            return {
+              page_number: page.pageNumber,
+              printed_page_label: page.printedPageLabel ?? null,
+              layout_type: page.layoutType ?? null,
+              ocr_confidence: page.ocrConfidence ?? null,
+              is_flagged: page.isFlagged,
+              has_native_pdf_text: page.hasEmbeddedText,
+              page_output: page.pageJsonOutput,
+            };
+          }
+          // Fallback for pages processed before pageJsonOutput was introduced
+          const ocr = ocrMap.get(page.id) ?? null;
+          return {
+            page_number: page.pageNumber,
+            printed_page_label: page.printedPageLabel ?? null,
+            layout_type: page.layoutType ?? null,
+            ocr_confidence: ocr?.confidence ?? page.ocrConfidence ?? null,
+            is_flagged: page.isFlagged,
+            has_native_pdf_text: page.hasEmbeddedText,
+            page_output: {
+              schema_version: "page_v1_legacy",
+              page_number: page.pageNumber,
+              printed_page_label: page.printedPageLabel ?? null,
+              layout: {
+                layout_type: page.layoutType ?? null,
+                columns: (ocr?.layoutMetadata as any)?.columns ?? 1,
+                has_table: (ocr?.layoutMetadata as any)?.has_table ?? false,
+                has_image_or_art: (ocr?.layoutMetadata as any)?.has_image_or_art ?? false,
+                has_list: (ocr?.layoutMetadata as any)?.has_list ?? false,
+              },
+              content_regions: page.contentRegions ?? [],
+              structural_position: {
+                structural_breaks: page.structuralBreaks ?? [],
+                continuity: page.continuityFlags ?? null,
+              },
+              content_blocks: (ocr?.structuredData as any)?.content_blocks ?? [],
+              ocr_confidence: ocr?.confidence ?? page.ocrConfidence ?? null,
+              native_similarity: ocr?.nativeSimilarity ?? null,
+              ...(page.nativeText ? { native_pdf_text: page.nativeText } : {}),
+            },
+          };
+        });
+
+        return {
+          schema_version: "document_export_v1",
+          exported_at: new Date().toISOString(),
+          document: {
+            id: doc.id,
+            title: doc.title ?? doc.filename,
+            filename: doc.filename,
+            publisher: doc.publisher ?? null,
+            document_type: doc.documentType ?? null,
+            game_system: doc.gameSystem ?? null,
+            edition: doc.edition ?? null,
+            summary: doc.documentSummary ?? null,
+            total_pages: doc.totalPages,
+            avg_confidence: doc.avgConfidence,
+            status: doc.status,
+          },
+          content_structure: rootNodes,
+          pages: pageOutputs,
+        };
+      }),
+
     /** Get available document statuses */
     documentStatuses: protectedProcedure.query(() => {
       return DOCUMENT_STATUSES.map(s => ({
