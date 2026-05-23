@@ -1863,7 +1863,7 @@ export const appRouter = router({
           if (page.pageJsonOutput) {
             return {
               page_number: page.pageNumber,
-              printed_page_label: page.printedPageLabel ?? null,
+              printed_page_number: page.printedPageLabel ?? null,
               layout_type: page.layoutType ?? null,
               ocr_confidence: page.ocrConfidence ?? null,
               is_flagged: page.isFlagged,
@@ -1875,7 +1875,7 @@ export const appRouter = router({
           const ocr = ocrMap.get(page.id) ?? null;
           return {
             page_number: page.pageNumber,
-            printed_page_label: page.printedPageLabel ?? null,
+            printed_page_number: page.printedPageLabel ?? null,
             layout_type: page.layoutType ?? null,
             ocr_confidence: ocr?.confidence ?? page.ocrConfidence ?? null,
             is_flagged: page.isFlagged,
@@ -1883,7 +1883,8 @@ export const appRouter = router({
             page_output: {
               schema_version: "page_v1_legacy",
               sequence_number: page.pageNumber,
-              printed_page_label: page.printedPageLabel ?? null,
+              printed_page_number: page.printedPageLabel ?? null,
+              inferred_page_number: null,
               layout: {
                 layout_type: page.layoutType ?? null,
                 columns: (ocr?.layoutMetadata as any)?.columns ?? 1,

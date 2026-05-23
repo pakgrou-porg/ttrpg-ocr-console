@@ -12,9 +12,13 @@ import {
 import type { BboxRegion } from "@/components/BboxOverlay";
 
 export const REGION_TYPES = [
-  "text",
   "heading",
   "subheading",
+  "paragraph",
+  "list",
+  "sidebar",
+  "callout",
+  "caption",
   "table",
   "stat_block",
   "illustration",
@@ -24,9 +28,6 @@ export const REGION_TYPES = [
   "header",
   "footer",
   "page_number",
-  "caption",
-  "sidebar",
-  "callout",
   "unknown",
 ] as const;
 
@@ -40,22 +41,23 @@ type DraftRegion = BboxRegion & {
 };
 
 const TYPE_COLORS: Record<string, string> = {
-  heading: "#a855f7",
-  subheading: "#c084fc",
-  text: "#3b82f6",
-  table: "#f97316",
-  stat_block: "#eab308",
-  illustration: "#22c55e",
-  map: "#4ade80",
-  graphic: "#86efac",
+  heading:       "#a855f7",
+  subheading:    "#c084fc",
+  paragraph:     "#3b82f6",
+  list:          "#60a5fa",
+  sidebar:       "#14b8a6",
+  callout:       "#2dd4bf",
+  caption:       "#94a3b8",
+  table:         "#f97316",
+  stat_block:    "#eab308",
+  illustration:  "#22c55e",
+  map:           "#4ade80",
+  graphic:       "#86efac",
   advertisement: "#fb7185",
-  header: "#6b7280",
-  footer: "#6b7280",
-  page_number: "#9ca3af",
-  caption: "#94a3b8",
-  sidebar: "#14b8a6",
-  callout: "#2dd4bf",
-  unknown: "#94a3b8",
+  header:        "#6b7280",
+  footer:        "#6b7280",
+  page_number:   "#9ca3af",
+  unknown:       "#94a3b8",
 };
 
 function clamp(n: number, min: number, max: number) {
@@ -166,7 +168,7 @@ export function BboxRegionEditor({
 }) {
   const baseDrafts = useMemo(() => prepareDrafts(regions), [regions]);
   const [selectedId, setSelectedId] = useState<string | null>(baseDrafts[0]?.id ?? null);
-  const [drawType, setDrawType] = useState<string>("text");
+  const [drawType, setDrawType] = useState<string>("paragraph");
   const [interaction, setInteraction] = useState<null | {
     mode: "draw" | "move" | "resize";
     id?: string;

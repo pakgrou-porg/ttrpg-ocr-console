@@ -291,29 +291,43 @@ const LAYOUT_TYPE_ALIASES: Record<string, string> = {
   illustration: "illustration_with_text",
 };
 
+/** Canonical region types. These are the only values stored in contentRegions.type. */
 const REGION_TYPES = new Set([
-  "heading",
-  "subheading",
-  "paragraph",
-  "text",          // alias for paragraph used by some models and the editor
-  "table",
-  "list",
-  "list_item",
-  "image",
-  "illustration",  // alias for image
-  "map",
-  "graphic",
-  "advertisement",
-  "stat_block",
-  "stat_line",
-  "sidebar",
-  "callout",
-  "caption",
-  "header",
-  "footer",
-  "page_number",
+  // ── Headings ──────────────────────────────────────────────────
+  "heading",       // chapter/section title
+  "subheading",    // sub-section or minor heading
+  // ── Text content ──────────────────────────────────────────────
+  "paragraph",     // body text
+  "list",          // bulleted or numbered list
+  "sidebar",       // set-aside text box with supplementary content
+  "callout",       // highlighted note, tip, or warning box
+  "caption",       // descriptive text beneath an image or table
+  // ── Tabular / structured game data ────────────────────────────
+  "table",         // data table with rows and columns
+  "stat_block",    // game stat block (monster, NPC, item, etc.)
+  // ── Visual ────────────────────────────────────────────────────
+  "illustration",  // artwork, drawings, photographs
+  "map",           // cartographic or tactical map
+  "graphic",       // chart, diagram, or decorative non-photo visual
+  // ── Page furniture ────────────────────────────────────────────
+  "advertisement", // paid advertisement (common in magazines)
+  "header",        // running page header (book/chapter name)
+  "footer",        // running page footer
+  "page_number",   // printed page number area
+  // ── Fallback ──────────────────────────────────────────────────
   "unknown",
 ]);
+
+/**
+ * Backward-compat aliases: map legacy/model-output type names to canonical types.
+ * Applied in validateBboxRegions so stored data always uses canonical types.
+ */
+const REGION_TYPE_ALIASES: Record<string, string> = {
+  text:      "paragraph",   // old OCR schema alias
+  image:     "illustration", // generic image → illustration
+  list_item: "list",        // sub-item granularity not needed at region level
+  stat_line: "stat_block",  // stat_line is an OCR block concept, not a region type
+};
 
 function validateLayoutData(data: Record<string, unknown>): Record<string, unknown> {
   const rawType = String(data.layout_type ?? "").trim().toLowerCase();
@@ -413,7 +427,7 @@ function validateBboxRegions(data: Record<string, unknown>): any[] {
     const clampedW = Math.min(Math.max(0.1, w), 100 - x);
     const clampedH = Math.min(Math.max(0.1, h), 100 - y);
     const rawType = String(region.type ?? "paragraph").trim().toLowerCase();
-    const type = REGION_TYPES.has(rawType) ? rawType : "paragraph";
+    const type = REGION_TYPE_ALIASES[rawType] ?? (REGION_TYPES.has(rawType) ? rawType : "paragraph");
 
     return [{
       ...region,
@@ -688,11 +702,11 @@ const NATIVE_SIMILARITY_THRESHOLD = 0.75;
 const NOISE_BLOCK_TYPES = new Set(["page_number"]);
 
 /** Region/block types that indicate readable text content. */
-const TEXT_CONTENT_TYPES = new Set(["heading", "subheading", "paragraph", "sidebar", "callout", "caption", "list", "list_item", "stat_line", "rule_term"]);
+const TEXT_CONTENT_TYPES = new Set(["heading", "subheading", "paragraph", "sidebar", "callout", "caption", "list"]);
 /** Region/block types that indicate tabular or structured game data. */
 const TABULAR_CONTENT_TYPES = new Set(["table", "stat_block"]);
 /** Region types that are purely visual (images, maps, art). */
-const VISUAL_CONTENT_TYPES = new Set(["illustration", "image", "map", "graphic"]);
+const VISUAL_CONTENT_TYPES = new Set(["illustration", "map", "graphic"]);
 /** Region types that are ornamental or non-body (headers, footers, ads). */
 const DECORATIVE_CONTENT_TYPES = new Set(["advertisement", "header", "footer", "page_number"]);
 
@@ -769,11 +783,14 @@ function buildLayoutSection(
  *   Always starts at 1 for the first page the job processes, regardless of whether
  *   that page is a cover, front matter, or body page.
  *
- * printed_page_label: the label actually printed on the page (e.g. "i", "42").
+ * printed_page_number: the number actually printed on the page (e.g. "i", "42").
  *   Null for covers, decorative pages, or any page where no label was detected.
  *   Will frequently differ from sequence_number — a document whose cover is
- *   sequence_number=1 will typically have printed_page_label=null, and body text
- *   may start at sequence_number=13 with printed_page_label="1".
+ *   sequence_number=1 will typically have printed_page_number=null, and body text
+ *   may start at sequence_number=13 with printed_page_number="1".
+ *
+ * inferred_page_number: for pages with no printed number, a number inferred from
+ *   surrounding context. Null until resolved in a post-processing pass.
  */
 function buildPageJsonOutput(params: {
   pageNumber: number;
@@ -806,10 +823,12 @@ function buildPageJsonOutput(params: {
 
   return {
     schema_version: "page_v1",
-    /** Sequential 1-indexed position in the pipeline (PDF page order, not printed label). */
+    /** Sequential 1-indexed position in the pipeline (PDF page order, not printed number). */
     sequence_number: pageNumber,
-    /** Label printed on the page (null when absent — e.g. covers, unnumbered plates). */
-    printed_page_label: printedPageLabel,
+    /** Number printed on the page (null when absent — e.g. covers, unnumbered plates). */
+    printed_page_number: printedPageLabel,
+    /** Inferred page number for pages with no printed number; null until resolved post-processing. */
+    inferred_page_number: null,
     layout: buildLayoutSection(layoutData, regions, structuredData),
     structural_position: {
       structural_breaks: structuralBreaks,
