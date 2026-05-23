@@ -124,6 +124,7 @@ function PageCard({ page, jobId, onFlagged, timing }: {
   const sd = ocr?.structuredData as any;
   const blocks: any[] = Array.isArray(sd?.content_blocks) ? sd.content_blocks : [];
   const displayText = ocr?.rawText || (blocks.length > 0 ? blocks.map((b: any) => b.text ?? b.content ?? "").join("\n\n") : null);
+  const nativeText: string | null = page.nativeText ?? null;
   const regions = page.contentRegions;
 
   return (
@@ -210,10 +211,21 @@ function PageCard({ page, jobId, onFlagged, timing }: {
             )}
           </TabsList>
 
-          <TabsContent value="text">
-            <pre className="text-xs font-mono whitespace-pre-wrap break-words max-h-36 overflow-y-auto text-foreground/80 bg-background/30 rounded p-2 border border-border/30">
-              {displayText ?? <span className="text-muted-foreground italic">No OCR text extracted</span>}
-            </pre>
+          <TabsContent value="text" className="space-y-2">
+            <div>
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">OCR Extracted Text</p>
+              <pre className="text-xs font-mono whitespace-pre-wrap break-words max-h-36 overflow-y-auto text-foreground/80 bg-background/30 rounded p-2 border border-border/30">
+                {displayText ?? <span className="text-muted-foreground italic">No OCR text extracted</span>}
+              </pre>
+            </div>
+            {nativeText && (
+              <div>
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Native PDF Text</p>
+                <pre className="text-xs font-mono whitespace-pre-wrap break-words max-h-36 overflow-y-auto text-foreground/80 bg-background/30 rounded p-2 border border-border/30">
+                  {nativeText}
+                </pre>
+              </div>
+            )}
           </TabsContent>
 
           <TabsContent value="regions">
