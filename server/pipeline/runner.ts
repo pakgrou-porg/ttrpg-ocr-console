@@ -687,34 +687,52 @@ const NATIVE_SIMILARITY_THRESHOLD = 0.75;
 /** Content-block types that are page furniture, not body content. Suppressed in cleanText/markdown. */
 const NOISE_BLOCK_TYPES = new Set(["page_number"]);
 
-/** Region types that carry readable text content. */
-const TEXT_REGION_TYPES = new Set(["heading", "subheading", "paragraph", "text", "sidebar", "callout", "caption", "list", "list_item"]);
-/** Region types that carry tabular / structured game data. */
-const TABULAR_REGION_TYPES = new Set(["table", "stat_block", "stat_line"]);
-/** Region types that are purely visual / decorative. */
-const VISUAL_REGION_TYPES_EXPORT = new Set(["illustration", "image", "map", "graphic"]);
-/** Region types that are ornamental / advertising (no semantic content). */
-const DECORATIVE_REGION_TYPES = new Set(["advertisement", "header", "footer", "page_number"]);
+/** Region/block types that indicate readable text content. */
+const TEXT_CONTENT_TYPES = new Set(["heading", "subheading", "paragraph", "sidebar", "callout", "caption", "list", "list_item", "stat_line", "rule_term"]);
+/** Region/block types that indicate tabular or structured game data. */
+const TABULAR_CONTENT_TYPES = new Set(["table", "stat_block"]);
+/** Region types that are purely visual (images, maps, art). */
+const VISUAL_CONTENT_TYPES = new Set(["illustration", "image", "map", "graphic"]);
+/** Region types that are ornamental or non-body (headers, footers, ads). */
+const DECORATIVE_CONTENT_TYPES = new Set(["advertisement", "header", "footer", "page_number"]);
 
 /**
- * Derive a content_complexity summary from layout data, detected regions, and OCR blocks.
- * This gives downstream consumers a quick signal about what kinds of content appear on the
- * page without needing to parse the full content_blocks array.
+ * Build the consolidated `layout` section for pageJsonOutput.
+ *
+ * Merges signals from three sources:
+ *   - layoutData  : layout_analysis output (layout_type, columns, has_* flags)
+ *   - regions     : bbox_detection output  (region type names)
+ *   - structuredData : ocr_extraction output (block_type values)
+ *
+ * "text" is a legacy alias for "paragraph" emitted by some models; it is
+ * normalised away so content_types only ever contains "paragraph".
+ *
+ * content_types is a sorted, deduplicated list of every content kind detected
+ * on the page — from either the visual region detector or the OCR block extractor.
+ * This lets consumers answer "does this page have headings/tables/images?" from
+ * a single field without walking content_regions or content_blocks.
  */
-function buildContentComplexity(
+function buildLayoutSection(
   layoutData: Record<string, unknown>,
   regions: any[],
   structuredData: Record<string, unknown> | null,
 ): Record<string, unknown> {
-  const regionTypeSet = new Set<string>(regions.map((r: any) => String(r.type ?? "unknown")));
-  const regionTypes = Array.from(regionTypeSet).sort();
+  const typeSet = new Set<string>();
+
+  for (const r of regions) {
+    let t = String(r.type ?? "unknown");
+    if (t === "text") t = "paragraph"; // normalise legacy alias
+    typeSet.add(t);
+  }
 
   const blocks: any[] = Array.isArray(structuredData?.content_blocks) ? structuredData!.content_blocks as any[] : [];
-  const blockTypeSet = new Set<string>(
-    blocks.map((b: any) => String(b.block_type ?? b.type ?? "unknown"))
-      .filter(t => !NOISE_BLOCK_TYPES.has(t)),
-  );
-  const blockTypes = Array.from(blockTypeSet).sort();
+  for (const b of blocks) {
+    let t = String(b.block_type ?? b.type ?? "unknown");
+    if (t === "text") t = "paragraph"; // normalise legacy alias
+    typeSet.add(t);
+  }
+
+  const contentTypes = Array.from(typeSet).sort();
 
   const headingLevelSet = new Set<number>();
   for (const b of blocks) {
@@ -724,19 +742,21 @@ function buildContentComplexity(
   }
   const headingLevels = Array.from(headingLevelSet).sort((a, b) => a - b);
 
-  const hasTextContent   = regions.some((r: any) => TEXT_REGION_TYPES.has(r.type))    || blockTypes.some(t => ["heading", "paragraph", "stat_line", "rule_term"].includes(t));
-  const hasTabularContent = regions.some((r: any) => TABULAR_REGION_TYPES.has(r.type)) || layoutData.has_table === true || blockTypes.includes("table");
-  const hasVisualContent  = regions.some((r: any) => VISUAL_REGION_TYPES_EXPORT.has(r.type)) || layoutData.has_image_or_art === true;
-  const hasDecorativeContent = regions.some((r: any) => DECORATIVE_REGION_TYPES.has(r.type));
-
   return {
-    region_types: regionTypes,
-    has_text_content: hasTextContent,
-    has_tabular_content: hasTabularContent,
-    has_visual_content: hasVisualContent,
-    has_decorative_content: hasDecorativeContent,
+    /** Primary intent of the page — cover | title_page | toc | chapter_header | body_text | stat_block | table | illustration_full | illustration_with_text | index | appendix | mixed */
+    layout_type:    layoutData.layout_type ?? null,
+    /** Number of text columns detected (1–4). */
+    columns:        layoutData.columns ?? 1,
+    /** Every content type present on this page, sorted. Combines bbox region types and OCR block types. */
+    content_types:  contentTypes,
+    /** Heading levels present (e.g. [1, 2] means H1 + H2). Empty when no headings detected. */
     heading_levels: headingLevels,
-    block_types: blockTypes,
+    // ── Derived boolean flags for quick filtering ──
+    has_text:       contentTypes.some(t => TEXT_CONTENT_TYPES.has(t)),
+    has_tabular:    contentTypes.some(t => TABULAR_CONTENT_TYPES.has(t)) || layoutData.has_table === true,
+    has_visual:     contentTypes.some(t => VISUAL_CONTENT_TYPES.has(t)) || layoutData.has_image_or_art === true,
+    has_decorative: contentTypes.some(t => DECORATIVE_CONTENT_TYPES.has(t)),
+    has_list:       layoutData.has_list === true || contentTypes.includes("list") || contentTypes.includes("list_item"),
   };
 }
 
@@ -744,6 +764,16 @@ function buildContentComplexity(
  * Assemble the comprehensive per-page JSON output written to documentPages.pageJsonOutput
  * after all pipeline stages complete.  This is the canonical structured representation of
  * what was extracted from the page and is used by the document export and RAG layer.
+ *
+ * sequence_number: 1-indexed sequential position in the pipeline (PDF page order).
+ *   Always starts at 1 for the first page the job processes, regardless of whether
+ *   that page is a cover, front matter, or body page.
+ *
+ * printed_page_label: the label actually printed on the page (e.g. "i", "42").
+ *   Null for covers, decorative pages, or any page where no label was detected.
+ *   Will frequently differ from sequence_number — a document whose cover is
+ *   sequence_number=1 will typically have printed_page_label=null, and body text
+ *   may start at sequence_number=13 with printed_page_label="1".
  */
 function buildPageJsonOutput(params: {
   pageNumber: number;
@@ -776,22 +806,17 @@ function buildPageJsonOutput(params: {
 
   return {
     schema_version: "page_v1",
-    page_number: pageNumber,
+    /** Sequential 1-indexed position in the pipeline (PDF page order, not printed label). */
+    sequence_number: pageNumber,
+    /** Label printed on the page (null when absent — e.g. covers, unnumbered plates). */
     printed_page_label: printedPageLabel,
-    layout: {
-      layout_type: layoutData.layout_type ?? null,
-      columns: layoutData.columns ?? 1,
-      has_table: layoutData.has_table ?? false,
-      has_image_or_art: layoutData.has_image_or_art ?? false,
-      has_list: layoutData.has_list ?? false,
-    },
-    content_complexity: buildContentComplexity(layoutData, regions, structuredData),
+    layout: buildLayoutSection(layoutData, regions, structuredData),
     structural_position: {
       structural_breaks: structuralBreaks,
       continuity: continuityFlags ? {
-        continues_from_previous_page: continuityFlags.continuesFromPreviousPage ?? false,
-        continues_to_next_page:       continuityFlags.continuesToNextPage ?? false,
-        mid_sentence_break_at_end:    continuityFlags.midSentenceBreakAtEnd ?? false,
+        continues_from_previous_page:         continuityFlags.continuesFromPreviousPage ?? false,
+        continues_to_next_page:               continuityFlags.continuesToNextPage ?? false,
+        mid_sentence_break_at_end:            continuityFlags.midSentenceBreakAtEnd ?? false,
         section_continues_from_previous_page: continuityFlags.sectionContinuesFromPreviousPage ?? false,
       } : null,
     },

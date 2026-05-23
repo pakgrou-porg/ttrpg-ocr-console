@@ -1882,14 +1882,20 @@ export const appRouter = router({
             has_native_pdf_text: page.hasEmbeddedText,
             page_output: {
               schema_version: "page_v1_legacy",
-              page_number: page.pageNumber,
+              sequence_number: page.pageNumber,
               printed_page_label: page.printedPageLabel ?? null,
               layout: {
                 layout_type: page.layoutType ?? null,
                 columns: (ocr?.layoutMetadata as any)?.columns ?? 1,
-                has_table: (ocr?.layoutMetadata as any)?.has_table ?? false,
-                has_image_or_art: (ocr?.layoutMetadata as any)?.has_image_or_art ?? false,
-                has_list: (ocr?.layoutMetadata as any)?.has_list ?? false,
+                content_types: Array.isArray(page.contentRegions)
+                  ? Array.from(new Set((page.contentRegions as any[]).map((r: any) => r.type ?? "unknown"))).sort()
+                  : [],
+                has_text:      Array.isArray(page.contentRegions) && (page.contentRegions as any[]).some((r: any) => ["heading","paragraph","sidebar","text"].includes(r.type)),
+                has_tabular:   Array.isArray(page.contentRegions) && (page.contentRegions as any[]).some((r: any) => ["table","stat_block"].includes(r.type)) || (ocr?.layoutMetadata as any)?.has_table === true,
+                has_visual:    Array.isArray(page.contentRegions) && (page.contentRegions as any[]).some((r: any) => ["illustration","image","map","graphic"].includes(r.type)) || (ocr?.layoutMetadata as any)?.has_image_or_art === true,
+                has_decorative: Array.isArray(page.contentRegions) && (page.contentRegions as any[]).some((r: any) => ["advertisement","header","footer","page_number"].includes(r.type)),
+                has_list:      (ocr?.layoutMetadata as any)?.has_list === true,
+                heading_levels: [],
               },
               content_regions: page.contentRegions ?? [],
               structural_position: {
