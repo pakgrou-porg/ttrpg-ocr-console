@@ -232,9 +232,20 @@ function TextTab({ item, correction, onCorrect, onSave, isSaving }: TabProps) {
   const displayText = item.ocr?.rawText
     || (blocks.length > 0 ? blocks.map((b: any) => b.text ?? b.content ?? "").join("\n\n") : null);
 
+  const nativeText: string | null = item.page?.nativeText ?? null;
+
   return (
-    <div>
-      <JsonViewer value={displayText ?? "No OCR text extracted"} />
+    <div className="space-y-3">
+      <div>
+        <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">OCR Extracted Text</p>
+        <JsonViewer value={displayText ?? "No OCR text extracted"} />
+      </div>
+      {nativeText && (
+        <div>
+          <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Native PDF Text</p>
+          <JsonViewer value={nativeText} />
+        </div>
+      )}
       <CorrectionField label="Corrected text" value={correction} onChange={onCorrect} onSave={onSave} isSaving={isSaving} />
     </div>
   );

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type PointerEvent } from "react";
+import { useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { Move, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -191,6 +191,7 @@ export function BboxRegionEditor({
     original?: Box;
   }>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
+  const [kbMode, setKbMode] = useState<"none" | "move" | "resize">("none");
 
   const selected = baseDrafts.find(r => r.id === selectedId) ?? baseDrafts[0] ?? null;
 
@@ -309,6 +310,101 @@ export function BboxRegionEditor({
     }]);
   };
 
+  const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement;
+    // Don't intercept when focus is inside a form control
+    if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+    const key = e.key.toLowerCase();
+
+    switch (key) {
+      case "s": {
+        e.preventDefault();
+        e.nativeEvent.stopPropagation();
+        setKbMode(m => m === "resize" ? "none" : "resize");
+        break;
+      }
+      case "m": {
+        e.preventDefault();
+        e.nativeEvent.stopPropagation();
+        setKbMode(m => m === "move" ? "none" : "move");
+        break;
+      }
+      case "p": {
+        e.preventDefault();
+        e.nativeEvent.stopPropagation();
+        deleteSelected();
+        break;
+      }
+      case "t": {
+        if (!selected) break;
+        e.preventDefault();
+        e.nativeEvent.stopPropagation();
+        const idx = (REGION_TYPES as readonly string[]).indexOf(selected.type);
+        const next = REGION_TYPES[(idx < 0 ? 0 : idx + 1) % REGION_TYPES.length];
+        updateRegion(selected.id, { type: next, regionType: next });
+        break;
+      }
+      case "n": {
+        e.preventDefault();
+        e.nativeEvent.stopPropagation();
+        const newId = `new-${Date.now()}`;
+        setSelectedId(newId);
+        emit([...baseDrafts, {
+          id: newId,
+          sequence: baseDrafts.length + 1,
+          type: drawType,
+          regionType: drawType,
+          bbox: { x: 40, y: 40, w: 20, h: 10 },
+        }]);
+        break;
+      }
+      case "c": {
+        if (baseDrafts.length === 0) break;
+        e.preventDefault();
+        e.nativeEvent.stopPropagation();
+        const ci = baseDrafts.findIndex(r => r.id === selectedId);
+        setSelectedId(baseDrafts[(ci + 1) % baseDrafts.length].id);
+        break;
+      }
+      case "b": {
+        if (baseDrafts.length === 0) break;
+        e.preventDefault();
+        e.nativeEvent.stopPropagation();
+        const bi = baseDrafts.findIndex(r => r.id === selectedId);
+        setSelectedId(baseDrafts[(bi - 1 + baseDrafts.length) % baseDrafts.length].id);
+        break;
+      }
+      case "escape": {
+        e.preventDefault();
+        setKbMode("none");
+        break;
+      }
+      case "arrowup":
+      case "arrowdown":
+      case "arrowleft":
+      case "arrowright": {
+        if (kbMode === "none" || !selected || e.defaultPrevented) break;
+        e.preventDefault();
+        e.nativeEvent.stopPropagation();
+        const step = e.shiftKey ? 5 : 1;
+        if (kbMode === "move") {
+          const dx = key === "arrowleft" ? -step : key === "arrowright" ? step : 0;
+          const dy = key === "arrowup"   ? -step : key === "arrowdown"  ? step : 0;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          updateRegion(selected.id, { bbox: { x: clamp(selected.bbox.x + dx, 0, 100 - selected.bbox.w), y: clamp(selected.bbox.y + dy, 0, 100 - selected.bbox.h) } as any });
+        } else {
+          const dw = key === "arrowleft" ? -step : key === "arrowright" ? step : 0;
+          const dh = key === "arrowup"   ? -step : key === "arrowdown"  ? step : 0;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          updateRegion(selected.id, { bbox: { w: clamp(selected.bbox.w + dw, 0.5, 100 - selected.bbox.x), h: clamp(selected.bbox.h + dh, 0.5, 100 - selected.bbox.y) } as any });
+        }
+        break;
+      }
+    }
+  };
+
   const setSelectedBoxNumber = (key: keyof Box, value: string) => {
     if (!selected) return;
     const numeric = Number(value);
@@ -318,7 +414,8 @@ export function BboxRegionEditor({
   };
 
   return (
-    <div className="space-y-2">
+    // eslint-disable-next-line jsx-a11y/no-static-element-interactions
+    <div className="space-y-2" onKeyDown={handleKeyDown}>
       <div className="flex items-center gap-2 flex-wrap">
         <Select value={drawType} onValueChange={setDrawType}>
           <SelectTrigger size="sm" className="w-[150px]">
@@ -340,6 +437,15 @@ export function BboxRegionEditor({
           <Trash2 className="h-3.5 w-3.5" />
           Clear
         </Button>
+        {kbMode !== "none" ? (
+          <span className="text-xs px-2.5 py-0.5 rounded-full bg-primary/15 text-primary border border-primary/30 font-medium">
+            {kbMode === "move" ? "Move" : "Resize"} · arrows adjust · Shift+arrow×5 · Esc exit
+          </span>
+        ) : (
+          <span className="text-[11px] text-muted-foreground/40 ml-auto hidden md:block select-none">
+            S resize · M move · T type · P delete · N new · C next · B prev
+          </span>
+        )}
       </div>
 
       <div
