@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, ilike, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, lte, ne, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import {
@@ -1524,6 +1524,28 @@ export async function getPendingSummariesByDocument(documentId: number) {
  *     level (lower depth number), minus 1.  Last record of its level spans to document end.
  *   - parentId = the most recently opened record at the next-higher level.
  */
+export async function getOcrTextForPageRange(
+  documentId: number,
+  startPage: number,
+  endPage: number,
+): Promise<Array<{ pageNumber: number; rawText: string | null; markdownText: string | null }>> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({
+    pageNumber: documentPages.pageNumber,
+    rawText: ocrResults.rawText,
+    markdownText: ocrResults.markdownText,
+  })
+  .from(documentPages)
+  .leftJoin(ocrResults, eq(ocrResults.pageId, documentPages.id))
+  .where(and(
+    eq(documentPages.documentId, documentId),
+    gte(documentPages.pageNumber, startPage),
+    lte(documentPages.pageNumber, endPage),
+  ))
+  .orderBy(asc(documentPages.pageNumber));
+}
+
 export async function resolveContentSummaryBoundaries(documentId: number, totalPages: number) {
   const db = await getDb();
   if (!db) return;

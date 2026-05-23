@@ -1845,7 +1845,11 @@ export const appRouter = router({
           heading_text: s.headingText ?? null,
           start_page: s.startPageNumber,
           end_page: s.endPageNumber ?? null,
+          summary_status: s.summaryStatus,
           short_summary: s.shortSummary ?? null,
+          long_summary: s.longSummary ?? null,
+          key_terms: s.keyTerms ?? [],
+          key_entities: s.keyEntities ?? [],
           parent_id: s.parentId ?? null,
           children: [] as any[],
         }));

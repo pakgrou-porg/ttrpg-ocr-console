@@ -15,6 +15,9 @@ import {
   getOcrResultByPageId,
   getPageByDocumentAndNumber,
   createContentSummary,
+  updateContentSummary,
+  getPendingSummariesByDocument,
+  getOcrTextForPageRange,
   resolveContentSummaryBoundaries,
 } from "../db";
 import { invokeStage, parseJsonResponse, UserContentPart, InvokeOptions } from "./invoke";
@@ -181,6 +184,16 @@ Required output schema (one table object per invocation):
 
 merged_cells format: [{"header":"Group Label","spans":["Sub-col1","Sub-col2"]}]
 If no table is present, return {"region_sequence":null,"table_type":"other","caption":null,"column_headers":[],"rows":[],"merged_cells":[],"footnotes":[],"confidence":0}`;
+
+const PROMPT_SECTION_SUMMARY = `You are a content summariser for TTRPG publication sections.
+Given OCR-extracted text covering a chapter, section, or subsection, produce a structured summary.
+${STRICT_RULES}
+
+Required output schema:
+{"short_summary":"1–2 sentence overview of this section's content","long_summary":"Paragraph summarising the main topics, rules, creatures, or narrative covered in full","key_terms":["term1","term2"],"key_entities":["entity1","entity2"]}
+
+key_terms: rules mechanics, spells, abilities, conditions, or game concepts mentioned — 5–10 most important entries only
+key_entities: named creatures, NPCs, locations, magic items, or organisations — 5–10 most important entries only`;
 
 const FEW_SHOT_CONTENT_BREAK: InvokeOptions["fewShotExamples"] = [
   {
@@ -791,6 +804,14 @@ function buildLayoutSection(
  *
  * inferred_page_number: for pages with no printed number, a number inferred from
  *   surrounding context. Null until resolved in a post-processing pass.
+ *
+ * section_context: the chapter/section/subsection headings active at this page.
+ *   Derived by tracking heading breaks across all preceding pages in the job.
+ *
+ * structural_position.continuity.text_from_previous_page: the tail of the
+ *   previous page's OCR text when continues_from_previous_page is true.
+ *   Lets consumers reconstruct complete sentences/paragraphs that span a page
+ *   boundary without having to fetch and join adjacent pages.
  */
 function buildPageJsonOutput(params: {
   pageNumber: number;
@@ -805,11 +826,16 @@ function buildPageJsonOutput(params: {
   nativeSimilarity: number | null;
   stagesFailed: string[];
   stagesCompleted: string[];
+  /** Tail of the previous page's OCR text (~500 chars). Used when continues_from_previous_page. */
+  prevPageTailText: string | null;
+  /** Chapter/section/subsection headings active at this page, accumulated across the job. */
+  sectionContext: { chapter: string | null; section: string | null; subsection: string | null };
 }): Record<string, unknown> {
   const {
     pageNumber, printedPageLabel, layoutData, regions, structuredData,
     structuralBreaks, continuityFlags, nativeText, ocrConfidence,
     nativeSimilarity, stagesFailed, stagesCompleted,
+    prevPageTailText, sectionContext,
   } = params;
 
   const contentBlocks: any[] = Array.isArray(structuredData?.content_blocks)
@@ -830,10 +856,14 @@ function buildPageJsonOutput(params: {
     /** Inferred page number for pages with no printed number; null until resolved post-processing. */
     inferred_page_number: null,
     layout: buildLayoutSection(layoutData, regions, structuredData),
+    /** Where this page sits within the document hierarchy (chapter/section/subsection). */
+    section_context: sectionContext,
     structural_position: {
       structural_breaks: structuralBreaks,
       continuity: continuityFlags ? {
         continues_from_previous_page:         continuityFlags.continuesFromPreviousPage ?? false,
+        /** Tail of the previous page's text (~500 chars) when continues_from_previous_page is true. */
+        text_from_previous_page:              (continuityFlags.continuesFromPreviousPage && prevPageTailText) ? prevPageTailText : null,
         continues_to_next_page:               continuityFlags.continuesToNextPage ?? false,
         mid_sentence_break_at_end:            continuityFlags.midSentenceBreakAtEnd ?? false,
         section_continues_from_previous_page: continuityFlags.sectionContinuesFromPreviousPage ?? false,
@@ -847,6 +877,72 @@ function buildPageJsonOutput(params: {
     stages_completed: stagesCompleted,
     stages_failed: stagesFailed,
   };
+}
+
+// ── Post-processing: section summary generation ───────────────────────────────
+
+/**
+ * For every content_summary record still in "pending" status, gather the OCR
+ * text from its page range and invoke the section_summary stage to populate
+ * shortSummary, longSummary, keyTerms, and keyEntities.
+ *
+ * Called once per document after resolveContentSummaryBoundaries so that page
+ * ranges are final.  Non-fatal: a missing stage inscription is logged and the
+ * loop aborts cleanly; individual LLM failures mark the record "failed" and
+ * move on.
+ */
+async function generateSectionSummaries(documentId: number, jobId: number): Promise<void> {
+  const pending = await getPendingSummariesByDocument(documentId);
+  if (pending.length === 0) return;
+  console.log(`[Pipeline] Job ${jobId}: generating summaries for ${pending.length} content section(s)`);
+
+  for (const summary of pending) {
+    try {
+      const endPage = summary.endPageNumber ?? summary.startPageNumber;
+      const pages = await getOcrTextForPageRange(documentId, summary.startPageNumber, endPage);
+      const combinedText = pages
+        .map(p => p.rawText ?? "")
+        .filter(t => t.length > 0)
+        .join("\n\n---\n\n");
+
+      if (!combinedText.trim()) {
+        await updateContentSummary(summary.id, { summaryStatus: "skipped" });
+        continue;
+      }
+
+      const sectionLabel = [
+        summary.levelType,
+        summary.headingText ? `"${summary.headingText}"` : null,
+        `(pages ${summary.startPageNumber}–${endPage})`,
+      ].filter(Boolean).join(" ");
+
+      const content: UserContentPart[] = [{
+        type: "text",
+        text: `Summarise the following ${sectionLabel}.\n\n${combinedText.slice(0, 8000)}\n\nReply with ONLY a JSON object — start with { and end with }.`,
+      }];
+
+      const result = await invokeStage("section_summary", content, undefined, PROMPT_SECTION_SUMMARY,
+        { ...JSON_INVOKE_OPTS }, { jobId });
+      const data = parseJsonResponse(result.content);
+
+      await updateContentSummary(summary.id, {
+        shortSummary: typeof data.short_summary === "string" ? data.short_summary.slice(0, 500) : null,
+        longSummary: typeof data.long_summary === "string" ? data.long_summary.slice(0, 2000) : null,
+        keyTerms: Array.isArray(data.key_terms) ? (data.key_terms as string[]).slice(0, 20) : [],
+        keyEntities: Array.isArray(data.key_entities) ? (data.key_entities as string[]).slice(0, 20) : [],
+        summaryStatus: "complete",
+      });
+      console.log(`[Pipeline] Job ${jobId}: summarised ${sectionLabel}`);
+    } catch (err: any) {
+      if (isConfigError(err)) {
+        // section_summary stage not configured — silently skip all summaries
+        console.warn(`[Pipeline] Job ${jobId}: section_summary stage not configured, skipping summary generation`);
+        break;
+      }
+      console.warn(`[Pipeline] Job ${jobId}: section_summary for "${summary.headingText ?? summary.id}" failed: ${err.message}`);
+      await updateContentSummary(summary.id, { summaryStatus: "failed" }).catch(() => {});
+    }
+  }
 }
 
 // ── Public entry point ────────────────────────────────────────────────────────
@@ -1050,7 +1146,12 @@ async function _runJob(jobId: number): Promise<void> {
   // ── Per-page stages ───────────────────────────────────────────────────────
   const confidences: number[] = [];
   let processedPages = 0;
-  let prevRawText: string | null = null; // tail of previous page — fed to content_break_detect
+  let prevRawText: string | null = null;       // full text of previous page — fed to content_break_detect
+  let prevPageTailText: string | null = null;  // last ~500 chars of previous page — stored in pageJsonOutput continuation context
+  // Running section headings — updated as structural breaks are encountered across pages
+  let currentChapterHeading: string | null = null;
+  let currentSectionHeading: string | null = null;
+  let currentSubsectionHeading: string | null = null;
 
   // Region types that contain visual content — original image must be used for these.
   const VISUAL_REGION_TYPES = new Set(["illustration", "image", "map", "graphic", "advertisement"]);
@@ -1248,6 +1349,21 @@ async function _runJob(jobId: number): Promise<void> {
         });
         stagesCompleted.push("content_break_detect");
 
+        // Advance running section context — later pages inherit the deepest heading seen so far.
+        // A chapter break resets section/subsection; a section break resets subsection only.
+        for (const brk of capturedStructuralBreaks) {
+          if (brk.breakType === "chapter") {
+            currentChapterHeading = brk.headingText || null;
+            currentSectionHeading = null;
+            currentSubsectionHeading = null;
+          } else if (brk.breakType === "section") {
+            currentSectionHeading = brk.headingText || null;
+            currentSubsectionHeading = null;
+          } else if (brk.breakType === "subsection") {
+            currentSubsectionHeading = brk.headingText || null;
+          }
+        }
+
         // Skeleton contentSummaries records — boundaries resolved after all pages are done
         for (const brk of breaks) {
           if (brk.break_type && brk.break_type !== "none") {
@@ -1264,8 +1380,10 @@ async function _runJob(jobId: number): Promise<void> {
         if (isConfigError(err)) throw err;
         console.warn(`[Pipeline] Job ${jobId} p${pageNum} content_break_detect: ${err.message}`);
       }
-      // Advance so next page's content_break_detect gets THIS page as its prevRawText
+      // Advance so next page's content_break_detect gets THIS page as its prevRawText,
+      // and so pageJsonOutput can embed the tail as cross-page continuation context.
       prevRawText = currentRawText;
+      prevPageTailText = currentRawText.slice(-500);
     }
 
     // ── tabular_extraction ──────────────────────────────────────────────────
@@ -1337,6 +1455,12 @@ async function _runJob(jobId: number): Promise<void> {
         nativeSimilarity,
         stagesFailed,
         stagesCompleted,
+        prevPageTailText,
+        sectionContext: {
+          chapter: currentChapterHeading,
+          section: currentSectionHeading,
+          subsection: currentSubsectionHeading,
+        },
       }),
     });
 
@@ -1404,6 +1528,11 @@ async function _runJob(jobId: number): Promise<void> {
   if (!hasMore) {
     await resolveContentSummaryBoundaries(documentId, totalDocPages).catch(err =>
       console.warn(`[Pipeline] Job ${jobId}: resolveContentSummaryBoundaries failed: ${err.message}`)
+    );
+    // Generate short/long summaries for every chapter, section, and subsection.
+    // Runs after boundaries are resolved so endPageNumber is available for range queries.
+    await generateSectionSummaries(documentId, jobId).catch(err =>
+      console.warn(`[Pipeline] Job ${jobId}: section summary generation failed: ${err.message}`)
     );
   }
 
