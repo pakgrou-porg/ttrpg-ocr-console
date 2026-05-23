@@ -1080,13 +1080,26 @@ async function _runJob(jobId: number): Promise<number | null> {
     console.log(`[Pipeline] Job ${jobId}: downloaded "${fileName}" from Google Drive`);
   }
 
-  const createdDoc = await createDocument({
-    filename: basename(sourceFile),
-    gameSystem: job.gameSystem ?? undefined,
-    status: "phase1_non_ocr",
-    ingestionJobId: jobId,
-  });
-  const documentId = createdDoc.id;
+  // Chained block jobs carry the parent document's ID so all blocks write to the
+  // same document record.  First-block jobs have no documentId yet — they create
+  // the document and then store the ID back on their own job row so that (a) the
+  // chain creation below can forward it, and (b) recoverQueuedJobs finds it after
+  // a server restart.
+  const existingDocumentId = (job as any).documentId as number | null | undefined;
+  let documentId: number;
+  if (existingDocumentId) {
+    documentId = existingDocumentId;
+  } else {
+    const createdDoc = await createDocument({
+      filename: basename(sourceFile),
+      gameSystem: job.gameSystem ?? undefined,
+      status: "phase1_non_ocr",
+      ingestionJobId: jobId,
+    });
+    documentId = createdDoc.id;
+    // Persist so the chain job (and recovery) can reuse it
+    await updateIngestionJobStatus(jobId, { documentId } as any);
+  }
 
   // ── Stage: pdf_to_png ─────────────────────────────────────────────────────
   await updateIngestionJobStatus(jobId, { currentStage: "pdf_to_png" });
@@ -1581,9 +1594,11 @@ async function _runJob(jobId: number): Promise<number | null> {
     : 0;
 
   await updateDocument(documentId, {
-    processedPages,
+    // Accumulate across blocks: offset + this block's count
+    processedPages: pageOffset + processedPages,
     avgConfidence,
-    totalPages: pageFiles.length,
+    // Use true PDF page count when known; fall back to running high-water mark
+    totalPages: isFinite(totalDocPages) ? totalDocPages : pageOffset + pageFiles.length,
     status: "hitl_required",
   });
 
@@ -1624,6 +1639,7 @@ async function _runJob(jobId: number): Promise<number | null> {
       storageProvider: (job as any).storageProvider ?? "local",
       driveFileId: (job as any).driveFileId ?? null,
       gameSystem: job.gameSystem ?? null,
+      documentId,
       pageOffset: nextOffset,
       blockSize,
       status: "queued",

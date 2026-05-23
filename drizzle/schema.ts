@@ -134,6 +134,7 @@ export const ingestionJobs = pgTable("ingestion_jobs", {
   storageProvider: varchar("storage_provider", { length: 32 }).default("local").notNull(),
   driveFileId: varchar("drive_file_id", { length: 512 }),
   gameSystem: varchar("game_system", { length: 128 }),
+  documentId: integer("document_id"),
   pageOffset: integer("page_offset").default(0).notNull(),
   blockSize: integer("block_size").default(10).notNull(),
   status: varchar("status", { length: 32 }).default("queued").notNull(),
