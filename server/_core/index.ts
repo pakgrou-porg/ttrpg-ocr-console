@@ -11,6 +11,7 @@ import { serveStatic } from "./static";
 import { uploadRouter } from "../uploadRoutes";
 import { uploadIngestRouter } from "../uploadIngestRoute";
 import { sdk } from "./sdk";
+import { recoverQueuedJobs } from "../pipeline/runner";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -87,6 +88,13 @@ async function startServer() {
 
   server.listen(port, () => {
     console.log(`Server running on http://localhost:${port}/`);
+    // Re-enqueue any jobs that were queued when the server last stopped.
+    // Delay slightly so the DB connection pool is fully warmed before querying.
+    setTimeout(() => {
+      recoverQueuedJobs().catch(err =>
+        console.error("[Pipeline] Failed to recover queued jobs:", err.message)
+      );
+    }, 3000);
   });
 }
 

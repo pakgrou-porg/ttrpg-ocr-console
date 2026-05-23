@@ -18,7 +18,17 @@ pipeline:
   # Pages with OCR confidence below this percentage are queued for HITL review.
   hitlConfidenceThreshold: 80
 
+  # Maximum number of documents processed simultaneously.
+  # Each document holds one slot for all of its page blocks (e.g. pages 1–10,
+  # then pages 11–20, etc.). Only NEW documents wait for a free slot; chained
+  # blocks for the same document are never delayed.
+  # Increase to match your LLM server capacity: 2 is safe for a 4-slot model
+  # with maxLlmConcurrency=2 (2 docs × 2 concurrent LLM calls/page = 4 slots).
+  maxConcurrentDocuments: 2
+
   # Maximum number of pages that may be in LLM inference simultaneously.
+  # Within each page, layout_analysis and bbox_detection run concurrently
+  # (2 LLM calls), so maxLlmConcurrency=2 with maxConcurrentDocuments=2 = 4.
   # Lower this if the local inference server timeouts under load.
   maxLlmConcurrency: 4
 

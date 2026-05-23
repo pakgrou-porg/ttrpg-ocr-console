@@ -27,6 +27,8 @@ export interface PipelineConfig {
     pdfDpi: number;
     hitlConfidenceThreshold: number;
     maxLlmConcurrency: number;
+    /** Maximum number of documents processed simultaneously. Default 2. */
+    maxConcurrentDocuments: number;
   };
   binarize: BinarizeConfig;
 }
@@ -41,6 +43,7 @@ const DEFAULTS: PipelineConfig = {
     // bbox_detection run concurrently (2 LLM calls), which already fills a
     // 2-slot local model. Raise to 2 for a 4-slot model.
     maxLlmConcurrency: 1,
+    maxConcurrentDocuments: 2,
   },
   binarize: {
     enabled: true,
@@ -86,7 +89,8 @@ function loadConfig(): PipelineConfig {
     pipeline: {
       pdfDpi:                   num(pipeline.pdfDpi,                  DEFAULTS.pipeline.pdfDpi),
       hitlConfidenceThreshold:  num(pipeline.hitlConfidenceThreshold, DEFAULTS.pipeline.hitlConfidenceThreshold),
-      maxLlmConcurrency:        num(pipeline.maxLlmConcurrency,       DEFAULTS.pipeline.maxLlmConcurrency),
+      maxLlmConcurrency:        num(pipeline.maxLlmConcurrency,        DEFAULTS.pipeline.maxLlmConcurrency),
+      maxConcurrentDocuments:   num(pipeline.maxConcurrentDocuments,   DEFAULTS.pipeline.maxConcurrentDocuments),
     },
     binarize: {
       enabled:      bool(binarize.enabled,      DEFAULTS.binarize.enabled),

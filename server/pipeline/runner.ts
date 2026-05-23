@@ -5,7 +5,7 @@ import { join, basename } from "path";
 import { pipelineConfig } from "./config";
 import type { BinarizeConfig } from "./config";
 import {
-  getIngestionJobById, updateIngestionJobStatus,
+  getIngestionJobById, getActiveIngestionJobs, updateIngestionJobStatus,
   createIngestionJob,
   createDocument, updateDocument,
   createDocumentPage, updateDocumentPage,
@@ -238,11 +238,58 @@ const JSON_INVOKE_OPTS: Partial<InvokeOptions> = {
   },
 };
 
-// ── Concurrency limiter ───────────────────────────────────────────────────────
-// Limits the number of pages processed simultaneously across all active jobs.
-// Within each page, layout_analysis and bbox_detection run concurrently (2 LLM
-// calls in parallel), so maxLlmConcurrency=1 already saturates a 2-slot local
-// model. Set to 2 in pipeline-config.yaml for a 4-slot model.
+// ── Document-level concurrency queue ─────────────────────────────────────────
+// At most maxConcurrentDocuments documents process at once. "First-block" jobs
+// (new documents) enter pendingJobIds via startJob() and are dispatched when a
+// slot opens. Chained block jobs (pages 11–20, 21–30, …) of the same document
+// run serially inside a single runDocumentChain() call — they never re-queue.
+//
+// Slot lifecycle:
+//   startJob()        → pushes to pendingJobIds, calls drainQueue()
+//   drainQueue()      → if slot available, pops next jobId, increments activeDocCount,
+//                       launches runDocumentChain()
+//   runDocumentChain  → loops runJobBlock() until null (done) or exception
+//                       → releases slot on exit, calls drainQueue() for next doc
+//
+// This guarantees:
+//   • max maxConcurrentDocuments documents active simultaneously
+//   • chained blocks for the same document never wait for a new slot
+//   • a slot is held for the full document lifetime, released on completion or error
+
+const MAX_CONCURRENT_DOCS: number = pipelineConfig.pipeline.maxConcurrentDocuments;
+let activeDocCount = 0;
+const pendingJobIds: number[] = [];
+
+function drainQueue(): void {
+  while (activeDocCount < MAX_CONCURRENT_DOCS && pendingJobIds.length > 0) {
+    const jobId = pendingJobIds.shift()!;
+    activeDocCount++;
+    console.log(`[Pipeline] Dispatching job ${jobId} (${activeDocCount}/${MAX_CONCURRENT_DOCS} active documents, ${pendingJobIds.length} queued)`);
+    setImmediate(() => void runDocumentChain(jobId));
+  }
+}
+
+/** Run all blocks of one document serially, holding a single slot for the duration. */
+async function runDocumentChain(firstJobId: number): Promise<void> {
+  let nextJobId: number | null = firstJobId;
+  try {
+    while (nextJobId !== null) {
+      nextJobId = await runJobBlock(nextJobId);
+    }
+  } catch (err: any) {
+    // runJobBlock itself catches errors — this is a safety net for unexpected throws
+    console.error(`[Pipeline] Unexpected error in document chain starting at job ${firstJobId}:`, err.message);
+  } finally {
+    activeDocCount--;
+    console.log(`[Pipeline] Document slot released (${activeDocCount}/${MAX_CONCURRENT_DOCS} active, ${pendingJobIds.length} queued)`);
+    drainQueue();
+  }
+}
+
+// ── Page-level LLM concurrency limiter ───────────────────────────────────────
+// Limits concurrent LLM calls across all active documents. Within each page,
+// layout_analysis and bbox_detection run concurrently (2 LLM calls), so
+// maxLlmConcurrency=2 with maxConcurrentDocuments=2 saturates a 4-slot model.
 
 class Semaphore {
   private slots: number;
@@ -945,22 +992,50 @@ async function generateSectionSummaries(documentId: number, jobId: number): Prom
   }
 }
 
-// ── Public entry point ────────────────────────────────────────────────────────
+// ── Public entry points ───────────────────────────────────────────────────────
 
+/**
+ * Enqueue a new document job.  If a concurrency slot is free it starts immediately;
+ * otherwise it waits in pendingJobIds until one opens.
+ * Called from the tRPC router and the file-upload route.
+ */
 export function startJob(jobId: number): void {
-  setImmediate(() => {
-    runJob(jobId).catch(err => {
-      console.error(`[Pipeline] Job ${jobId} unhandled error:`, err);
-    });
-  });
+  pendingJobIds.push(jobId);
+  console.log(`[Pipeline] Job ${jobId} queued (${pendingJobIds.length} pending, ${activeDocCount}/${MAX_CONCURRENT_DOCS} active)`);
+  drainQueue();
+}
+
+/**
+ * On server restart, any job still at status "queued" in the DB was sitting in
+ * the in-memory pendingJobIds when the process exited.  Re-enqueue them in
+ * creation order so processing resumes without manual intervention.
+ * Jobs that were mid-processing ("pass1_ocr" etc.) are left for the operator to
+ * restart explicitly from the UI.
+ */
+export async function recoverQueuedJobs(): Promise<void> {
+  const jobs = await getActiveIngestionJobs();
+  const queued = jobs
+    .filter(j => j.status === "queued")
+    .sort((a, b) => (a.createdAt?.getTime() ?? 0) - (b.createdAt?.getTime() ?? 0));
+  if (queued.length === 0) return;
+  console.log(`[Pipeline] Recovering ${queued.length} queued job(s) from previous session`);
+  for (const job of queued) {
+    pendingJobIds.push(job.id);
+  }
+  drainQueue();
 }
 
 // ── Internal runner ───────────────────────────────────────────────────────────
 
-async function runJob(jobId: number): Promise<void> {
+/**
+ * Run one block job.  Returns the next chained job ID when more pages remain,
+ * or null when the document is fully processed or the job failed.
+ * Errors are caught here; runDocumentChain's loop treats null as "done".
+ */
+async function runJobBlock(jobId: number): Promise<number | null> {
   console.log(`[Pipeline] Starting job ${jobId}`);
   try {
-    await _runJob(jobId);
+    return await _runJob(jobId);
   } catch (err: any) {
     console.error(`[Pipeline] Job ${jobId} failed:`, err.message);
     await updateIngestionJobStatus(jobId, {
@@ -968,10 +1043,11 @@ async function runJob(jobId: number): Promise<void> {
       errorMessage: err.message,
       completedAt: new Date(),
     }).catch(() => {});
+    return null;
   }
 }
 
-async function _runJob(jobId: number): Promise<void> {
+async function _runJob(jobId: number): Promise<number | null> {
   const job = await getIngestionJobById(jobId);
   if (!job) throw new Error(`Job ${jobId} not found`);
 
@@ -1552,8 +1628,11 @@ async function _runJob(jobId: number): Promise<void> {
       blockSize,
       status: "queued",
     } as any);
-    startJob(nextJobId);
+    // Return the next job ID — runDocumentChain will start it immediately in the
+    // same slot, bypassing the queue (same document, same concurrency slot).
+    return nextJobId;
   }
+  return null;
 }
 
 // ── Page retry (called from HITL UI) ─────────────────────────────────────────
