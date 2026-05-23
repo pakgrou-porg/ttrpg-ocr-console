@@ -468,6 +468,132 @@ export default function OverseeScribes() {
   const hasFailed   = (jobs ?? []).some((j: any) => j.status === "failed");
   const hasCompleted = (jobs ?? []).some((j: any) => j.status === "completed");
 
+  const FINISHED_STATUSES = new Set(["completed", "failed", "review"]);
+
+  // Split jobs into three buckets:
+  //   running  — actively processing (any non-queued, non-finished status)
+  //   queued   — waiting for a concurrency slot, FIFO: lowest id (oldest) first
+  //   finished — completed / failed / review
+  const { runningJobs, queuedJobs, finishedJobs } = useMemo(() => {
+    const all = (jobs as any[] ?? []);
+    return {
+      runningJobs:  all.filter(j => j.status !== "queued" && !FINISHED_STATUSES.has(j.status))
+                       .sort((a: any, b: any) => b.id - a.id),
+      queuedJobs:   all.filter(j => j.status === "queued")
+                       .sort((a: any, b: any) => a.id - b.id),
+      finishedJobs: all.filter(j => FINISHED_STATUSES.has(j.status))
+                       .sort((a: any, b: any) => b.id - a.id),
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobs]);
+
+  const renderJobRow = (job: any) => {
+    const style       = getStatusStyle(job.status);
+    const progress    = job.totalPages > 0 ? Math.round((job.processedPages / job.totalPages) * 100) : 0;
+    const progressColor = job.status === "completed" ? "bg-green-500" : job.status === "failed" ? "bg-red-500" : "bg-blue-500";
+    const isErrExpanded = expandedJobId === job.id;
+    const isBrowsing  = browsingJobId === job.id;
+    const isMetrics   = metricsJobId === job.id;
+    const pageOffset  = job.pageOffset ?? 0;
+    const blockSize   = job.blockSize  ?? 10;
+    const blockLabel  = `pp. ${pageOffset + 1}–${pageOffset + blockSize}`;
+    const isChecked   = selectedJobIds.has(job.id);
+
+    return (
+      <div key={job.id}>
+        <div className="flex items-center gap-3 px-4 py-3 hover:bg-muted/10 transition-colors">
+          <Checkbox
+            checked={isChecked}
+            onCheckedChange={() => toggleSelectJob(job.id)}
+            aria-label={`Select JOB-${job.id}`}
+            className="flex-shrink-0"
+          />
+          <span className="font-mono text-sm w-20 flex-shrink-0">JOB-{job.id}</span>
+
+          <div className="flex-1 min-w-0">
+            <div className="font-medium text-sm truncate" title={job.sourceFile}>{job.sourceFile}</div>
+            <div className="text-xs text-muted-foreground">{blockLabel}</div>
+          </div>
+
+          {/* Progress */}
+          <div className="flex flex-col gap-1 flex-shrink-0 w-32">
+            <div className="flex items-center justify-between text-xs font-mono">
+              <span>{job.processedPages ?? 0}/{job.totalPages ?? 0} pp</span>
+              <span className="text-muted-foreground">{progress}%</span>
+            </div>
+            <div className="bg-muted rounded-full h-1.5">
+              <div className={`${progressColor} h-1.5 rounded-full transition-all`} style={{ width: `${progress}%` }} />
+            </div>
+          </div>
+
+          {/* Status */}
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium ${style.bg} ${style.text} border border-current/20`}>
+              {style.dot && <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />}
+              {job.status.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())}
+            </span>
+            {job.errorMessage && (
+              <button onClick={() => setExpandedJobId(isErrExpanded ? null : job.id)} className="text-red-400 hover:text-red-300">
+                {isErrExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+              </button>
+            )}
+          </div>
+
+          {/* Started */}
+          <span className="text-xs text-muted-foreground flex-shrink-0 w-32 text-right">
+            {job.startedAt ? new Date(job.startedAt).toLocaleString() : "—"}
+          </span>
+
+          {/* Actions */}
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            <Button size="sm" variant={isBrowsing ? "secondary" : "outline"} className="h-7 text-xs gap-1.5"
+              onClick={() => setBrowsingJobId(isBrowsing ? null : job.id)}>
+              <Eye className="w-3 h-3" />
+              {isBrowsing ? "Close" : "Browse Pages"}
+            </Button>
+            <Button size="sm" variant={isMetrics ? "secondary" : "outline"} className="h-7 text-xs gap-1.5"
+              onClick={() => setMetricsJobId(isMetrics ? null : job.id)}>
+              <BarChart2 className="w-3 h-3" />
+              {isMetrics ? "Close" : "Metrics"}
+            </Button>
+            {["queued", "converting", "pass1_ocr", "pass2_ocr", "enriching"].includes(job.status) && (
+              <button onClick={() => cancelMut.mutate({ id: job.id })} disabled={cancelMut.isPending}
+                title="Cancel job chain" className="text-muted-foreground hover:text-orange-400 transition-colors p-1">
+                <Pause className="w-3.5 h-3.5" />
+              </button>
+            )}
+            <button
+              onClick={() => { if (confirm(`Purge all pages for JOB-${job.id}?`)) purgeMut.mutate({ id: job.id }); }}
+              disabled={purgeMut.isPending} title="Purge pages" className="text-muted-foreground hover:text-yellow-400 transition-colors p-1">
+              <RotateCcw className="w-3.5 h-3.5" />
+            </button>
+            <button onClick={() => deleteMut.mutate({ id: job.id })} disabled={deleteMut.isPending}
+              className="text-muted-foreground hover:text-destructive transition-colors p-1" title="Delete job record">
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Error expansion */}
+        {isErrExpanded && job.errorMessage && (
+          <div className="px-4 py-2 bg-red-500/5 border-t border-red-500/20">
+            <p className="text-xs font-mono text-red-400 whitespace-pre-wrap break-all">{job.errorMessage}</p>
+          </div>
+        )}
+
+        {/* Page browser */}
+        {isBrowsing && (
+          <JobPageBrowser jobId={job.id} onClose={() => setBrowsingJobId(null)} />
+        )}
+
+        {/* Metrics panel */}
+        {isMetrics && (
+          <JobMetricsPanel jobId={job.id} onClose={() => setMetricsJobId(null)} />
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       <div>
@@ -592,112 +718,46 @@ export default function OverseeScribes() {
                 />
                 <span className="text-xs text-muted-foreground">Select all</span>
               </div>
-              {(jobs as any[]).map((job: any) => {
-                const style       = getStatusStyle(job.status);
-                const progress    = job.totalPages > 0 ? Math.round((job.processedPages / job.totalPages) * 100) : 0;
-                const progressColor = job.status === "completed" ? "bg-green-500" : job.status === "failed" ? "bg-red-500" : "bg-blue-500";
-                const isErrExpanded = expandedJobId === job.id;
-                const isBrowsing  = browsingJobId === job.id;
-                const isMetrics   = metricsJobId === job.id;
-                const pageOffset  = job.pageOffset ?? 0;
-                const blockSize   = job.blockSize  ?? 10;
-                const blockLabel  = `pp. ${pageOffset + 1}–${pageOffset + blockSize}`;
-                const isChecked   = selectedJobIds.has(job.id);
 
-                return (
-                  <div key={job.id}>
-                    <div className="flex items-center gap-3 px-4 py-3 hover:bg-muted/10 transition-colors">
-                      <Checkbox
-                        checked={isChecked}
-                        onCheckedChange={() => toggleSelectJob(job.id)}
-                        aria-label={`Select JOB-${job.id}`}
-                        className="flex-shrink-0"
-                      />
-                      <span className="font-mono text-sm w-20 flex-shrink-0">JOB-{job.id}</span>
-
-                      <div className="flex-1 min-w-0">
-                        <div className="font-medium text-sm truncate" title={job.sourceFile}>{job.sourceFile}</div>
-                        <div className="text-xs text-muted-foreground">{blockLabel}</div>
-                      </div>
-
-                      {/* Progress */}
-                      <div className="flex flex-col gap-1 flex-shrink-0 w-32">
-                        <div className="flex items-center justify-between text-xs font-mono">
-                          <span>{job.processedPages ?? 0}/{job.totalPages ?? 0} pp</span>
-                          <span className="text-muted-foreground">{progress}%</span>
-                        </div>
-                        <div className="bg-muted rounded-full h-1.5">
-                          <div className={`${progressColor} h-1.5 rounded-full transition-all`} style={{ width: `${progress}%` }} />
-                        </div>
-                      </div>
-
-                      {/* Status */}
-                      <div className="flex items-center gap-1.5 flex-shrink-0">
-                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium ${style.bg} ${style.text} border border-current/20`}>
-                          {style.dot && <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />}
-                          {job.status.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())}
-                        </span>
-                        {job.errorMessage && (
-                          <button onClick={() => setExpandedJobId(isErrExpanded ? null : job.id)} className="text-red-400 hover:text-red-300">
-                            {isErrExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-                          </button>
-                        )}
-                      </div>
-
-                      {/* Started */}
-                      <span className="text-xs text-muted-foreground flex-shrink-0 w-32 text-right">
-                        {job.startedAt ? new Date(job.startedAt).toLocaleString() : "—"}
-                      </span>
-
-                      {/* Actions */}
-                      <div className="flex items-center gap-1.5 flex-shrink-0">
-                        <Button size="sm" variant={isBrowsing ? "secondary" : "outline"} className="h-7 text-xs gap-1.5"
-                          onClick={() => setBrowsingJobId(isBrowsing ? null : job.id)}>
-                          <Eye className="w-3 h-3" />
-                          {isBrowsing ? "Close" : "Browse Pages"}
-                        </Button>
-                        <Button size="sm" variant={isMetrics ? "secondary" : "outline"} className="h-7 text-xs gap-1.5"
-                          onClick={() => setMetricsJobId(isMetrics ? null : job.id)}>
-                          <BarChart2 className="w-3 h-3" />
-                          {isMetrics ? "Close" : "Metrics"}
-                        </Button>
-                        {["queued", "converting", "pass1_ocr", "pass2_ocr", "enriching"].includes(job.status) && (
-                          <button onClick={() => cancelMut.mutate({ id: job.id })} disabled={cancelMut.isPending}
-                            title="Cancel job chain" className="text-muted-foreground hover:text-orange-400 transition-colors p-1">
-                            <Pause className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                        <button
-                          onClick={() => { if (confirm(`Purge all pages for JOB-${job.id}?`)) purgeMut.mutate({ id: job.id }); }}
-                          disabled={purgeMut.isPending} title="Purge pages" className="text-muted-foreground hover:text-yellow-400 transition-colors p-1">
-                          <RotateCcw className="w-3.5 h-3.5" />
-                        </button>
-                        <button onClick={() => deleteMut.mutate({ id: job.id })} disabled={deleteMut.isPending}
-                          className="text-muted-foreground hover:text-destructive transition-colors p-1" title="Delete job record">
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Error expansion */}
-                    {isErrExpanded && job.errorMessage && (
-                      <div className="px-4 py-2 bg-red-500/5 border-t border-red-500/20">
-                        <p className="text-xs font-mono text-red-400 whitespace-pre-wrap break-all">{job.errorMessage}</p>
-                      </div>
-                    )}
-
-                    {/* Page browser */}
-                    {isBrowsing && (
-                      <JobPageBrowser jobId={job.id} onClose={() => setBrowsingJobId(null)} />
-                    )}
-
-                    {/* Metrics panel */}
-                    {isMetrics && (
-                      <JobMetricsPanel jobId={job.id} onClose={() => setMetricsJobId(null)} />
-                    )}
+              {/* ── Running ─────────────────────────────────────────────────── */}
+              {runningJobs.length > 0 && (
+                <>
+                  <div className="px-4 py-1.5 bg-blue-500/5 border-b border-blue-500/10 flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse flex-shrink-0" />
+                    <span className="text-[11px] font-semibold text-blue-400 uppercase tracking-widest">
+                      Running · {runningJobs.length}
+                    </span>
                   </div>
-                );
-              })}
+                  {runningJobs.map(renderJobRow)}
+                </>
+              )}
+
+              {/* ── Queued ──────────────────────────────────────────────────── */}
+              {queuedJobs.length > 0 && (
+                <>
+                  <div className="px-4 py-1.5 bg-muted/5 border-b border-border/40 flex items-center gap-2">
+                    <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-widest">
+                      Queued · {queuedJobs.length}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground/50 normal-case">
+                      ↑ next up
+                    </span>
+                  </div>
+                  {queuedJobs.map(renderJobRow)}
+                </>
+              )}
+
+              {/* ── Finished ────────────────────────────────────────────────── */}
+              {finishedJobs.length > 0 && (
+                <>
+                  <div className="px-4 py-1.5 bg-muted/5 border-b border-border/30 flex items-center gap-2">
+                    <span className="text-[11px] font-semibold text-muted-foreground/50 uppercase tracking-widest">
+                      Finished · {finishedJobs.length}
+                    </span>
+                  </div>
+                  {finishedJobs.map(renderJobRow)}
+                </>
+              )}
             </div>
           )}
         </CardContent>
