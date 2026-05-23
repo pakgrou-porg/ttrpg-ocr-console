@@ -575,8 +575,12 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
   onNextRef.current = onNext;
 
   // Keyboard shortcuts: A = approve, F = flag/escalate, N = next item
+  // Depends only on isActive — not expanded — because for cards navigated via N the
+  // isActive and expanded transitions happen in separate render cycles (card 1 batches
+  // both in a single click; card 2 auto-expands in a subsequent useEffect). Gating on
+  // expanded causes the handler to miss registration in that second cycle.
   useEffect(() => {
-    if (!isActive || !expanded) return;
+    if (!isActive) return;
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       if (target.tagName === "TEXTAREA" || target.tagName === "INPUT" || target.isContentEditable) return;
@@ -589,7 +593,7 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [isActive, expanded]);
+  }, [isActive]);
 
   const pageImagePath = item.page?.rawPngUrl
     ? `/api/pipeline/pages/${item.page.rawPngUrl.replace(/.*\/workspace\//, "")}`
