@@ -2824,7 +2824,8 @@ export const appRouter = router({
       try {
         const accessToken = await getGoogleAccessToken();
         return { accessToken };
-      } catch {
+      } catch (err: unknown) {
+        console.warn("[Google] getAccessToken failed:", (err as any)?.message ?? String(err));
         return { accessToken: null };
       }
     }),

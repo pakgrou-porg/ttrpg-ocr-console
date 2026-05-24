@@ -90,7 +90,7 @@ export async function isGoogleConnected(): Promise<boolean> {
 
 export async function storeGoogleTokens(opts: {
   accessToken: string;
-  refreshToken: string;
+  refreshToken?: string | null;
   expiresIn: number;
   scope?: string;
 }): Promise<void> {
@@ -98,25 +98,46 @@ export async function storeGoogleTokens(opts: {
   if (!db) throw new Error("Database not available");
 
   const encAccess = encryptSecret(opts.accessToken);
-  const encRefresh = encryptSecret(opts.refreshToken);
   const expiresAt = new Date(Date.now() + opts.expiresIn * 1000);
 
-  const existing = await db.select({ id: googleOAuthTokens.id }).from(googleOAuthTokens).limit(1);
-  const values = {
-    encryptedAccessToken: encAccess.ciphertext,
-    accessTokenIv: encAccess.iv,
-    accessTokenAuthTag: encAccess.authTag,
-    encryptedRefreshToken: encRefresh.ciphertext,
-    refreshTokenIv: encRefresh.iv,
-    refreshTokenAuthTag: encRefresh.authTag,
-    expiresAt,
-    scope: opts.scope ?? null,
-  };
+  const existing = await db.select().from(googleOAuthTokens).limit(1);
 
   if (existing.length > 0) {
-    await db.update(googleOAuthTokens).set(values).where(eq(googleOAuthTokens.id, existing[0].id));
+    // Always update the access token. Only overwrite the refresh token when
+    // Google returns a new one — re-auth without revoking may omit it.
+    const refreshFields = opts.refreshToken
+      ? (() => {
+          const enc = encryptSecret(opts.refreshToken);
+          return {
+            encryptedRefreshToken: enc.ciphertext,
+            refreshTokenIv: enc.iv,
+            refreshTokenAuthTag: enc.authTag,
+          };
+        })()
+      : {};
+    await db.update(googleOAuthTokens)
+      .set({
+        encryptedAccessToken: encAccess.ciphertext,
+        accessTokenIv: encAccess.iv,
+        accessTokenAuthTag: encAccess.authTag,
+        expiresAt,
+        scope: opts.scope ?? null,
+        ...refreshFields,
+      })
+      .where(eq(googleOAuthTokens.id, existing[0].id));
   } else {
-    await db.insert(googleOAuthTokens).values(values);
+    if (!opts.refreshToken) throw new Error("Refresh token required for initial Google OAuth setup.");
+    const encRefresh = encryptSecret(opts.refreshToken);
+    await db.insert(googleOAuthTokens).values({
+      encryptedAccessToken: encAccess.ciphertext,
+      accessTokenIv: encAccess.iv,
+      accessTokenAuthTag: encAccess.authTag,
+      encryptedRefreshToken: encRefresh.ciphertext,
+      refreshTokenIv: encRefresh.iv,
+      refreshTokenAuthTag: encRefresh.authTag,
+      expiresAt,
+      scope: opts.scope ?? null,
+    });
   }
 }
 
