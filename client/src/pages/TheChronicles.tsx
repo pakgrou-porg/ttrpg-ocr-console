@@ -8,10 +8,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import {
-  ScrollText, ChevronRight, ChevronDown, Check, Edit, Loader2,
-  BookOpen, Layers, RefreshCw, ChevronsUpDown,
+  BookOpen, Layers, RefreshCw, ChevronsUpDown, ScrollText, ChevronRight, ChevronDown,
+  Check, Edit, Loader2, FileImage, ChevronLeft, Eye, Code2, AlignLeft,
+  History, FileText, Grid3x3,
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -215,6 +218,286 @@ function EditDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// ── Page detail dialog ────────────────────────────────────────────────────────
+
+function PageDetailDialog({ pageId, open, onClose }: { pageId: number; open: boolean; onClose: () => void }) {
+  const [detailTab, setDetailTab] = useState<"image" | "ocr" | "regions" | "json" | "history">("image");
+  const { data, isLoading } = trpc.library.getPageDetail.useQuery(
+    { pageId },
+    { enabled: open && pageId > 0 },
+  );
+
+  const ocr = data?.ocr as any;
+  const sd = ocr?.structuredData as any;
+  const regions = Array.isArray(data?.contentRegions) ? (data!.contentRegions as any[]) : [];
+  const retryAttempts = data?.retryAttempts ?? [];
+
+  return (
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="max-w-5xl max-h-[90vh] overflow-hidden flex flex-col">
+        <DialogHeader className="flex-shrink-0">
+          <DialogTitle className="flex items-center gap-2">
+            <FileImage className="w-4 h-4 text-primary" />
+            Page {data?.pageNumber ?? pageId}
+            {data?.layoutType && (
+              <span className="text-xs font-mono bg-muted px-1.5 py-0.5 rounded text-muted-foreground">
+                {data.layoutType}
+              </span>
+            )}
+            {data?.ocrConfidence != null && (
+              <span className="text-xs text-muted-foreground ml-auto mr-6">
+                {data.ocrConfidence}% confidence
+              </span>
+            )}
+          </DialogTitle>
+          {(data as any)?.printedPageLabel && (data as any).printedPageLabel !== "[unnumbered]" && (
+            <DialogDescription>Printed label: {(data as any).printedPageLabel}</DialogDescription>
+          )}
+        </DialogHeader>
+
+        <Tabs value={detailTab} onValueChange={v => setDetailTab(v as any)} className="flex-1 overflow-hidden flex flex-col min-h-0">
+          <TabsList className="flex-shrink-0 w-full justify-start">
+            <TabsTrigger value="image" className="gap-1.5"><Eye className="w-3.5 h-3.5" />Image</TabsTrigger>
+            <TabsTrigger value="ocr" className="gap-1.5"><AlignLeft className="w-3.5 h-3.5" />OCR Text</TabsTrigger>
+            <TabsTrigger value="regions" className="gap-1.5"><Grid3x3 className="w-3.5 h-3.5" />Regions ({regions.length})</TabsTrigger>
+            <TabsTrigger value="json" className="gap-1.5"><Code2 className="w-3.5 h-3.5" />JSON</TabsTrigger>
+            <TabsTrigger value="history" className="gap-1.5"><History className="w-3.5 h-3.5" />History ({retryAttempts.length})</TabsTrigger>
+          </TabsList>
+
+          {isLoading ? (
+            <div className="flex items-center justify-center py-16 text-muted-foreground gap-2">
+              <Loader2 className="w-5 h-5 animate-spin" />Loading page…
+            </div>
+          ) : (
+            <>
+              <TabsContent value="image" className="flex-1 overflow-auto mt-0 pt-3">
+                {data?.rawPngUrl ? (
+                  <img src={data.rawPngUrl} alt={`Page ${data.pageNumber}`} className="max-w-full rounded border border-border/40 mx-auto block" />
+                ) : (
+                  <p className="text-center text-muted-foreground py-8">No image available.</p>
+                )}
+              </TabsContent>
+
+              <TabsContent value="ocr" className="flex-1 overflow-auto mt-0 pt-3 space-y-3">
+                <div>
+                  <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1.5">OCR Extracted Text</p>
+                  <pre className="text-xs font-mono whitespace-pre-wrap break-words bg-muted/30 rounded p-3 border border-border/30 max-h-72 overflow-y-auto">
+                    {ocr?.rawText ?? <span className="italic text-muted-foreground">No OCR text.</span>}
+                  </pre>
+                </div>
+                {(data as any)?.nativeText && (
+                  <div>
+                    <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1.5">Native PDF Text</p>
+                    <pre className="text-xs font-mono whitespace-pre-wrap break-words bg-muted/30 rounded p-3 border border-border/30 max-h-72 overflow-y-auto">
+                      {(data as any).nativeText}
+                    </pre>
+                  </div>
+                )}
+                {ocr?.correctedText && (
+                  <div>
+                    <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1.5">Corrected Text</p>
+                    <pre className="text-xs font-mono whitespace-pre-wrap break-words bg-green-950/20 rounded p-3 border border-green-800/30 max-h-48 overflow-y-auto">
+                      {ocr.correctedText}
+                    </pre>
+                  </div>
+                )}
+              </TabsContent>
+
+              <TabsContent value="regions" className="flex-1 overflow-auto mt-0 pt-3">
+                {regions.length === 0 ? (
+                  <p className="text-center text-muted-foreground py-8">No regions detected.</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {regions.map((r: any, i: number) => (
+                      <div key={i} className="flex items-start gap-2 text-xs p-2 rounded bg-muted/20 border border-border/20 hover:bg-muted/40">
+                        <span className="font-mono text-muted-foreground w-6 flex-shrink-0">{r.sequence ?? i + 1}</span>
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono flex-shrink-0 ${
+                          r.type === "heading" ? "bg-purple-500/20 text-purple-300" :
+                          r.type === "paragraph" ? "bg-blue-500/20 text-blue-300" :
+                          r.type === "table" ? "bg-orange-500/20 text-orange-300" :
+                          r.type === "illustration" || r.type === "map" ? "bg-green-500/20 text-green-300" :
+                          "bg-muted text-muted-foreground"
+                        }`}>{r.type ?? r.regionType}</span>
+                        <span className="font-mono text-muted-foreground flex-shrink-0 text-[10px]">
+                          ({Math.round(r.bbox?.x ?? 0)},{Math.round(r.bbox?.y ?? 0)}) {Math.round(r.bbox?.w ?? 0)}×{Math.round(r.bbox?.h ?? 0)}
+                        </span>
+                        <span className="flex-1 text-foreground/80 line-clamp-1 min-w-0">{r.text ?? r.content ?? ""}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </TabsContent>
+
+              <TabsContent value="json" className="flex-1 overflow-auto mt-0 pt-3">
+                <pre className="text-xs font-mono whitespace-pre-wrap break-words bg-muted/30 rounded p-3 border border-border/30 text-foreground/80">
+                  {JSON.stringify(sd ?? ocr?.structuredData ?? null, null, 2)}
+                </pre>
+              </TabsContent>
+
+              <TabsContent value="history" className="flex-1 overflow-auto mt-0 pt-3">
+                {retryAttempts.length === 0 ? (
+                  <p className="text-center text-muted-foreground py-8">No retry history.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {retryAttempts.map((a: any) => (
+                      <div key={a.id} className="p-3 rounded border border-border/30 bg-muted/20 text-xs space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className={`px-1.5 py-0.5 rounded font-mono text-[10px] ${a.status === "succeeded" ? "bg-green-500/20 text-green-300" : a.status === "failed" ? "bg-red-500/20 text-red-300" : "bg-blue-500/20 text-blue-300"}`}>
+                            {a.status}
+                          </span>
+                          <span className="text-muted-foreground">{new Date(a.startedAt).toLocaleString()}</span>
+                          {a.confidence != null && <span className="ml-auto text-muted-foreground">{a.confidence}% confidence</span>}
+                          {a.durationMs != null && <span className="text-muted-foreground">{(a.durationMs / 1000).toFixed(1)}s</span>}
+                        </div>
+                        <div className="text-muted-foreground">Stages: {(a.requestedStages as string[])?.join(", ")}</div>
+                        {(a.stagesFailed as string[])?.length > 0 && (
+                          <div className="text-red-400">Failed: {(a.stagesFailed as string[]).join(", ")}</div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </TabsContent>
+            </>
+          )}
+        </Tabs>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Page browser ──────────────────────────────────────────────────────────────
+
+function PageBrowser({ documentIds }: { documentIds: number[] }) {
+  const [documentId, setDocumentId] = useState<number>(documentIds[0] ?? 0);
+  const [offset, setOffset] = useState(0);
+  const [selectedPageId, setSelectedPageId] = useState<number | null>(null);
+  const LIMIT = 20;
+
+  const exportMutation = trpc.library.exportUnsloth.useMutation({
+    onSuccess: (data) => {
+      if (!data.jsonl) { toast.error("No exportable data found."); return; }
+      const blob = new Blob([data.jsonl], { type: "application/jsonl" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `document-${documentId}-unsloth.jsonl`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success(`Exported ${data.lineCount} training examples.`);
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const { data, isLoading } = trpc.library.listPages.useQuery(
+    { documentId, offset, limit: LIMIT },
+    { enabled: documentId > 0 },
+  );
+
+  const pages = data?.pages ?? [];
+  const total = data?.total ?? 0;
+
+  return (
+    <div className="space-y-3">
+      {documentIds.length > 1 && (
+        <Select value={String(documentId)} onValueChange={v => { setDocumentId(Number(v)); setOffset(0); }}>
+          <SelectTrigger className="w-48">
+            <SelectValue placeholder="Select batch…" />
+          </SelectTrigger>
+          <SelectContent>
+            {documentIds.map((id, i) => (
+              <SelectItem key={id} value={String(id)}>Batch {i + 1} (doc #{id})</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
+
+      {isLoading ? (
+        <div className="flex items-center justify-center py-10 text-muted-foreground gap-2">
+          <Loader2 className="w-4 h-4 animate-spin" />Loading pages…
+        </div>
+      ) : pages.length === 0 ? (
+        <div className="py-10 text-center text-muted-foreground">
+          <FileImage className="w-8 h-8 mx-auto mb-2 opacity-30" />
+          <p className="text-sm">No pages found.</p>
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+            {pages.map((page: any) => (
+              <button
+                key={page.id}
+                onClick={() => setSelectedPageId(page.id)}
+                className="group relative rounded-lg border border-border/40 overflow-hidden hover:border-primary/50 hover:shadow-md transition-all text-left bg-card"
+              >
+                {page.rawPngUrl ? (
+                  <img src={page.rawPngUrl} alt={`Page ${page.pageNumber}`} className="w-full aspect-[3/4] object-cover object-top" />
+                ) : (
+                  <div className="w-full aspect-[3/4] bg-muted/30 flex items-center justify-center">
+                    <FileImage className="w-8 h-8 text-muted-foreground/30" />
+                  </div>
+                )}
+                <div className="p-1.5 space-y-0.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-medium">p.{page.pageNumber}</span>
+                    {page.ocrConfidence != null && (
+                      <span className={`text-[10px] font-mono ${page.ocrConfidence >= 80 ? "text-green-400" : page.ocrConfidence >= 60 ? "text-amber-400" : "text-red-400"}`}>
+                        {page.ocrConfidence}%
+                      </span>
+                    )}
+                  </div>
+                  {page.layoutType && (
+                    <p className="text-[10px] text-muted-foreground truncate">{page.layoutType}</p>
+                  )}
+                </div>
+                <div className="absolute inset-0 bg-primary/10 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                  <Eye className="w-6 h-6 text-primary drop-shadow" />
+                </div>
+              </button>
+            ))}
+          </div>
+
+          <div className="flex items-center justify-between pt-1">
+            {total > LIMIT ? (
+              <>
+                <span className="text-xs text-muted-foreground">{total} pages total</span>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="outline" onClick={() => setOffset(Math.max(0, offset - LIMIT))} disabled={offset === 0} className="h-7 gap-1">
+                    <ChevronLeft className="w-3.5 h-3.5" />Prev
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => setOffset(offset + LIMIT)} disabled={offset + LIMIT >= total} className="h-7 gap-1">
+                    Next<ChevronRight className="w-3.5 h-3.5" />
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <span className="text-xs text-muted-foreground">{total} pages total</span>
+            )}
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1.5 text-xs ml-auto"
+              onClick={() => exportMutation.mutate({ documentId })}
+              disabled={exportMutation.isPending || documentId === 0}
+            >
+              {exportMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
+              Export Unsloth JSONL
+            </Button>
+          </div>
+        </>
+      )}
+
+      {selectedPageId != null && (
+        <PageDetailDialog
+          pageId={selectedPageId}
+          open={true}
+          onClose={() => setSelectedPageId(null)}
+        />
+      )}
+    </div>
   );
 }
 
@@ -521,47 +804,74 @@ export default function TheChronicles() {
         </div>
       )}
 
-      {/* Tree view */}
+      {/* Content tabs — shown once a document is selected */}
       {selectedLabel !== null && (
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Layers className="w-4 h-4 text-primary" />
-              {selectedLabel} — Hierarchy
-            </CardTitle>
-            {rawSummaries.length > 0 && (
-              <CardDescription>{rawSummaries.length} summary records</CardDescription>
-            )}
-          </CardHeader>
-          <CardContent className="p-0">
-            {isLoading ? (
-              <div className="flex items-center justify-center py-16 text-muted-foreground gap-2">
-                <Loader2 className="w-5 h-5 animate-spin" />
-                Loading summaries…
-              </div>
-            ) : tree.length === 0 ? (
-              <div className="py-16 text-center text-muted-foreground">
-                <ScrollText className="w-8 h-8 mx-auto mb-3 opacity-30" />
-                <p className="text-sm">No summaries yet for this document.</p>
-                <p className="text-xs mt-1">
-                  Run the pipeline to generate content break detection and summaries.
-                </p>
-              </div>
-            ) : (
-              <div className="py-2">
-                {tree.map(node => (
-                  <SummaryNode
-                    key={node.id}
-                    node={node}
-                    onEdit={setEditTarget}
-                    onApprove={handleApprove}
-                    approving={approving}
-                  />
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        <Tabs defaultValue="summaries">
+          <TabsList>
+            <TabsTrigger value="summaries" className="gap-1.5">
+              <Layers className="w-3.5 h-3.5" />Summaries
+            </TabsTrigger>
+            <TabsTrigger value="pages" className="gap-1.5">
+              <FileImage className="w-3.5 h-3.5" />Pages
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="summaries">
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Layers className="w-4 h-4 text-primary" />
+                  {selectedLabel} — Hierarchy
+                </CardTitle>
+                {rawSummaries.length > 0 && (
+                  <CardDescription>{rawSummaries.length} summary records</CardDescription>
+                )}
+              </CardHeader>
+              <CardContent className="p-0">
+                {isLoading ? (
+                  <div className="flex items-center justify-center py-16 text-muted-foreground gap-2">
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    Loading summaries…
+                  </div>
+                ) : tree.length === 0 ? (
+                  <div className="py-16 text-center text-muted-foreground">
+                    <ScrollText className="w-8 h-8 mx-auto mb-3 opacity-30" />
+                    <p className="text-sm">No summaries yet for this document.</p>
+                    <p className="text-xs mt-1">
+                      Run the pipeline to generate content break detection and summaries.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="py-2">
+                    {tree.map(node => (
+                      <SummaryNode
+                        key={node.id}
+                        node={node}
+                        onEdit={setEditTarget}
+                        onApprove={handleApprove}
+                        approving={approving}
+                      />
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="pages">
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <FileImage className="w-4 h-4 text-primary" />
+                  {selectedLabel} — Pages
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <PageBrowser documentIds={groupMap.get(selectedLabel)?.ids ?? []} />
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
       )}
 
       {/* Edit dialog */}

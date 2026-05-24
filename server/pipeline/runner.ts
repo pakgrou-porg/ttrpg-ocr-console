@@ -12,7 +12,9 @@ import {
   createOcrResult, updateOcrResult, createHitlItem, updateHitlItem,
   createHitlRetryAttempt, updateHitlRetryAttempt,
   getPageById, getDocumentById,
+  getPagesByDocumentId,
   getOcrResultByPageId,
+  getOcrResultsByPageIds,
   getPageByDocumentAndNumber,
   createContentSummary,
   updateContentSummary,
@@ -259,6 +261,26 @@ const JSON_INVOKE_OPTS: Partial<InvokeOptions> = {
 const MAX_CONCURRENT_DOCS: number = pipelineConfig.pipeline.maxConcurrentDocuments;
 let activeDocCount = 0;
 const pendingJobIds: number[] = [];
+
+// ── Async retry queue ─────────────────────────────────────────────────────────
+// Retry requests are enqueued here and processed one at a time in the background,
+// so the tRPC mutation returns immediately instead of blocking the HTTP request.
+const retryTaskQueue: Array<() => Promise<void>> = [];
+let retryWorkerActive = false;
+
+function drainRetryQueue(): void {
+  if (retryWorkerActive || retryTaskQueue.length === 0) return;
+  retryWorkerActive = true;
+  (async () => {
+    while (retryTaskQueue.length > 0) {
+      const task = retryTaskQueue.shift()!;
+      await task().catch(err =>
+        console.error("[Pipeline] Retry queue task error:", err?.message ?? String(err))
+      );
+    }
+    retryWorkerActive = false;
+  })();
+}
 
 function drainQueue(): void {
   while (activeDocCount < MAX_CONCURRENT_DOCS && pendingJobIds.length > 0) {
@@ -1660,6 +1682,18 @@ export type RetryPageMetadata = {
   savedCorrectionFields?: string[];
 };
 
+/** Enqueue a page retry; returns immediately. The retry runs asynchronously. */
+export function enqueuePageRetry(
+  pageId: number,
+  stages: RetryStage[],
+  hitlId: number | undefined,
+  metadata: RetryPageMetadata,
+): void {
+  retryTaskQueue.push(() => retryPageStages(pageId, stages, hitlId, metadata).then(() => undefined));
+  console.log(`[Pipeline] Page ${pageId} retry queued (queue depth: ${retryTaskQueue.length})`);
+  drainRetryQueue();
+}
+
 export async function retryPageStages(
   pageId: number,
   stages: RetryStage[],
@@ -2065,4 +2099,89 @@ async function convertToPages(
 async function imageContent(filePath: string): Promise<{ type: "image_url"; image_url: { url: string } }> {
   const b64 = await readFile(filePath, "base64");
   return { type: "image_url", image_url: { url: `data:image/png;base64,${b64}` } };
+}
+
+// ── Unsloth / VLM dataset export ──────────────────────────────────────────────
+
+/**
+ * Export document pages as a JSONL dataset suitable for Unsloth VLM fine-tuning.
+ * Uses Nemotron-style agentic grounding tokens with bounding boxes normalised to
+ * 0–1000 (resolution-agnostic, matches VLM grounding conventions).
+ *
+ * Format per record:
+ *   {"messages": [
+ *     {"role":"user",  "content": [{"type":"image","image":"<url>"},{"type":"text","text":"<prompt>"}]},
+ *     {"role":"assistant","content":"<extra_id_0>type<extra_id_1>x1 y1 x2 y2<extra_id_2>text<extra_id_3>..."}
+ *   ]}
+ */
+export async function exportDocumentAsUnsloth(documentId: number): Promise<string> {
+  const pages = await getPagesByDocumentId(documentId);
+  const pageIds = pages.map(p => p.id);
+  if (pageIds.length === 0) return "";
+
+  const ocrs = await getOcrResultsByPageIds(pageIds);
+  const ocrMap = new Map(ocrs.map(r => [r.pageId, r]));
+
+  const lines: string[] = [];
+
+  for (const page of pages) {
+    const ocr = ocrMap.get(page.id);
+    const regions = Array.isArray(page.contentRegions) ? (page.contentRegions as any[]) : [];
+    if (!ocr && regions.length === 0) continue;
+
+    // Build Nemotron grounding assistant turn
+    // bbox is in percent (0-100); multiply by 10 → normalised 0-1000
+    let assistantContent = "";
+    if (regions.length > 0) {
+      for (const r of regions) {
+        const { x = 0, y = 0, w = 0, h = 0 } = r.bbox ?? {};
+        const x1 = Math.round(x * 10);
+        const y1 = Math.round(y * 10);
+        const x2 = Math.round((x + w) * 10);
+        const y2 = Math.round((y + h) * 10);
+        const regionType = (r.type ?? r.regionType ?? "unknown").toLowerCase();
+        const text = (r.text ?? r.content ?? "").trim();
+        assistantContent += `<extra_id_0>${regionType}<extra_id_1>${x1} ${y1} ${x2} ${y2}<extra_id_2>${text}<extra_id_3>`;
+      }
+    } else if (ocr?.rawText) {
+      // No region data — emit whole page as a single text block
+      assistantContent = `<extra_id_0>page<extra_id_1>0 0 1000 1000<extra_id_2>${ocr.rawText.trim()}<extra_id_3>`;
+    }
+
+    if (!assistantContent) continue;
+
+    // Image reference — use the served URL path (not raw filesystem path)
+    const imageUrl = page.rawPngUrl
+      ? `/api/pipeline/pages/${page.rawPngUrl.replace(/.*\/workspace\//, "")}`
+      : null;
+
+    const record = {
+      messages: [
+        {
+          role: "user",
+          content: [
+            ...(imageUrl ? [{ type: "image", image: imageUrl }] : []),
+            {
+              type: "text",
+              text: "Identify and extract all text regions from this document page. For each region, output its semantic type, bounding box, and text content.",
+            },
+          ],
+        },
+        {
+          role: "assistant",
+          content: assistantContent,
+        },
+      ],
+      metadata: {
+        documentId,
+        pageId: page.id,
+        pageNumber: page.pageNumber,
+        layoutType: page.layoutType ?? null,
+        confidence: page.ocrConfidence ?? null,
+      },
+    };
+    lines.push(JSON.stringify(record));
+  }
+
+  return lines.join("\n");
 }

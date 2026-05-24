@@ -1126,8 +1126,15 @@ export async function searchDocuments(query: string) {
 export async function getDocumentByJobId(jobId: number) {
   const db = await getDb();
   if (!db) return undefined;
-  const result = await db.select().from(documents).where(eq(documents.ingestionJobId, jobId)).limit(1);
-  return result.length > 0 ? result[0] : undefined;
+  // Primary: document whose ingestion_job_id matches (first-block job)
+  const direct = await db.select().from(documents).where(eq(documents.ingestionJobId, jobId)).limit(1);
+  if (direct.length > 0) return direct[0];
+  // Fallback: chained block job — read documentId stored on the job row (v0.1.92+)
+  const jobRow = await db.select({ documentId: ingestionJobs.documentId }).from(ingestionJobs).where(eq(ingestionJobs.id, jobId)).limit(1);
+  const documentId = (jobRow[0] as any)?.documentId as number | null | undefined;
+  if (!documentId) return undefined;
+  const byId = await db.select().from(documents).where(eq(documents.id, documentId)).limit(1);
+  return byId.length > 0 ? byId[0] : undefined;
 }
 
 // ─── Document Pages ───────────────────────────────────────────────────────────
@@ -1335,6 +1342,15 @@ export async function getHitlRetryAttemptsByPageIds(pageIds: number[]) {
   return db.select().from(hitlRetryAttempts)
     .where(inArray(hitlRetryAttempts.pageId, pageIds))
     .orderBy(desc(hitlRetryAttempts.startedAt));
+}
+
+export async function getHitlRetryAttemptsByPage(pageId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(hitlRetryAttempts)
+    .where(eq(hitlRetryAttempts.pageId, pageId))
+    .orderBy(desc(hitlRetryAttempts.startedAt))
+    .limit(10);
 }
 
 export async function getHitlStats() {

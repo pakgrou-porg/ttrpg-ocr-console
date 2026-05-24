@@ -25,13 +25,13 @@ import {
   getPagesByIds, getDocumentsByIds, getOcrResultsByPageIds,
   getOcrResultByPageId, getOcrResultById, createOcrResult, updateOcrResult,
   getHitlItemById, getHitlItemsByIds, getHitlItemsByPageId, getAllHitlItems, createHitlItem, updateHitlItem, getHitlStats,
-  getHitlRetryAttemptsByPageId, getHitlRetryAttemptsByPageIds,
+  getHitlRetryAttemptsByPageId, getHitlRetryAttemptsByPageIds, getHitlRetryAttemptsByPage,
   getAllGameSystems, createGameSystem, updateGameSystem, deleteGameSystem,
   getLlmMetricsByPage, getLlmMetricsJobSummary, getLlmMetricsPageSummary, getLlmProviderMetricsSummary,
   getContentSummariesByDocument, updateContentSummary,
 } from "./db";
 import { encryptSecret, decryptSecret, storeSecretHint, renderMaskedSecret } from "./crypto";
-import { startJob, retryPageStages, RetryStage } from "./pipeline/runner";
+import { startJob, retryPageStages, RetryStage, enqueuePageRetry, exportDocumentAsUnsloth } from "./pipeline/runner";
 import { ENV } from "./_core/env";
 import { FEATURE_AREAS, PROVIDER_TYPES, PIPELINE_STAGES, SUPABASE_CONNECTION_TYPES, SUPABASE_ROLES, SUPABASE_SYNC_MODES, DOCUMENT_STATUSES, OCR_RESULT_STATUSES, HITL_PRIORITIES, HITL_STATUSES, type LlmProvider } from "../drizzle/schema";
 
@@ -1733,6 +1733,60 @@ export const appRouter = router({
         };
       }),
 
+    /** Full detail for a single page (image, OCR, regions, history) */
+    getPageDetail: protectedProcedure
+      .input(z.object({ pageId: z.number().int() }))
+      .query(async ({ ctx, input }) => {
+        const page = await getPageById(input.pageId);
+        if (!page) throw new TRPCError({ code: "NOT_FOUND", message: "Page not found." });
+        assertDocumentAccess(ctx, await getDocumentById(page.documentId));
+        const [ocr, retryAttempts] = await Promise.all([
+          getOcrResultByPageId(input.pageId),
+          getHitlRetryAttemptsByPage(input.pageId),
+        ]);
+        return {
+          ...page,
+          rawPngUrl: page.rawPngUrl
+            ? `/api/pipeline/pages/${page.rawPngUrl.replace(/.*\/workspace\//, "")}`
+            : null,
+          ocr: ocr ?? null,
+          retryAttempts,
+        };
+      }),
+
+    /** Paginated page list for a document (Chronicles page browser) */
+    listPages: protectedProcedure
+      .input(z.object({
+        documentId: z.number().int(),
+        offset: z.number().int().min(0).default(0),
+        limit: z.number().int().min(1).max(50).default(20),
+      }))
+      .query(async ({ ctx, input }) => {
+        assertDocumentAccess(ctx, await getDocumentById(input.documentId));
+        const [pages, total] = await Promise.all([
+          getPagesByDocumentIdPaginated(input.documentId, input.offset, input.limit),
+          getDocumentPageCount(input.documentId),
+        ]);
+        return {
+          total,
+          pages: pages.map(p => ({
+            ...p,
+            rawPngUrl: p.rawPngUrl
+              ? `/api/pipeline/pages/${p.rawPngUrl.replace(/.*\/workspace\//, "")}`
+              : null,
+          })),
+        };
+      }),
+
+    /** Export document pages as Unsloth/Nemotron VLM JSONL for fine-tuning */
+    exportUnsloth: adminProcedure
+      .input(z.object({ documentId: z.number().int() }))
+      .mutation(async ({ ctx, input }) => {
+        assertDocumentAccess(ctx, await getDocumentById(input.documentId));
+        const jsonl = await exportDocumentAsUnsloth(input.documentId);
+        return { jsonl, lineCount: jsonl ? jsonl.split("\n").filter(Boolean).length : 0 };
+      }),
+
     /** Add a page to a document (admin only — used by pipeline) */
     addPage: adminProcedure
       .input(z.object({
@@ -2244,13 +2298,20 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         await getPageOrThrow(input.pageId);
-        const result = await retryPageStages(
+        enqueuePageRetry(
           input.pageId,
           input.stages as RetryStage[],
           input.hitlId,
           { reviewerUserId: ctx.user.id, savedCorrectionFields: input.savedCorrectionFields ?? [] },
         );
-        return { success: true, ...result };
+        return { success: true, queued: true };
+      }),
+
+    /** Get recent retry attempts for a page (for polling after async retry) */
+    getRetryAttempts: protectedProcedure
+      .input(z.object({ pageId: z.number().int() }))
+      .query(async ({ input }) => {
+        return getHitlRetryAttemptsByPage(input.pageId);
       }),
 
     /** Clear (delete) HITL items by status — useful during test cycles */

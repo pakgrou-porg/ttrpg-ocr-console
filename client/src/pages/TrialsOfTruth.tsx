@@ -441,14 +441,8 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
   const ALL_RETRY_STAGES: RetryStageId[] = ["layout_analysis", "bbox_detection", "ocr_extraction"];
   const [retryStages, setRetryStages] = useState<Set<RetryStageId>>(new Set(ALL_RETRY_STAGES));
   const retryMut = trpc.hitl.retryPage.useMutation({
-    onSuccess: (r) => {
-      const errorDetails = Object.entries(r.stageErrors ?? {})
-        .map(([stage, message]) => `${stage}: ${String(message)}`)
-        .join(" | ");
-      const msg = r.stagesFailed.length > 0
-        ? `Retry done — ${r.stagesFailed.join(", ")} failed. Confidence: ${r.confidence}%${errorDetails ? `\n${errorDetails.slice(0, 300)}` : ""}`
-        : `Retry succeeded — confidence ${r.confidence}%`;
-      toast({ title: "Retry complete", description: msg });
+    onSuccess: () => {
+      toast({ title: "Retry queued", description: "The retry has been queued and will run in the background." });
       onResolved();
     },
     onError: (e) => toast({ title: "Retry failed", description: e.message, variant: "destructive" }),
