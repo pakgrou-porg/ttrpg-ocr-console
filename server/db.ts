@@ -1353,6 +1353,39 @@ export async function getHitlRetryAttemptsByPage(pageId: number) {
     .limit(10);
 }
 
+/** Latest retry attempt status per page — used to show Retry/Error pipeline status badges. */
+export async function getLatestRetryStatusByPageIds(pageIds: number[]): Promise<Map<number, string>> {
+  const db = await getDb();
+  if (!db || pageIds.length === 0) return new Map();
+  const { inArray } = await import("drizzle-orm");
+  const rows = await db
+    .select({ pageId: hitlRetryAttempts.pageId, status: hitlRetryAttempts.status })
+    .from(hitlRetryAttempts)
+    .where(inArray(hitlRetryAttempts.pageId, pageIds))
+    .orderBy(desc(hitlRetryAttempts.startedAt));
+  // One pass — first row seen for each page is the latest (DESC order)
+  const out = new Map<number, string>();
+  for (const r of rows) {
+    if (!out.has(r.pageId)) out.set(r.pageId, r.status);
+  }
+  return out;
+}
+
+/** Returns the set of page IDs where any LLM call used a fallback provider. */
+export async function getPageIdsWithFallback(pageIds: number[]): Promise<Set<number>> {
+  const db = await getDb();
+  if (!db || pageIds.length === 0) return new Set();
+  const { inArray } = await import("drizzle-orm");
+  const rows = await db
+    .selectDistinct({ pageId: llmTimingMetrics.pageId })
+    .from(llmTimingMetrics)
+    .where(and(
+      inArray(llmTimingMetrics.pageId, pageIds),
+      eq(llmTimingMetrics.isFallback, true),
+    ));
+  return new Set(rows.map(r => r.pageId).filter((id): id is number => id != null));
+}
+
 export async function getHitlStats() {
   const db = await getDb();
   if (!db) return { total: 0, queued: 0, inProgress: 0, resolved: 0, skipped: 0, escalated: 0, byCritical: 0, byHigh: 0, byMedium: 0, byLow: 0 };

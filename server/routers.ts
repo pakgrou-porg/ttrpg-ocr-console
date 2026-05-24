@@ -26,6 +26,7 @@ import {
   getOcrResultByPageId, getOcrResultById, createOcrResult, updateOcrResult,
   getHitlItemById, getHitlItemsByIds, getHitlItemsByPageId, getAllHitlItems, createHitlItem, updateHitlItem, getHitlStats,
   getHitlRetryAttemptsByPageId, getHitlRetryAttemptsByPageIds, getHitlRetryAttemptsByPage,
+  getLatestRetryStatusByPageIds, getPageIdsWithFallback,
   getAllGameSystems, createGameSystem, updateGameSystem, deleteGameSystem,
   getLlmMetricsByPage, getLlmMetricsJobSummary, getLlmMetricsPageSummary, getLlmProviderMetricsSummary,
   getContentSummariesByDocument, updateContentSummary,
@@ -1719,7 +1720,11 @@ export const appRouter = router({
         ]);
         if (pages.length === 0) return { pages: [], total };
         const pageIds = pages.map(p => p.id);
-        const ocrs = await getOcrResultsByPageIds(pageIds);
+        const [ocrs, latestRetryMap, fallbackPageIds] = await Promise.all([
+          getOcrResultsByPageIds(pageIds),
+          getLatestRetryStatusByPageIds(pageIds),
+          getPageIdsWithFallback(pageIds),
+        ]);
         const ocrMap = new Map(ocrs.map(r => [r.pageId, r]));
         return {
           total,
@@ -1729,6 +1734,8 @@ export const appRouter = router({
               ? `/api/pipeline/pages/${page.rawPngUrl.replace(/.*\/workspace\//, "")}`
               : null,
             ocr: ocrMap.get(page.id) ?? null,
+            latestRetryStatus: latestRetryMap.get(page.id) ?? null,
+            hasFallback: fallbackPageIds.has(page.id),
           })),
         };
       }),
@@ -1767,6 +1774,14 @@ export const appRouter = router({
           getPagesByDocumentIdPaginated(input.documentId, input.offset, input.limit),
           getDocumentPageCount(input.documentId),
         ]);
+        if (pages.length === 0) return { pages: [], total };
+        const pageIds = pages.map(p => p.id);
+        const [ocrs, latestRetryMap, fallbackPageIds] = await Promise.all([
+          getOcrResultsByPageIds(pageIds),
+          getLatestRetryStatusByPageIds(pageIds),
+          getPageIdsWithFallback(pageIds),
+        ]);
+        const ocrMap = new Map(ocrs.map(r => [r.pageId, r]));
         return {
           total,
           pages: pages.map(p => ({
@@ -1774,6 +1789,9 @@ export const appRouter = router({
             rawPngUrl: p.rawPngUrl
               ? `/api/pipeline/pages/${p.rawPngUrl.replace(/.*\/workspace\//, "")}`
               : null,
+            ocr: ocrMap.get(p.id) ?? null,
+            latestRetryStatus: latestRetryMap.get(p.id) ?? null,
+            hasFallback: fallbackPageIds.has(p.id),
           })),
         };
       }),

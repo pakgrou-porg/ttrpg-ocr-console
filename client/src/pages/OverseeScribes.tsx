@@ -6,6 +6,7 @@ import {
   Gamepad2, Plus, Trash2, Pencil, Check, X, ChevronDown, ChevronRight,
   BookOpen, Flag, Eye, ImageOff, ChevronLeft, Timer, BarChart2,
 } from "lucide-react";
+import { PipelineStatusBadge, derivePipelineStatus, PIPELINE_STATUS_CONFIG } from "@/components/PipelineStatusBadge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -109,6 +110,8 @@ function PageCard({ page, jobId, onFlagged, timing }: {
 }) {
   const [flagReason, setFlagReason] = useState("");
   const [showFlagInput, setShowFlagInput] = useState(false);
+  const pipelineStatus = derivePipelineStatus(page);
+  const flagBlocked = PIPELINE_STATUS_CONFIG[pipelineStatus].blockFlag ?? false;
 
   const flagMut = trpc.hitl.flag.useMutation({
     onSuccess: () => {
@@ -139,6 +142,7 @@ function PageCard({ page, jobId, onFlagged, timing }: {
             </span>
           )}
         </span>
+        <PipelineStatusBadge page={page} />
         <ConfidenceBadge confidence={page.ocrConfidence} />
         {page.layoutType && (
           <Badge variant="outline" className="text-xs text-muted-foreground">{page.layoutType}</Badge>
@@ -154,8 +158,14 @@ function PageCard({ page, jobId, onFlagged, timing }: {
         )}
         <div className="ml-auto flex items-center gap-2">
           {!page.isFlagged && !showFlagInput && (
-            <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5 text-orange-400 border-orange-500/30 hover:bg-orange-500/10"
-              onClick={() => setShowFlagInput(true)}>
+            <Button
+              size="sm" variant="outline"
+              className={`h-7 text-xs gap-1.5 ${flagBlocked
+                ? "text-muted-foreground border-border/40 cursor-not-allowed opacity-50"
+                : "text-orange-400 border-orange-500/30 hover:bg-orange-500/10"}`}
+              title={flagBlocked ? `Cannot flag: page is ${PIPELINE_STATUS_CONFIG[pipelineStatus].label.toLowerCase()} — wait for OCR to complete first` : undefined}
+              disabled={flagBlocked}
+              onClick={() => !flagBlocked && setShowFlagInput(true)}>
               <Flag className="h-3 w-3" /> Flag for HITL Review
             </Button>
           )}

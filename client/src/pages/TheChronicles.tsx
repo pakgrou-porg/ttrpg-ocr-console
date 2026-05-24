@@ -16,6 +16,7 @@ import {
   Check, Edit, Loader2, FileImage, ChevronLeft, Eye, Code2, AlignLeft,
   History, FileText, Grid3x3,
 } from "lucide-react";
+import { PipelineStatusBadge } from "@/components/PipelineStatusBadge";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -449,9 +450,7 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
                       </span>
                     )}
                   </div>
-                  {page.layoutType && (
-                    <p className="text-[10px] text-muted-foreground truncate">{page.layoutType}</p>
-                  )}
+                  <PipelineStatusBadge page={page} />
                 </div>
                 <div className="absolute inset-0 bg-primary/10 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                   <Eye className="w-6 h-6 text-primary drop-shadow" />
