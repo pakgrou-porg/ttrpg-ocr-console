@@ -277,13 +277,17 @@ function PageCard({ page, jobId, onFlagged, timing }: {
   );
 }
 
-function JobPageBrowser({ jobId, onClose }: { jobId: number; onClose: () => void }) {
+function JobPageBrowser({ jobId, pageOffset, blockSize, onClose }: {
+  jobId: number; pageOffset: number; blockSize: number; onClose: () => void;
+}) {
   const [page, setPage] = useState(0);
   const limit = 10;
 
   const { data: doc } = trpc.library.getByJobId.useQuery({ jobId });
   const { data: result, isLoading, refetch } = trpc.library.browsePagesWithOcr.useQuery(
-    { documentId: doc?.id ?? 0, offset: page * limit, limit },
+    // Anchor the query to this block's starting page in the document so we show
+    // the pages this job processed, not always the first N of the document.
+    { documentId: doc?.id ?? 0, offset: pageOffset + page * limit, limit },
     { enabled: !!doc?.id },
   );
   const { data: pageTiming } = trpc.metrics.pageSummary.useQuery({ jobId });
@@ -292,8 +296,8 @@ function JobPageBrowser({ jobId, onClose }: { jobId: number; onClose: () => void
     [pageTiming],
   );
 
-  const totalPages = result?.total ?? 0;
-  const pageCount = Math.max(1, Math.ceil(totalPages / limit));
+  // Paginate within this block only — don't let the user page past its end.
+  const pageCount = Math.max(1, Math.ceil(blockSize / limit));
 
   if (!doc && !isLoading) {
     return (
@@ -311,7 +315,7 @@ function JobPageBrowser({ jobId, onClose }: { jobId: number; onClose: () => void
         <span className="text-sm font-medium">
           {doc ? (doc.title ?? doc.filename) : "Loading…"}
         </span>
-        {doc && <span className="text-xs text-muted-foreground">· {totalPages} page{totalPages !== 1 ? "s" : ""} in this block</span>}
+        {doc && <span className="text-xs text-muted-foreground">· {blockSize} page{blockSize !== 1 ? "s" : ""} in this block</span>}
         <Button size="sm" variant="ghost" className="ml-auto h-7 w-7 p-0 text-muted-foreground" onClick={onClose}>
           <X className="h-4 w-4" />
         </Button>
@@ -613,7 +617,7 @@ export default function OverseeScribes() {
 
         {/* Page browser */}
         {isBrowsing && (
-          <JobPageBrowser jobId={job.id} onClose={() => setBrowsingJobId(null)} />
+          <JobPageBrowser jobId={job.id} pageOffset={pageOffset} blockSize={blockSize} onClose={() => setBrowsingJobId(null)} />
         )}
 
         {/* Metrics panel */}
