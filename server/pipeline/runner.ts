@@ -1273,6 +1273,7 @@ async function _runJob(jobId: number): Promise<number | null> {
     const pagePath = pageFiles[i];         // preprocessed (binarized/grayscale) — use for text stages
     const rawPagePath = rawPageFiles[i];   // original full-colour — use for visual content stages
     const stagesFailed: string[] = [];
+    const stageErrors: Record<string, string> = {};
     const stagesCompleted: string[] = [];
     let ocrConfidence = 0;
     let confidenceFromModel: number | null = null; // null = model didn't provide a score
@@ -1333,6 +1334,7 @@ async function _runJob(jobId: number): Promise<number | null> {
       stagesCompleted.push("layout_analysis");
     } else {
       stagesFailed.push("layout_analysis");
+      stageErrors["layout_analysis"] = layoutSettled.reason?.message ?? String(layoutSettled.reason);
       console.warn(`[Pipeline] Job ${jobId} p${pageNum} layout_analysis: ${layoutSettled.reason?.message}`);
     }
 
@@ -1340,6 +1342,7 @@ async function _runJob(jobId: number): Promise<number | null> {
       regions = bboxSettled.value;
       stagesCompleted.push("bbox_detection");
     } else {
+      stageErrors["bbox_detection"] = bboxSettled.reason?.message ?? String(bboxSettled.reason);
       console.warn(`[Pipeline] Job ${jobId} p${pageNum} bbox_detection: ${bboxSettled.reason?.message}`);
     }
 
@@ -1407,12 +1410,16 @@ async function _runJob(jobId: number): Promise<number | null> {
       stagesCompleted.push("ocr_extraction");
       const printedPageLabel = extractPrintedPageLabel(data);
       await updateDocumentPage(pageId, {
-        ocrCompleted: true, ocrConfidence,
+        ocrCompleted: true,
+        // Store null when the model didn't return a confidence score so the UI
+        // shows "N/A" rather than a misleading red "0%".
+        ocrConfidence: confidenceFromModel,
         printedPageLabel: printedPageLabel ?? "[unnumbered]",
       });
     } catch (err: any) {
       if (isConfigError(err)) throw err; // fatal — halt job
       stagesFailed.push("ocr_extraction");
+      stageErrors["ocr_extraction"] = err.message ?? String(err);
       console.warn(`[Pipeline] Job ${jobId} p${pageNum} ocr_extraction: ${err.message}`);
       const ocrResult = await createOcrResult({ pageId, status: "failed", confidence: 0 });
       ocrResultId = ocrResult.id;
@@ -1582,10 +1589,17 @@ async function _runJob(jobId: number): Promise<number | null> {
     const needsHitl = stagesFailed.length > 0 || lowConfidence || poorNativeAlignment;
     if (needsHitl) {
       const reasonParts: string[] = [`Page ${pageNum} of ${totalDocPages}`];
-      if (stagesFailed.length > 0) reasonParts.push(`failed stages: ${stagesFailed.join(", ")}`);
+      if (stagesFailed.length > 0) {
+        // Include the actual error message (first 200 chars) so operators can
+        // see why without digging through server logs.
+        const failDetail = stagesFailed
+          .map(s => stageErrors[s] ? `${s} (${stageErrors[s].slice(0, 200)})` : s)
+          .join(", ");
+        reasonParts.push(`failed stages: ${failDetail}`);
+      }
       if (lowConfidence) reasonParts.push(`low confidence: ${ocrConfidence}%`);
       if (poorNativeAlignment) reasonParts.push(`native text divergence: ${Math.round(nativeSimilarity! * 100)}% similarity`);
-      await createHitlItem({
+      const hitlItem = await createHitlItem({
         pageId,
         ocrResultId: ocrResultId ?? undefined,
         reason: reasonParts.join(" — "),
@@ -1596,6 +1610,18 @@ async function _runJob(jobId: number): Promise<number | null> {
           || (confidenceFromModel !== null && ocrConfidence < 50)
           || (poorNativeAlignment && nativeSimilarity! < 0.5) ? "high" : "medium",
       });
+      // Auto-retry pages that had OCR stage failures — this covers transient LLM
+      // errors (timeouts, malformed JSON, etc.) without operator intervention.
+      // Only the initial pipeline run triggers this; retryPageStages does not
+      // auto-re-enqueue on its own failure, preventing infinite loops.
+      if (stagesFailed.includes("ocr_extraction")) {
+        enqueuePageRetry(
+          pageId,
+          stagesFailed.filter((s): s is RetryStage => s === "layout_analysis" || s === "bbox_detection" || s === "ocr_extraction"),
+          hitlItem.id,
+          {},
+        );
+      }
     }
 
     } finally {

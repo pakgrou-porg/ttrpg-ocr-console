@@ -1386,6 +1386,23 @@ export async function getPageIdsWithFallback(pageIds: number[]): Promise<Set<num
   return new Set(rows.map(r => r.pageId).filter((id): id is number => id != null));
 }
 
+/** Returns the most recent HITL item reason string for each page ID in the set. */
+export async function getLatestHitlReasonByPageIds(pageIds: number[]): Promise<Map<number, string>> {
+  const db = await getDb();
+  if (!db || pageIds.length === 0) return new Map();
+  const { inArray } = await import("drizzle-orm");
+  const rows = await db
+    .select({ pageId: hitlQueue.pageId, reason: hitlQueue.reason })
+    .from(hitlQueue)
+    .where(inArray(hitlQueue.pageId, pageIds))
+    .orderBy(desc(hitlQueue.createdAt));
+  const out = new Map<number, string>();
+  for (const r of rows) {
+    if (!out.has(r.pageId)) out.set(r.pageId, r.reason);
+  }
+  return out;
+}
+
 export async function getHitlStats() {
   const db = await getDb();
   if (!db) return { total: 0, queued: 0, inProgress: 0, resolved: 0, skipped: 0, escalated: 0, byCritical: 0, byHigh: 0, byMedium: 0, byLow: 0 };

@@ -26,7 +26,7 @@ import {
   getOcrResultByPageId, getOcrResultById, createOcrResult, updateOcrResult,
   getHitlItemById, getHitlItemsByIds, getHitlItemsByPageId, getAllHitlItems, createHitlItem, updateHitlItem, getHitlStats,
   getHitlRetryAttemptsByPageId, getHitlRetryAttemptsByPageIds, getHitlRetryAttemptsByPage,
-  getLatestRetryStatusByPageIds, getPageIdsWithFallback,
+  getLatestRetryStatusByPageIds, getPageIdsWithFallback, getLatestHitlReasonByPageIds,
   getAllGameSystems, createGameSystem, updateGameSystem, deleteGameSystem,
   getLlmMetricsByPage, getLlmMetricsJobSummary, getLlmMetricsPageSummary, getLlmProviderMetricsSummary,
   getContentSummariesByDocument, updateContentSummary,
@@ -1720,10 +1720,11 @@ export const appRouter = router({
         ]);
         if (pages.length === 0) return { pages: [], total };
         const pageIds = pages.map(p => p.id);
-        const [ocrs, latestRetryMap, fallbackPageIds] = await Promise.all([
+        const [ocrs, latestRetryMap, fallbackPageIds, hitlReasonMap] = await Promise.all([
           getOcrResultsByPageIds(pageIds),
           getLatestRetryStatusByPageIds(pageIds),
           getPageIdsWithFallback(pageIds),
+          getLatestHitlReasonByPageIds(pageIds),
         ]);
         const ocrMap = new Map(ocrs.map(r => [r.pageId, r]));
         return {
@@ -1736,6 +1737,7 @@ export const appRouter = router({
             ocr: ocrMap.get(page.id) ?? null,
             latestRetryStatus: latestRetryMap.get(page.id) ?? null,
             hasFallback: fallbackPageIds.has(page.id),
+            hitlReason: hitlReasonMap.get(page.id) ?? null,
           })),
         };
       }),
@@ -1776,10 +1778,11 @@ export const appRouter = router({
         ]);
         if (pages.length === 0) return { pages: [], total };
         const pageIds = pages.map(p => p.id);
-        const [ocrs, latestRetryMap, fallbackPageIds] = await Promise.all([
+        const [ocrs, latestRetryMap, fallbackPageIds, hitlReasonMap] = await Promise.all([
           getOcrResultsByPageIds(pageIds),
           getLatestRetryStatusByPageIds(pageIds),
           getPageIdsWithFallback(pageIds),
+          getLatestHitlReasonByPageIds(pageIds),
         ]);
         const ocrMap = new Map(ocrs.map(r => [r.pageId, r]));
         return {
@@ -1792,6 +1795,7 @@ export const appRouter = router({
             ocr: ocrMap.get(p.id) ?? null,
             latestRetryStatus: latestRetryMap.get(p.id) ?? null,
             hasFallback: fallbackPageIds.has(p.id),
+            hitlReason: hitlReasonMap.get(p.id) ?? null,
           })),
         };
       }),

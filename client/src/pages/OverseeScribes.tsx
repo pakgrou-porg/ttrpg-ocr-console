@@ -147,6 +147,14 @@ function PageCard({ page, jobId, onFlagged, timing }: {
         {page.layoutType && (
           <Badge variant="outline" className="text-xs text-muted-foreground">{page.layoutType}</Badge>
         )}
+        {pipelineStatus === "error" && page.hitlReason && (
+          <span
+            className="text-[10px] text-red-400/80 max-w-[260px] truncate"
+            title={page.hitlReason}
+          >
+            {page.hitlReason}
+          </span>
+        )}
         {page.isFlagged && (
           <Badge variant="outline" className="text-xs text-orange-500 border-orange-500/30 bg-orange-500/10">In HITL</Badge>
         )}
