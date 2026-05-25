@@ -87,8 +87,9 @@ Domain Rules:
 5. When a "--- Native PDF text ---" section appears in context, trust it for word-level accuracy (spelling, numbers, punctuation) but derive structure (block types, reading order, column layout) from the image. Do NOT copy native text wholesale.
 
 Required output schema:
-{"region_sequence":1,"regionType":"text","content_blocks":[{"block_type":"heading","level":1,"text":"Chapter Title"},{"block_type":"paragraph","text":"Body text here."},{"block_type":"stat_line","text":"AC 15, HP 7 (2d6), Speed 30 ft."},{"block_type":"rule_term","term":"Darkvision","definition":"Can see in dim light within 60 ft as if bright light.","formatting":["bold"]}],"reading_order_verified":true,"confidence":91}
+{"confidence":91,"region_sequence":1,"regionType":"text","content_blocks":[{"block_type":"heading","level":1,"text":"Chapter Title"},{"block_type":"paragraph","text":"Body text here."},{"block_type":"stat_line","text":"AC 15, HP 7 (2d6), Speed 30 ft."},{"block_type":"rule_term","term":"Darkvision","definition":"Can see in dim light within 60 ft as if bright light.","formatting":["bold"]}],"reading_order_verified":true}
 
+IMPORTANT: "confidence" MUST be the very first key in the JSON object.
 block_type must be one of: heading, paragraph, stat_line, rule_term
 level is optional — applies to heading only (1 = main heading, 2 = subheading).
 term and definition are required for rule_term blocks.
@@ -148,11 +149,11 @@ const FEW_SHOT_BBOX: InvokeOptions["fewShotExamples"] = [
 const FEW_SHOT_OCR: InvokeOptions["fewShotExamples"] = [
   {
     user: "Extract all readable text from this page in reading order. Reply with ONLY a JSON object — start with { and end with }.",
-    assistant: '{"region_sequence":1,"regionType":"text","content_blocks":[{"block_type":"heading","level":1,"text":"Special Thanks to"},{"block_type":"paragraph","text":"Whenever a project of this size is put together, there are many people who give their time and extra effort to see it through."},{"block_type":"paragraph","text":"To Jon Pickens, who produced many obscure reference books."}],"reading_order_verified":true,"confidence":91}',
+    assistant: '{"confidence":91,"region_sequence":1,"regionType":"text","content_blocks":[{"block_type":"heading","level":1,"text":"Special Thanks to"},{"block_type":"paragraph","text":"Whenever a project of this size is put together, there are many people who give their time and extra effort to see it through."},{"block_type":"paragraph","text":"To Jon Pickens, who produced many obscure reference books."}],"reading_order_verified":true}',
   },
   {
     user: "Extract all readable text from this page in reading order. Reply with ONLY a JSON object — start with { and end with }.",
-    assistant: '{"region_sequence":1,"regionType":"text","content_blocks":[{"block_type":"heading","level":1,"text":"Ability Scores"},{"block_type":"paragraph","text":"The table below shows a wizard\'s chance to know each listed spell and the min/max spells per level based on Intelligence score."},{"block_type":"rule_term","term":"Darkvision","definition":"A creature with darkvision can see in dim light within a specified radius as if it were bright light.","formatting":["bold"]}],"reading_order_verified":true,"confidence":90}',
+    assistant: '{"confidence":90,"region_sequence":1,"regionType":"text","content_blocks":[{"block_type":"heading","level":1,"text":"Ability Scores"},{"block_type":"paragraph","text":"The table below shows a wizard\'s chance to know each listed spell and the min/max spells per level based on Intelligence score."},{"block_type":"rule_term","term":"Darkvision","definition":"A creature with darkvision can see in dim light within a specified radius as if it were bright light.","formatting":["bold"]}],"reading_order_verified":true}',
   },
 ];
 
@@ -624,6 +625,33 @@ function parseRetryOcrResponse(content: string): Record<string, unknown> {
       retry_parse_warning: stageErrorMessage(err),
     };
   }
+}
+
+/**
+ * Estimate OCR confidence from output quality signals when the model omits the field.
+ * Capped at 74 so heuristic scores never register as high-confidence (≥80 threshold)
+ * and always route the page through HITL review.
+ */
+function estimateOcrConfidence(data: Record<string, unknown>, rawText: string): number {
+  const blocks = Array.isArray(data.content_blocks) ? data.content_blocks as any[] : [];
+
+  // Near-empty extraction
+  if (rawText.length < 30 && blocks.length === 0) return 10;
+
+  // Penalise OCR noise characters (pipes, hashes, angle brackets, etc.)
+  const noiseCount = rawText.match(/[|#{}<>]/g)?.length ?? 0;
+  const noisePenalty = Math.min(Math.round((noiseCount / Math.max(rawText.length, 1)) * 200), 30);
+
+  // Reward text density — 400 chars is a reasonable "full page" baseline
+  const densityBonus = Math.min(Math.round((rawText.length / 400) * 25), 25);
+
+  // Reward structured output
+  const structureBonus = blocks.length >= 4 ? 10 : blocks.length >= 1 ? 5 : 0;
+
+  // reading_order_verified is the model's own implicit quality signal
+  const verifiedBonus = data.reading_order_verified === true ? 5 : 0;
+
+  return Math.max(5, Math.min(74, 30 + densityBonus + structureBonus + verifiedBonus - noisePenalty));
 }
 
 /**
@@ -1342,6 +1370,7 @@ async function _runJob(jobId: number): Promise<number | null> {
       regions = bboxSettled.value;
       stagesCompleted.push("bbox_detection");
     } else {
+      stagesFailed.push("bbox_detection");
       stageErrors["bbox_detection"] = bboxSettled.reason?.message ?? String(bboxSettled.reason);
       console.warn(`[Pipeline] Job ${jobId} p${pageNum} bbox_detection: ${bboxSettled.reason?.message}`);
     }
@@ -1375,14 +1404,29 @@ async function _runJob(jobId: number): Promise<number | null> {
       const r = await invokeStage("ocr_extraction", ocrContent, regionContext, PROMPT_OCR_EXTRACTION,
         { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_OCR }, { pageId, jobId });
       const data = coerceOcrData(parseJsonResponse(r.content));
-      // Track whether the model actually provided a confidence score.
-      // When it's absent we don't treat the page as low-confidence — we rely
-      // on native-text similarity instead.  confidenceFromModel=null lets the
-      // HITL gate below distinguish "model said 0%" from "model was silent".
       confidenceFromModel = typeof data.confidence === "number" ? data.confidence : null;
+
+      // Rescue confidence from responses where the JSON parser lost the trailing
+      // field due to truncation (confidence was the last key before this fix).
+      if (confidenceFromModel === null) {
+        const m = r.content.match(/"confidence"\s*:\s*(\d+)/);
+        if (m) {
+          const v = parseInt(m[1], 10);
+          if (v >= 0 && v <= 100) confidenceFromModel = v;
+        }
+      }
       ocrConfidence = confidenceFromModel ?? 0;
 
       currentRawText = buildRawText(data);
+
+      // Heuristic fallback when the model genuinely omitted confidence and
+      // regex rescue also failed.  Capped at 74 so these pages always route
+      // through HITL review (threshold is 80).
+      if (confidenceFromModel === null) {
+        confidenceFromModel = estimateOcrConfidence(data, currentRawText);
+        ocrConfidence = confidenceFromModel;
+        console.warn(`[Pipeline] Job ${jobId} p${pageNum}: OCR model omitted confidence, heuristic: ${confidenceFromModel}%`);
+      }
       const nt = nativePageTexts[i];
       // Skip similarity when buildRawText produced empty or JSON-like output
       // (indicates the model returned a non-standard schema — garbage-in would
@@ -1862,9 +1906,22 @@ export async function retryPageStages(
         modelTrace.ocr_extraction = r.model;
         console.log(`[Pipeline] Page ${pageId} retry ocr_extraction: model=${r.model} durationMs=${r.durationMs} raw=${JSON.stringify(r.content.slice(0, 400))}`);
         const data = coerceOcrData(parseRetryOcrResponse(r.content));
-        ocrConfidence = typeof data.confidence === "number" ? data.confidence : 0;
+        let retryConfidence = typeof data.confidence === "number" ? data.confidence : null;
+        if (retryConfidence === null) {
+          const m = r.content.match(/"confidence"\s*:\s*(\d+)/);
+          if (m) {
+            const v = parseInt(m[1], 10);
+            if (v >= 0 && v <= 100) retryConfidence = v;
+          }
+        }
 
         const rawText = buildRawText(data);
+
+        if (retryConfidence === null) {
+          retryConfidence = estimateOcrConfidence(data, rawText);
+          console.warn(`[Pipeline] Page ${pageId} retry: OCR model omitted confidence, heuristic: ${retryConfidence}%`);
+        }
+        ocrConfidence = retryConfidence;
         if (!rawText.trim()) {
           // Model returned parseable JSON but with no extractable text — treat as
           // a failed attempt so the existing OCR result is preserved unchanged.
