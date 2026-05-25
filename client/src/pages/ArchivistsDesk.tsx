@@ -29,6 +29,7 @@ import {
   ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
   ZoomIn, ZoomOut, RotateCw, Maximize2, Minimize2, ImageOff,
   Edit3, Search, X, Filter, FastForward,
+  Layers, Activity, RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -159,6 +160,10 @@ export default function ArchivistsDesk() {
   // Fetch HITL stats
   const { data: stats } = trpc.hitl.stats.useQuery();
 
+  // Fetch pipeline + job stats for the metrics dashboard
+  const { data: pStats } = trpc.pipeline.stats.useQuery(undefined, { refetchInterval: 15000 });
+  const { data: jStats } = trpc.jobs.stats.useQuery(undefined, { refetchInterval: 15000 });
+
   // Fetch selected item with full context
   const { data: itemDetail, isLoading: detailLoading } = trpc.hitl.get.useQuery(
     { id: selectedItemId! },
@@ -232,6 +237,136 @@ export default function ArchivistsDesk() {
         <p className="text-lg text-muted-foreground max-w-3xl">
           Review flagged pages, compare source images with OCR results, and apply corrections to ensure data quality. Your edits feed back into the pipeline for continuous improvement.
         </p>
+      </div>
+
+      {/* Pipeline Metrics Dashboard */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+        {/* Jobs */}
+        <Card className="bg-card/50 backdrop-blur-sm border-border/50">
+          <CardHeader className="pb-1 pt-3 px-3">
+            <CardTitle className="text-xs text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+              <Activity className="w-3.5 h-3.5" /> Jobs
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-3 pb-3 grid grid-cols-2 gap-2">
+            <div className="text-center">
+              <p className="text-xl font-bold text-blue-400">{jStats?.active ?? 0}</p>
+              <p className="text-xs text-muted-foreground">Active</p>
+              <p className="text-xs text-muted-foreground/60">{jStats?.queued ?? 0} queued</p>
+            </div>
+            <div className="text-center">
+              <p className="text-xl font-bold text-green-400">{jStats?.completed ?? 0}</p>
+              <p className="text-xs text-muted-foreground">Completed</p>
+            </div>
+            <div className="text-center">
+              <p className="text-xl font-bold text-red-400">{jStats?.failed ?? 0}</p>
+              <p className="text-xs text-muted-foreground">Failed</p>
+            </div>
+            <div className="text-center">
+              <p className="text-xl font-bold">{jStats?.total ?? 0}</p>
+              <p className="text-xs text-muted-foreground">Total</p>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Pipeline Funnel */}
+        <Card className="bg-card/50 backdrop-blur-sm border-border/50">
+          <CardHeader className="pb-1 pt-3 px-3">
+            <CardTitle className="text-xs text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+              <Layers className="w-3.5 h-3.5" /> Pipeline Funnel
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-3 pb-3 grid grid-cols-2 gap-2">
+            <div className="text-center">
+              <p className="text-xl font-bold">{pStats?.pages.total ?? 0}</p>
+              <p className="text-xs text-muted-foreground">Ingested</p>
+            </div>
+            <div className="text-center">
+              <p className="text-xl font-bold text-violet-400">
+                {pStats?.pages.total ? Math.round((pStats.pages.withLayout / pStats.pages.total) * 100) : 0}%
+              </p>
+              <p className="text-xs text-muted-foreground">Layout</p>
+            </div>
+            <div className="text-center">
+              <p className="text-xl font-bold text-violet-400">
+                {pStats?.pages.total ? Math.round((pStats.pages.withRegions / pStats.pages.total) * 100) : 0}%
+              </p>
+              <p className="text-xs text-muted-foreground">Regions</p>
+            </div>
+            <div className="text-center">
+              <p className="text-xl font-bold text-violet-400">
+                {pStats?.pages.total ? Math.round((pStats.pages.ocrComplete / pStats.pages.total) * 100) : 0}%
+              </p>
+              <p className="text-xs text-muted-foreground">OCR Done</p>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* OCR Quality */}
+        <Card className="bg-card/50 backdrop-blur-sm border-border/50">
+          <CardHeader className="pb-1 pt-3 px-3">
+            <CardTitle className="text-xs text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+              <Activity className="w-3.5 h-3.5" /> OCR Quality
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-3 pb-3 space-y-1.5">
+            <div className="flex justify-between items-center">
+              <span className="text-xs text-green-400">High ≥80%</span>
+              <span className="text-sm font-bold text-green-400">{pStats?.pages.highConf ?? 0}</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-xs text-amber-400">Med 50–79%</span>
+              <span className="text-sm font-bold text-amber-400">{pStats?.pages.medConf ?? 0}</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-xs text-red-400">Low &lt;50%</span>
+              <span className="text-sm font-bold text-red-400">{pStats?.pages.lowConf ?? 0}</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-xs text-muted-foreground">No Score</span>
+              <span className="text-sm font-bold">{pStats?.pages.noScore ?? 0}</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-xs text-red-500">OCR Errors</span>
+              <span className="text-sm font-bold text-red-500">{pStats?.pages.errorState ?? 0}</span>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Review & Rescan */}
+        <Card className="bg-card/50 backdrop-blur-sm border-border/50">
+          <CardHeader className="pb-1 pt-3 px-3">
+            <CardTitle className="text-xs text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+              <RefreshCw className="w-3.5 h-3.5" /> Review & Rescan
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-3 pb-3 space-y-1.5">
+            <div className="flex justify-between items-center">
+              <span className="text-xs text-muted-foreground">HITL Pending</span>
+              <span className="text-sm font-bold">{pStats?.hitl.queued ?? 0}</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-xs text-blue-400">Under Review</span>
+              <span className="text-sm font-bold text-blue-400">{pStats?.hitl.inProgress ?? 0}</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-xs text-green-400">HITL Resolved</span>
+              <span className="text-sm font-bold text-green-400">{pStats?.hitl.resolved ?? 0}</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-xs text-amber-400">Rescan Queued</span>
+              <span className="text-sm font-bold text-amber-400">{pStats?.retry.pendingQueue ?? 0}</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-xs text-violet-400">Rescanning</span>
+              <span className="text-sm font-bold text-violet-400">{pStats?.retry.running ?? 0}</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-xs text-green-400">Corrections Saved</span>
+              <span className="text-sm font-bold text-green-400">{pStats?.pages.savedCorrections ?? 0}</span>
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
       {/* Stats Bar */}
