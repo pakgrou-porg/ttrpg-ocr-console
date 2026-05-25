@@ -755,34 +755,77 @@ export async function clearHitlItems(statuses: string[]) {
  * Preserves users, LLM providers, stage inscriptions, game systems, system
  * config, and Google OAuth tokens — i.e. configuration is untouched.
  */
-export async function wipeProcessingData(): Promise<{ deletedCounts: Record<string, number> }> {
+export type WipeTarget =
+  | "ingestion_jobs"
+  | "documents"
+  | "pages"
+  | "ocr_results"
+  | "hitl_items"
+  | "content_summaries"
+  | "metrics"
+  | "page_layouts"
+  | "page_regions";
+
+export async function wipeProcessingData(
+  targets?: WipeTarget[],
+): Promise<{ deletedCounts: Record<string, number> }> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  // Delete in FK dependency order: leaf tables first, then parents.
-  const [hitlRetry]= await db.delete(hitlRetryAttempts).returning({ id: hitlRetryAttempts.id });
-  const [hitl]     = await db.delete(hitlQueue).returning({ id: hitlQueue.id });
-  const [ocr]      = await db.delete(ocrResults).returning({ id: ocrResults.id });
-  const [attempts] = await db.delete(pageProcessingAttempts).returning({ id: pageProcessingAttempts.id });
-  const [metrics]  = await db.delete(llmTimingMetrics).returning({ id: llmTimingMetrics.id });
-  const [summaries]= await db.delete(contentSummaries).returning({ id: contentSummaries.id });
-  const [pages]    = await db.delete(documentPages).returning({ id: documentPages.id });
-  const [docs]     = await db.delete(documents).returning({ id: documents.id });
-  const [jobs]     = await db.delete(ingestionJobs).returning({ id: ingestionJobs.id });
+  // Empty / absent targets → full wipe (backward-compatible).
+  const wipeAll = !targets || targets.length === 0;
+  const has = (t: WipeTarget) => wipeAll || targets!.includes(t);
+  const counts: Record<string, number> = {};
+  const n = (rows: { id: number }[]) => rows.length;
 
-  return {
-    deletedCounts: {
-      hitlQueue:               Array.isArray(hitl)     ? hitl.length     : 0,
-      hitlRetryAttempts:       Array.isArray(hitlRetry)? hitlRetry.length: 0,
-      ocrResults:              Array.isArray(ocr)      ? ocr.length      : 0,
-      pageProcessingAttempts:  Array.isArray(attempts) ? attempts.length : 0,
-      llmTimingMetrics:        Array.isArray(metrics)  ? metrics.length  : 0,
-      contentSummaries:        Array.isArray(summaries)? summaries.length: 0,
-      documentPages:           Array.isArray(pages)    ? pages.length    : 0,
-      documents:               Array.isArray(docs)     ? docs.length     : 0,
-      ingestionJobs:           Array.isArray(jobs)     ? jobs.length     : 0,
-    },
-  };
+  // HITL leaf tables first
+  if (has("hitl_items")) {
+    counts.hitlRetryAttempts = n(await db.delete(hitlRetryAttempts).returning({ id: hitlRetryAttempts.id }));
+    counts.hitlQueue         = n(await db.delete(hitlQueue).returning({ id: hitlQueue.id }));
+  }
+
+  if (has("ocr_results")) {
+    counts.ocrResults = n(await db.delete(ocrResults).returning({ id: ocrResults.id }));
+    // Reset completion flags on pages that are staying — otherwise the pipeline
+    // believes OCR is done and skips those pages in the next run.
+    if (!has("pages")) {
+      await db.update(documentPages).set({ ocrCompleted: false, ocrConfidence: null });
+    }
+  }
+
+  if (has("metrics")) {
+    counts.llmTimingMetrics       = n(await db.delete(llmTimingMetrics).returning({ id: llmTimingMetrics.id }));
+    counts.pageProcessingAttempts = n(await db.delete(pageProcessingAttempts).returning({ id: pageProcessingAttempts.id }));
+  }
+
+  if (has("content_summaries")) {
+    counts.contentSummaries = n(await db.delete(contentSummaries).returning({ id: contentSummaries.id }));
+  }
+
+  // Soft wipes — UPDATE in place so pipeline can restart from corrected data.
+  // Only applied when pages themselves are not being deleted.
+  if (!has("pages")) {
+    if (has("page_regions")) {
+      const rows = await db.update(documentPages).set({ contentRegions: null }).returning({ id: documentPages.id });
+      counts.pageRegionsCleared = rows.length;
+    }
+    if (has("page_layouts")) {
+      const rows = await db.update(documentPages).set({ layoutType: null }).returning({ id: documentPages.id });
+      counts.pageLayoutsCleared = rows.length;
+    }
+  }
+
+  if (has("pages")) {
+    counts.documentPages = n(await db.delete(documentPages).returning({ id: documentPages.id }));
+  }
+  if (has("documents")) {
+    counts.documents = n(await db.delete(documents).returning({ id: documents.id }));
+  }
+  if (has("ingestion_jobs")) {
+    counts.ingestionJobs = n(await db.delete(ingestionJobs).returning({ id: ingestionJobs.id }));
+  }
+
+  return { deletedCounts: counts };
 }
 
 export async function purgeJobPages(jobId: number) {

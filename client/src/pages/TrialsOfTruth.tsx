@@ -239,6 +239,16 @@ function CorrectionField({ label, value, onChange, onSave, isSaving }: {
           {label} <span className="opacity-60">(leave blank to clear)</span>
         </p>
         <div className="flex items-center gap-1.5 flex-shrink-0">
+          {trimmed && (
+            <button
+              type="button"
+              onClick={() => navigator.clipboard.writeText(trimmed).catch(() => {})}
+              title="Copy to clipboard"
+              className="flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded border border-border/40 text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <Copy className="w-3 h-3" />
+            </button>
+          )}
           {looksLikeJson && trimmed.length > 2 && (
             <button onClick={handlePrune}
               className="flex items-center gap-1 text-xs px-2 py-0.5 rounded border border-border/40 text-muted-foreground hover:text-foreground hover:border-border transition-colors"

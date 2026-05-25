@@ -13,7 +13,7 @@ import {
   getUserPermissions, setUserPermission, deleteUserPermission, getAllPermissionsForAllUsers,
   createInvitation, getAllInvitations, revokeInvitation,
   getAllSystemConfig, getSystemConfigByCategory, upsertSystemConfig, deleteSystemConfig,
-  getAllIngestionJobs, getActiveIngestionJobs, getIngestionJobById, createIngestionJob, updateIngestionJobStatus, getIngestionJobStats, deleteIngestionJob, clearIngestionJobsByStatus, cancelIngestionJobChain, purgeJobPages, clearHitlItems, wipeProcessingData, getPipelineStats, getPagesMissingRegions,
+  getAllIngestionJobs, getActiveIngestionJobs, getIngestionJobById, createIngestionJob, updateIngestionJobStatus, getIngestionJobStats, deleteIngestionJob, clearIngestionJobsByStatus, cancelIngestionJobChain, purgeJobPages, clearHitlItems, wipeProcessingData, type WipeTarget, getPipelineStats, getPagesMissingRegions,
   recordTelemetryEvent, getTelemetryEvents, getTelemetrySummary,
   pingDatabase,
   getAllLlmProviders, getLlmProviderById, createLlmProvider, updateLlmProvider, deleteLlmProvider,
@@ -762,8 +762,15 @@ export const appRouter = router({
     /** Wipe all processing data (jobs, docs, pages, OCR, HITL, summaries, metrics).
      *  Preserves users, providers, inscriptions, game systems, and system config. */
     wipeProcessingData: adminProcedure
-      .mutation(async () => {
-        const result = await wipeProcessingData();
+      .input(z.object({
+        targets: z.array(z.enum([
+          "ingestion_jobs", "documents", "pages", "ocr_results",
+          "hitl_items", "content_summaries", "metrics",
+          "page_layouts", "page_regions",
+        ])).optional(),
+      }).optional())
+      .mutation(async ({ input }) => {
+        const result = await wipeProcessingData(input?.targets as WipeTarget[] | undefined);
         return result;
       }),
   }),

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Shield, Users, Plus, Trash2, Check, X, ChevronDown, ChevronUp, Mail, Crown, AlertTriangle, Loader2 } from "lucide-react";
+import { Shield, Users, Plus, Trash2, Check, X, ChevronDown, ChevronUp, Mail, Crown, AlertTriangle, Loader2, RotateCcw } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
@@ -83,11 +83,47 @@ export default function TheConclave() {
     onError: (e) => toast.error(e.message),
   });
 
+  type WipeTarget =
+    | "ingestion_jobs" | "documents" | "pages" | "ocr_results"
+    | "hitl_items" | "content_summaries" | "metrics"
+    | "page_layouts" | "page_regions";
+
+  const WIPE_OPTIONS: { id: WipeTarget; label: string; description: string; requires?: WipeTarget[] }[] = [
+    { id: "ingestion_jobs",    label: "Ingestion jobs",        description: "Job records and status tracking" },
+    { id: "documents",         label: "Documents",              description: "Document metadata", requires: ["pages", "ocr_results", "hitl_items", "content_summaries", "metrics"] },
+    { id: "pages",             label: "Pages",                  description: "Page image records and all derived data", requires: ["ocr_results", "hitl_items", "metrics"] },
+    { id: "ocr_results",       label: "OCR results",            description: "Extracted text and structured JSON — re-enables OCR re-run" },
+    { id: "hitl_items",        label: "HITL review queue",      description: "Review queue and retry history" },
+    { id: "content_summaries", label: "Content summaries",      description: "Hierarchical section summaries" },
+    { id: "metrics",           label: "Processing metrics",     description: "LLM timing and processing attempt logs" },
+    { id: "page_layouts",      label: "Reset page layouts",     description: "Clear layout classification — re-enables layout re-run (keeps pages)" },
+    { id: "page_regions",      label: "Reset page regions",     description: "Clear bounding-box regions — re-enables region re-run (keeps pages)" },
+  ];
+
   const [wipeConfirmOpen, setWipeConfirmOpen] = useState(false);
+  const [wipeMode, setWipeMode] = useState<"all" | "custom">("all");
+  const [selectedTargets, setSelectedTargets] = useState<Set<WipeTarget>>(new Set());
+
+  const toggleTarget = (id: WipeTarget) => {
+    setSelectedTargets(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+        // Auto-select required dependencies
+        const opt = WIPE_OPTIONS.find(o => o.id === id);
+        opt?.requires?.forEach(dep => next.add(dep));
+      }
+      return next;
+    });
+  };
+
   const wipeMutation = trpc.admin.wipeProcessingData.useMutation({
     onSuccess: (data) => {
       const total = Object.values(data.deletedCounts).reduce((s, n) => s + n, 0);
       toast.success(`Processing data wiped — ${total} records removed.`);
+      setSelectedTargets(new Set());
     },
     onError: (e) => toast.error(e.message),
   });
@@ -389,27 +425,96 @@ export default function TheConclave() {
           <AlertTriangle className="w-5 h-5" />
           Danger Zone
         </h2>
+
+        {/* Wipe All — full reset */}
         <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-5 flex items-center justify-between gap-6">
           <div>
             <p className="font-medium text-sm">Wipe All Processing Data</p>
             <p className="text-xs text-muted-foreground mt-0.5">
               Deletes all ingestion jobs, documents, pages, OCR results, HITL items, content summaries,
-              and LLM timing metrics. Preserves users, providers, stage inscriptions, game systems, and
-              system config.
+              and LLM timing metrics. Preserves users, providers, stage inscriptions, and system config.
             </p>
           </div>
           <Button
             variant="destructive"
             size="sm"
             className="flex-shrink-0 gap-2"
-            onClick={() => setWipeConfirmOpen(true)}
+            onClick={() => { setWipeMode("all"); setWipeConfirmOpen(true); }}
             disabled={wipeMutation.isPending}
           >
-            {wipeMutation.isPending
+            {wipeMutation.isPending && wipeMode === "all"
               ? <Loader2 className="w-4 h-4 animate-spin" />
               : <Trash2 className="w-4 h-4" />}
-            Wipe Data
+            Wipe All
           </Button>
+        </div>
+
+        {/* Custom Wipe — selective reset for pipeline restart */}
+        <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-5 space-y-4">
+          <div>
+            <p className="font-medium text-sm">Custom Wipe</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Selectively clear data categories to restart the pipeline from a specific stage —
+              e.g., wipe only OCR results to re-run extraction while keeping HITL-approved layouts and regions.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {WIPE_OPTIONS.map(opt => {
+              const checked = selectedTargets.has(opt.id);
+              return (
+                <label
+                  key={opt.id}
+                  className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                    checked
+                      ? "border-destructive/50 bg-destructive/10"
+                      : "border-border/30 bg-card/20 hover:bg-card/40"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggleTarget(opt.id)}
+                    className="mt-0.5 accent-destructive w-3.5 h-3.5 flex-shrink-0"
+                  />
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium leading-tight">{opt.label}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{opt.description}</p>
+                    {opt.requires && checked && (
+                      <p className="text-[10px] text-destructive/70 mt-0.5">
+                        Also requires: {opt.requires.map(r => WIPE_OPTIONS.find(o => o.id === r)?.label ?? r).join(", ")}
+                      </p>
+                    )}
+                  </div>
+                </label>
+              );
+            })}
+          </div>
+
+          <div className="flex items-center gap-3">
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 text-muted-foreground"
+              onClick={() => setSelectedTargets(new Set())}
+              disabled={selectedTargets.size === 0}
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              Clear selection
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              className="gap-2 ml-auto"
+              onClick={() => { setWipeMode("custom"); setWipeConfirmOpen(true); }}
+              disabled={wipeMutation.isPending || selectedTargets.size === 0}
+            >
+              {wipeMutation.isPending && wipeMode === "custom"
+                ? <Loader2 className="w-4 h-4 animate-spin" />
+                : <Trash2 className="w-4 h-4" />}
+              Wipe Selected ({selectedTargets.size})
+            </Button>
+          </div>
         </div>
       </section>
 
@@ -419,20 +524,33 @@ export default function TheConclave() {
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2 text-destructive">
               <AlertTriangle className="w-5 h-5" />
-              Wipe All Processing Data?
+              {wipeMode === "all" ? "Wipe All Processing Data?" : `Wipe ${selectedTargets.size} Selected Categories?`}
             </AlertDialogTitle>
             <AlertDialogDescription className="space-y-2">
-              <span className="block">This will permanently delete:</span>
-              <ul className="list-disc list-inside text-sm space-y-0.5 ml-2">
-                <li>All ingestion jobs and their status</li>
-                <li>All documents, pages, and OCR results</li>
-                <li>All HITL review queue items</li>
-                <li>All content summaries and structural breaks</li>
-                <li>All LLM timing metrics and processing attempts</li>
-              </ul>
+              {wipeMode === "all" ? (
+                <>
+                  <span className="block">This will permanently delete all processing data:</span>
+                  <ul className="list-disc list-inside text-sm space-y-0.5 ml-2">
+                    <li>All ingestion jobs and their status</li>
+                    <li>All documents, pages, and OCR results</li>
+                    <li>All HITL review queue items</li>
+                    <li>All content summaries and structural breaks</li>
+                    <li>All LLM timing metrics and processing attempts</li>
+                  </ul>
+                </>
+              ) : (
+                <>
+                  <span className="block">The following will be permanently removed or reset:</span>
+                  <ul className="list-disc list-inside text-sm space-y-0.5 ml-2">
+                    {Array.from(selectedTargets).map(id => {
+                      const opt = WIPE_OPTIONS.find(o => o.id === id)!;
+                      return <li key={id}><span className="font-medium">{opt.label}</span> — {opt.description}</li>;
+                    })}
+                  </ul>
+                </>
+              )}
               <span className="block pt-1 font-medium text-foreground">
-                Users, providers, inscriptions, and config are untouched.
-                This cannot be undone.
+                Users, providers, inscriptions, and config are untouched. This cannot be undone.
               </span>
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -440,9 +558,11 @@ export default function TheConclave() {
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={() => wipeMutation.mutate()}
+              onClick={() => wipeMutation.mutate(
+                wipeMode === "all" ? {} : { targets: Array.from(selectedTargets) as any }
+              )}
             >
-              Yes, wipe everything
+              {wipeMode === "all" ? "Yes, wipe everything" : "Yes, wipe selected"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

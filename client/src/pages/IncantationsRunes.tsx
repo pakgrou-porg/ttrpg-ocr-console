@@ -5,7 +5,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import { Terminal, Save, RefreshCw, Wand2, Database, Zap, Search, FileSearch, ScanLine, Table2, Gavel, History, RotateCcw, GitCompare, Braces } from "lucide-react";
+import { Terminal, Save, RefreshCw, Wand2, Database, Zap, Search, FileSearch, ScanLine, Table2, Gavel, History, RotateCcw, GitCompare, Braces, Copy } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { getLoginUrl } from "@/const";
 
@@ -612,12 +612,24 @@ export default function IncantationsRunes() {
                 Consulting the Arkanum...
               </div>
             ) : (
-              <Textarea
-                value={currentText}
-                onChange={(e) => handleTextChange(e.target.value)}
-                className="min-h-[360px] font-mono text-sm bg-background/60 border-border/60 resize-y"
-                placeholder={`No incantation inscribed yet for "${activeTabDef.label}". Click "Inscribe Defaults" to load the default prompts, or type your own.`}
-              />
+              <div className="relative">
+                <Textarea
+                  value={currentText}
+                  onChange={(e) => handleTextChange(e.target.value)}
+                  className="min-h-[360px] font-mono text-sm bg-background/60 border-border/60 resize-y pr-10"
+                  placeholder={`No incantation inscribed yet for "${activeTabDef.label}". Click "Inscribe Defaults" to load the default prompts, or type your own.`}
+                />
+                {currentText && (
+                  <button
+                    type="button"
+                    onClick={() => navigator.clipboard.writeText(currentText).catch(() => {})}
+                    title="Copy to clipboard"
+                    className="absolute top-2 right-2 p-1.5 rounded bg-background/80 border border-border/50 text-muted-foreground hover:text-foreground transition-colors opacity-50 hover:opacity-100"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
             )}
 
             <div className="flex items-center justify-between mt-4">
