@@ -13,7 +13,7 @@ import {
 import {
   CheckCircle2, XCircle, ArrowUpCircle, ChevronDown, ChevronRight,
   Loader2, ClipboardList, FileText, Layout, BoxSelect, ListTree, Braces, BookOpen,
-  Trash2, ChevronLeft, Download, RefreshCw, Scissors, Save,
+  Trash2, ChevronLeft, Download, RefreshCw, Scissors, Save, Copy, ClipboardPaste,
 } from "lucide-react";
 import { BboxOverlayToggle } from "@/components/BboxOverlay";
 import { BboxRegionEditor, parseRegionJson } from "@/components/BboxRegionEditor";
@@ -102,8 +102,13 @@ function parseLayoutCorrection(value: string): Record<string, unknown> {
   }
 }
 
+const LAYOUT_LABEL_OVERRIDES: Record<string, string> = {
+  toc: "Table of Contents",
+};
+
 function layoutLabel(value: string) {
-  return value.split("_").map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
+  return LAYOUT_LABEL_OVERRIDES[value]
+    ?? value.split("_").map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
 }
 
 function formatRetryTimestamp(value: string | Date | null | undefined) {
@@ -155,7 +160,19 @@ function StatusBadge({ status }: { status: string }) {
 
 // ── Tab content helpers ───────────────────────────────────────────────────────
 
-function JsonViewer({ value, emptyTemplate }: { value: unknown; emptyTemplate?: string }) {
+function JsonViewer({ value, emptyTemplate, onCopyToEdit }: {
+  value: unknown;
+  emptyTemplate?: string;
+  onCopyToEdit?: (v: string) => void;
+}) {
+  const text = value == null ? null
+    : typeof value === "string" ? value
+    : JSON.stringify(value, null, 2);
+
+  const copyToClipboard = () => {
+    if (text) navigator.clipboard.writeText(text).catch(() => {});
+  };
+
   if (value == null) {
     if (emptyTemplate) {
       return (
@@ -167,9 +184,32 @@ function JsonViewer({ value, emptyTemplate }: { value: unknown; emptyTemplate?: 
     return <span className="text-muted-foreground italic text-xs">—</span>;
   }
   return (
-    <pre className="text-xs bg-muted/20 border border-border/40 rounded p-3 overflow-auto max-h-64 whitespace-pre-wrap break-all">
-      {typeof value === "string" ? value : JSON.stringify(value, null, 2)}
-    </pre>
+    <div className="relative group">
+      <pre className="text-xs bg-muted/20 border border-border/40 rounded p-3 overflow-auto max-h-64 whitespace-pre-wrap break-all">
+        {text}
+      </pre>
+      <div className="absolute top-1.5 right-1.5 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        <button
+          type="button"
+          onClick={copyToClipboard}
+          title="Copy to clipboard"
+          className="flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-background/90 border border-border/60 text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <Copy className="w-3 h-3" />
+        </button>
+        {onCopyToEdit && (
+          <button
+            type="button"
+            onClick={() => onCopyToEdit(text!)}
+            title="Copy into correction field for editing"
+            className="flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-background/90 border border-border/60 text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <ClipboardPaste className="w-3 h-3" />
+            Edit
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -238,12 +278,12 @@ function TextTab({ item, correction, onCorrect, onSave, isSaving }: TabProps) {
     <div className="space-y-3">
       <div>
         <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">OCR Extracted Text</p>
-        <JsonViewer value={displayText ?? "No OCR text extracted"} />
+        <JsonViewer value={displayText ?? "No OCR text extracted"} onCopyToEdit={onCorrect} />
       </div>
       {nativeText && (
         <div>
           <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Native PDF Text</p>
-          <JsonViewer value={nativeText} />
+          <JsonViewer value={nativeText} onCopyToEdit={onCorrect} />
         </div>
       )}
       <CorrectionField label="Corrected text" value={correction} onChange={onCorrect} onSave={onSave} isSaving={isSaving} />
@@ -251,16 +291,37 @@ function TextTab({ item, correction, onCorrect, onSave, isSaving }: TabProps) {
   );
 }
 
+/** Default metadata fields for each layout type — seeded into the correction
+ *  JSON when the user picks a type, so they can immediately edit columns etc. */
+const LAYOUT_METADATA_TEMPLATES: Partial<Record<string, Record<string, unknown>>> = {
+  cover:                  { columns: 1, has_table: false, has_image_or_art: true,  has_list: false },
+  title_page:             { columns: 1, has_table: false, has_image_or_art: false, has_list: false },
+  toc:                    { columns: 1, has_table: false, has_image_or_art: false, has_list: true  },
+  chapter_header:         { columns: 1, has_table: false, has_image_or_art: false, has_list: false },
+  body_text:              { columns: 1, has_table: false, has_image_or_art: false, has_list: false },
+  stat_block:             { columns: 1, has_table: true,  has_image_or_art: false, has_list: false },
+  table:                  { columns: 1, has_table: true,  has_image_or_art: false, has_list: false },
+  illustration_full:      { columns: 1, has_table: false, has_image_or_art: true,  has_list: false },
+  illustration_with_text: { columns: 1, has_table: false, has_image_or_art: true,  has_list: false },
+  index:                  { columns: 2, has_table: false, has_image_or_art: false, has_list: true  },
+  appendix:               { columns: 1, has_table: false, has_image_or_art: false, has_list: false },
+  mixed:                  { columns: 1, has_table: false, has_image_or_art: false, has_list: false },
+};
+
 function LayoutTab({ item, correction, onCorrect, onSave, isSaving }: TabProps) {
   const sd = item.ocr?.structuredData as any;
   const corrected = parseLayoutCorrection(correction);
   const layoutType = String(corrected.layout_type ?? corrected.layoutType ?? item.page?.layoutType ?? sd?.layout_type ?? "unknown");
   const layoutMeta = sd?.layout ?? sd?.layout_metadata ?? sd?.page_layout;
+
   const setLayoutType = (value: string) => {
+    const template = LAYOUT_METADATA_TEMPLATES[value] ?? {};
+    // Template provides defaults; any existing corrections override them;
+    // the newly selected layout_type always wins.
     onCorrect(JSON.stringify({
+      ...template,
       ...corrected,
       layout_type: value,
-      columns: corrected.columns ?? (layoutMeta as any)?.columns ?? null,
     }, null, 2));
   };
 
@@ -281,7 +342,7 @@ function LayoutTab({ item, correction, onCorrect, onSave, isSaving }: TabProps) 
       </div>
       <div>
         <p className="text-xs text-muted-foreground mb-1">Layout metadata</p>
-        <JsonViewer value={layoutMeta ?? null} emptyTemplate={EMPTY_TEMPLATES.layout} />
+        <JsonViewer value={layoutMeta ?? null} emptyTemplate={EMPTY_TEMPLATES.layout} onCopyToEdit={onCorrect} />
       </div>
       <CorrectionField label="Layout correction (JSON)"
         value={correction} onChange={onCorrect} onSave={onSave} isSaving={isSaving} />
@@ -300,7 +361,7 @@ function RegionsTab({ item, correction, onCorrect, onSave, isSaving }: TabProps)
           ? (Array.isArray(regions) ? `${regions.length} region(s) detected` : "Region data")
           : <span className="italic">No bounding box / region data detected — empty template shown below.</span>}
       </p>
-      <JsonViewer value={regions ?? null} emptyTemplate={EMPTY_TEMPLATES.regions} />
+      <JsonViewer value={regions ?? null} emptyTemplate={EMPTY_TEMPLATES.regions} onCopyToEdit={onCorrect} />
       <CorrectionField label="Region correction (JSON array)"
         value={correction} onChange={onCorrect} onSave={onSave} isSaving={isSaving} />
     </div>
@@ -350,7 +411,7 @@ function JsonTab({ item, correction, onCorrect, onSave, isSaving }: TabProps) {
       <p className="text-xs text-muted-foreground mb-2">
         {sd ? "Full structured output from OCR extraction" : <span className="italic">No structured data — empty template shown below.</span>}
       </p>
-      <JsonViewer value={sd ?? null} emptyTemplate={EMPTY_TEMPLATES.json} />
+      <JsonViewer value={sd ?? null} emptyTemplate={EMPTY_TEMPLATES.json} onCopyToEdit={onCorrect} />
       <CorrectionField label="Full JSON correction (paste complete corrected JSON)"
         value={correction} onChange={onCorrect} onSave={onSave} isSaving={isSaving} />
     </div>

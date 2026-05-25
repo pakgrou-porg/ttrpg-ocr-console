@@ -220,6 +220,9 @@ export function BboxRegionEditor({
 
   const beginDraw = (e: PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0 || !surfaceRef.current) return;
+    // Grab keyboard focus so shortcuts (S/M/T/P/N/arrows) work immediately
+    // after any pointer interaction without requiring an extra click.
+    surfaceRef.current.focus();
     const start = pointerPercent(e, surfaceRef.current);
     const id = `new-${Date.now()}`;
     const next: DraftRegion = {
@@ -450,7 +453,8 @@ export function BboxRegionEditor({
 
       <div
         ref={surfaceRef}
-        className="relative overflow-hidden rounded border border-border/50 bg-muted/10 touch-none"
+        tabIndex={0}
+        className="relative overflow-hidden rounded border border-border/50 bg-muted/10 touch-none outline-none focus-visible:ring-1 focus-visible:ring-primary/40"
         onPointerDown={beginDraw}
         onPointerMove={handleMove}
         onPointerUp={clearInteraction}

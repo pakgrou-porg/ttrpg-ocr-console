@@ -2320,6 +2320,11 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         await getPageOrThrow(input.pageId);
+        // Mark the HITL item in_progress immediately so it drops off the "queued"
+        // filter in the UI, keeping the review workspace uncluttered.
+        if (input.hitlId) {
+          await updateHitlItem(input.hitlId, { status: "in_progress" });
+        }
         enqueuePageRetry(
           input.pageId,
           input.stages as RetryStage[],
