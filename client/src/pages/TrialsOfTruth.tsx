@@ -587,6 +587,17 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
     );
   };
 
+  // When the reviewer switches to the Layout or Regions tab they are manually
+  // providing that correction, so deselect the corresponding pipeline stage from
+  // the retry set — re-running it would overwrite their edits.
+  useEffect(() => {
+    if (activeTab === "layout") {
+      setRetryStages(prev => { const n = new Set(prev); n.delete("layout_analysis"); return n; });
+    } else if (activeTab === "regions") {
+      setRetryStages(prev => { const n = new Set(prev); n.delete("bbox_detection"); return n; });
+    }
+  }, [activeTab]);
+
   // Auto-expand and scroll when this card becomes the active keyboard target
   useEffect(() => {
     if (isActive) {
