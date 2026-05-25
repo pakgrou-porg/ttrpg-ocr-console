@@ -1068,6 +1068,44 @@ export function startJob(jobId: number): void {
  * Jobs that were mid-processing ("pass1_ocr" etc.) are left for the operator to
  * restart explicitly from the UI.
  */
+/**
+ * Stop all in-flight and queued pipeline work immediately.
+ * Called before a data wipe so no jobs race against the DELETE statements.
+ *
+ * What this does:
+ *   1. Drains pendingJobIds so nothing new starts.
+ *   2. Clears the async retry task queue.
+ *   3. Marks every active/queued DB job as "Cancelled by user" so:
+ *      - runDocumentChain stops chaining at the next block boundary.
+ *      - The per-page check inside _runJob stops at the next page boundary.
+ * In-flight LLM calls for the current page finish naturally (HTTP can't be
+ * aborted without an AbortController thread-through), but no new pages start.
+ */
+export async function cancelAllActiveJobs(): Promise<{ cancelledCount: number }> {
+  // 1. Prevent any queued jobs from being dispatched.
+  const clearedPending = pendingJobIds.length;
+  pendingJobIds.length = 0;
+
+  // 2. Prevent any queued retry tasks from being dispatched.
+  retryTaskQueue.length = 0;
+
+  // 3. Mark every active DB job cancelled so running chains stop looping.
+  const activeJobs = await getActiveIngestionJobs();
+  let cancelledCount = clearedPending;
+  for (const job of activeJobs) {
+    await updateIngestionJobStatus(job.id, {
+      status: "failed",
+      errorMessage: "Cancelled by user",
+      completedAt: new Date(),
+    }).catch(() => {});
+    cancelledCount++;
+  }
+
+  if (cancelledCount > 0)
+    console.log(`[Pipeline] cancelAllActiveJobs: cleared ${clearedPending} pending, cancelled ${activeJobs.length} active job(s)`);
+  return { cancelledCount };
+}
+
 export async function recoverQueuedJobs(): Promise<void> {
   const jobs = await getActiveIngestionJobs();
   const queued = jobs
@@ -1302,6 +1340,13 @@ async function _runJob(jobId: number): Promise<number | null> {
   const VISUAL_REGION_TYPES = new Set(["illustration", "image", "map", "graphic", "advertisement"]);
 
   for (let i = 0; i < pageFiles.length; i++) {
+    // Check before each page: job deleted (wipe) or marked cancelled → stop immediately.
+    const jobCheck = await getIngestionJobById(jobId);
+    if (!jobCheck || (jobCheck.status === "failed" && jobCheck.errorMessage === "Cancelled by user")) {
+      console.log(`[Pipeline] Job ${jobId} cancelled — stopping before page ${pageOffset + i + 1}`);
+      return null;
+    }
+
     const pageNum = pageOffset + i + 1;
     const pageId = pageIds[i];
     const pagePath = pageFiles[i];         // preprocessed (binarized/grayscale) — use for text stages

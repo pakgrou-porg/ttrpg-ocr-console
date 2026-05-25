@@ -32,7 +32,7 @@ import {
   getContentSummariesByDocument, updateContentSummary,
 } from "./db";
 import { encryptSecret, decryptSecret, storeSecretHint, renderMaskedSecret } from "./crypto";
-import { startJob, retryPageStages, RetryStage, enqueuePageRetry, exportDocumentAsUnsloth } from "./pipeline/runner";
+import { startJob, retryPageStages, RetryStage, enqueuePageRetry, exportDocumentAsUnsloth, cancelAllActiveJobs } from "./pipeline/runner";
 import { ENV } from "./_core/env";
 import { FEATURE_AREAS, PROVIDER_TYPES, PIPELINE_STAGES, SUPABASE_CONNECTION_TYPES, SUPABASE_ROLES, SUPABASE_SYNC_MODES, DOCUMENT_STATUSES, OCR_RESULT_STATUSES, HITL_PRIORITIES, HITL_STATUSES, type LlmProvider } from "../drizzle/schema";
 
@@ -770,6 +770,10 @@ export const appRouter = router({
         ])).optional(),
       }).optional())
       .mutation(async ({ input }) => {
+        // Stop all in-flight and queued pipeline jobs before wiping DB records.
+        // This prevents jobs from racing against the DELETE statements and
+        // ensures the UI no longer shows running jobs after the wipe completes.
+        await cancelAllActiveJobs();
         const result = await wipeProcessingData(input?.targets as WipeTarget[] | undefined);
         return result;
       }),
