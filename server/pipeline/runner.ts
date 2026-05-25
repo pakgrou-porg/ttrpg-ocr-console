@@ -70,11 +70,12 @@ Identify distinct content regions in the page image and estimate each region's b
 ${STRICT_RULES}
 
 Required output schema (list every visible region):
-{"regions":[{"type":"…","label":"…","bbox":{"x":0,"y":0,"w":100,"h":100}}]}
+{"regions":[{"sequence":1,"type":"…","label":"…","bbox":{"x":0,"y":0,"w":100,"h":100}}]}
 
 type must be one of: heading, subheading, paragraph, list, sidebar, callout, caption, table, stat_block, illustration, map, graphic, advertisement, header, footer, page_number, unknown
 bbox values are percentages of the page width/height (0–100). x,y = top-left corner; w,h = width and height.
-Estimate bounding boxes as precisely as possible from the visual layout.`;
+Estimate bounding boxes as precisely as possible from the visual layout.
+sequence: 1-based reading order. For single-column pages number top-to-bottom. For multi-column pages number all regions in column 1 first (top-to-bottom), then all regions in column 2, and so on — full-width regions (spanning all columns) slot in at their vertical position relative to the columns they interrupt.`;
 
 const PROMPT_OCR_EXTRACTION = `Extract text and tabular data from the provided TTRPG region image into structured JSON. Apply semantic hierarchy and game-specific formatting.
 ${STRICT_RULES}
@@ -133,16 +134,20 @@ const FEW_SHOT_LAYOUT: InvokeOptions["fewShotExamples"] = [
 
 const FEW_SHOT_BBOX: InvokeOptions["fewShotExamples"] = [
   {
+    // Single-column page: heading → paragraph → table → caption, numbered top-to-bottom
     user: "Identify all distinct content regions on this page. Reply with ONLY a JSON object — start with { and end with }.",
-    assistant: '{"regions":[{"type":"heading","label":"Chapter 3: Weapons","bbox":{"x":5,"y":3,"w":90,"h":7}},{"type":"paragraph","label":"Chapter intro text","bbox":{"x":5,"y":12,"w":90,"h":18}},{"type":"table","label":"Weapon damage table","bbox":{"x":5,"y":33,"w":90,"h":45}},{"type":"caption","label":"Table 3-1 footnote","bbox":{"x":5,"y":80,"w":70,"h":4}}]}',
+    assistant: '{"regions":[{"sequence":1,"type":"heading","label":"Chapter 3: Weapons","bbox":{"x":5,"y":3,"w":90,"h":7}},{"sequence":2,"type":"paragraph","label":"Chapter intro text","bbox":{"x":5,"y":12,"w":90,"h":18}},{"sequence":3,"type":"table","label":"Weapon damage table","bbox":{"x":5,"y":33,"w":90,"h":45}},{"sequence":4,"type":"caption","label":"Table 3-1 footnote","bbox":{"x":5,"y":80,"w":70,"h":4}}]}',
   },
   {
+    // Illustration page: visual first, caption below — both numbered (visual will be skipped at OCR stage)
     user: "Identify all distinct content regions on this page. Reply with ONLY a JSON object — start with { and end with }.",
-    assistant: '{"regions":[{"type":"illustration","label":"Full-page illustration: dungeon battle scene","bbox":{"x":0,"y":0,"w":100,"h":92}},{"type":"caption","label":"Illustration credit text","bbox":{"x":5,"y":93,"w":90,"h":4}}]}',
+    assistant: '{"regions":[{"sequence":1,"type":"illustration","label":"Full-page illustration: dungeon battle scene","bbox":{"x":0,"y":0,"w":100,"h":92}},{"sequence":2,"type":"caption","label":"Illustration credit text","bbox":{"x":5,"y":93,"w":90,"h":4}}]}',
   },
   {
+    // Two-column page: full-width header(1) → full-width heading(2) → col-1 paragraph(3) → col-1 table(4)
+    // → col-2 stat_block(5) → col-2 sidebar(6) → full-width page_number(7)
     user: "Identify all distinct content regions on this page. Reply with ONLY a JSON object — start with { and end with }.",
-    assistant: '{"regions":[{"type":"header","label":"Player\'s Handbook","bbox":{"x":0,"y":0,"w":100,"h":4}},{"type":"heading","label":"Ability Scores","bbox":{"x":5,"y":6,"w":90,"h":5}},{"type":"paragraph","label":"Ability score description","bbox":{"x":5,"y":13,"w":44,"h":35}},{"type":"stat_block","label":"Strength stat block","bbox":{"x":51,"y":13,"w":44,"h":35}},{"type":"table","label":"Ability modifier table","bbox":{"x":5,"y":52,"w":44,"h":42}},{"type":"sidebar","label":"Variant: Customizing ability scores","bbox":{"x":51,"y":52,"w":44,"h":42}},{"type":"page_number","label":"12","bbox":{"x":90,"y":96,"w":8,"h":3}}]}',
+    assistant: '{"regions":[{"sequence":1,"type":"header","label":"Player\'s Handbook","bbox":{"x":0,"y":0,"w":100,"h":4}},{"sequence":2,"type":"heading","label":"Ability Scores","bbox":{"x":5,"y":6,"w":90,"h":5}},{"sequence":3,"type":"paragraph","label":"Ability score description","bbox":{"x":5,"y":13,"w":44,"h":35}},{"sequence":4,"type":"table","label":"Ability modifier table","bbox":{"x":5,"y":52,"w":44,"h":42}},{"sequence":5,"type":"stat_block","label":"Strength stat block","bbox":{"x":51,"y":13,"w":44,"h":35}},{"sequence":6,"type":"sidebar","label":"Variant: Customizing ability scores","bbox":{"x":51,"y":52,"w":44,"h":42}},{"sequence":7,"type":"page_number","label":"12","bbox":{"x":90,"y":96,"w":8,"h":3}}]}',
   },
 ];
 
@@ -170,15 +175,16 @@ position is the 1-based reading-order index where the break occurs.
 continues_from_previous_page: true when the first sentence is clearly a continuation.
 mid_sentence_break_at_end: true when the final sentence is incomplete (cut off at bottom of page).`;
 
-const PROMPT_TABULAR_EXTRACTION = `Perform specialized extraction on complex TTRPG tabular data (e.g., multi-row stat blocks, spell lists, merged-cell equipment tables).
+const PROMPT_TABULAR_EXTRACTION = `Perform specialized extraction on a single TTRPG table or stat block region (e.g., multi-row stat blocks, spell lists, merged-cell equipment tables).
 ${STRICT_RULES}
 
 Domain Rules:
-1. Preserve row/column relationships precisely. Handle merged headers by listing all spanned sub-headers in merged_cells.
-2. Retain all canonical abbreviations (e.g., MV, HD, AC, THAC0, STR, DEX, CON, INT, WIS, CHA, CR, XP, DC, d4/d20/etc). Never expand them.
-3. Extract footnotes and associate them accurately.
-4. Every row must have the same number of entries as column_headers. Use "" for blank cells.
-5. When a "--- Native PDF text ---" section appears in context, trust it for exact cell values, numbers, and special characters. The image is the authority for table structure; the native text is the authority for cell content.
+1. You are given a cropped image of exactly one table or stat block — extract only what is visible in the crop.
+2. Preserve row/column relationships precisely. Handle merged headers by listing all spanned sub-headers in merged_cells.
+3. Retain all canonical abbreviations (e.g., MV, HD, AC, THAC0, STR, DEX, CON, INT, WIS, CHA, CR, XP, DC, d4/d20/etc). Never expand them.
+4. Extract footnotes and associate them accurately.
+5. Every row must have the same number of entries as column_headers. Use "" for blank cells.
+6. When a "--- Native PDF text ---" section appears in context, trust it for exact cell values, numbers, and special characters. The image is the authority for table structure; the native text is the authority for cell content.
 
 table_type must be one of: stat_block, spell_list, equipment, combat, saving_throw, ability_score, class_features, random_table, other
 
@@ -1573,6 +1579,9 @@ async function _runJob(jobId: number): Promise<number | null> {
 
     // ── tabular_extraction ──────────────────────────────────────────────────
     // Runs when layout analysis or bbox detection found table/stat-block content.
+    // When bbox regions are available each table/stat_block region is cropped and
+    // extracted independently — the model sees only the relevant region, eliminating
+    // bleed from adjacent text and multi-column interleaving.
     // Not critical: failures are logged but do not trigger HITL.
     const hasTableContent = layoutData.has_table === true
       || regions.some((r: any) => r.type === "table" || r.type === "stat_block");
@@ -1580,26 +1589,54 @@ async function _runJob(jobId: number): Promise<number | null> {
       try {
         await updateIngestionJobStatus(jobId, { currentStage: "tabular_extraction" });
         const tableRegions = regions.filter((r: any) => r.type === "table" || r.type === "stat_block");
-        const tableCtxParts: string[] = [];
-        if (tableRegions.length > 0)
-          tableCtxParts.push(`Table/stat-block regions detected: ${JSON.stringify(tableRegions)}`);
         const nativeTextForTable = nativePageTexts[i];
-        if (nativeTextForTable)
-          tableCtxParts.push(`--- Native PDF text (ground-truth reference) ---\n${nativeTextForTable.slice(0, 6000)}\n--- End native PDF text ---`);
-        const tableCtx = tableCtxParts.length > 0 ? tableCtxParts.join("\n\n") : undefined;
-        const tabContent: UserContentPart[] = [
-          imgPart,
-          { type: "text", text: "Extract ALL tables and stat blocks from this page with complete accuracy. Reply with ONLY a JSON object — start with { and end with }." },
-        ];
-        const tabResult = await invokeStage("tabular_extraction", tabContent, tableCtx, PROMPT_TABULAR_EXTRACTION,
-          { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_TABULAR }, { pageId, jobId });
-        const tabData = parseJsonResponse(tabResult.content);
-        const extractedTables = normaliseTabularData(tabData);
+        const nativeCtx = nativeTextForTable
+          ? `--- Native PDF text (ground-truth reference) ---\n${nativeTextForTable.slice(0, 6000)}\n--- End native PDF text ---`
+          : undefined;
 
-        if (extractedTables.length > 0) {
+        const allExtractedTables: any[] = [];
+        const tabModels: string[] = [];
+
+        if (tableRegions.length > 0) {
+          // Per-region: crop each bbox and extract the table/stat_block independently.
+          for (const region of tableRegions) {
+            try {
+              const seq: number | undefined = typeof region.sequence === "number" ? region.sequence : undefined;
+              const cropPart = await cropRegionImage(pagePath, region.bbox);
+              const regionDesc = `Region: [${region.type}${seq !== undefined ? ` #${seq}` : ""}] x:${region.bbox.x} y:${region.bbox.y} w:${region.bbox.w} h:${region.bbox.h}`;
+              const regionCtx = [regionDesc, nativeCtx].filter(Boolean).join("\n\n");
+              const tabContent: UserContentPart[] = [
+                cropPart,
+                { type: "text", text: "Extract this table or stat block with complete accuracy. Reply with ONLY a JSON object — start with { and end with }." },
+              ];
+              const tabResult = await invokeStage("tabular_extraction", tabContent, regionCtx, PROMPT_TABULAR_EXTRACTION,
+                { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_TABULAR }, { pageId, jobId });
+              tabModels.push(tabResult.model);
+              const tabData = parseJsonResponse(tabResult.content);
+              // Propagate the bbox sequence to the result so mergeTabularExtraction can order correctly.
+              if (seq !== undefined && !tabData.region_sequence) (tabData as any).region_sequence = seq;
+              allExtractedTables.push(...normaliseTabularData(tabData));
+            } catch (regionErr: any) {
+              if (isConfigError(regionErr)) throw regionErr; // propagate — stage not configured
+              console.warn(`[Pipeline] Job ${jobId} p${pageNum} tabular_extraction region: ${regionErr.message}`);
+            }
+          }
+        } else {
+          // No bbox regions (bbox_detection skipped or found none) — fall back to full-page extraction.
+          const tabContent: UserContentPart[] = [
+            imgPart,
+            { type: "text", text: "Extract ALL tables and stat blocks from this page with complete accuracy. Reply with ONLY a JSON object — start with { and end with }." },
+          ];
+          const tabResult = await invokeStage("tabular_extraction", tabContent, nativeCtx, PROMPT_TABULAR_EXTRACTION,
+            { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_TABULAR }, { pageId, jobId });
+          tabModels.push(tabResult.model);
+          allExtractedTables.push(...normaliseTabularData(parseJsonResponse(tabResult.content)));
+        }
+
+        if (allExtractedTables.length > 0) {
           const existing = await getOcrResultByPageId(pageId);
           if (existing?.structuredData) {
-            const mergedData = mergeTabularExtraction(existing.structuredData, extractedTables);
+            const mergedData = mergeTabularExtraction(existing.structuredData, allExtractedTables);
             finalOcrStructuredData = mergedData;
             await updateOcrResult(existing.id, {
               structuredData: mergedData,
@@ -1607,7 +1644,7 @@ async function _runJob(jobId: number): Promise<number | null> {
               markdownText: buildMarkdownText(mergedData),
               normalisedText: normaliseText(buildCleanText(mergedData)),
               auditLog: [...((existing.auditLog as any[]) ?? []),
-                { timestamp: new Date().toISOString(), action: "tabular_extraction", model: tabResult.model }],
+                { timestamp: new Date().toISOString(), action: "tabular_extraction", model: tabModels.join(",") || "unknown" }],
             } as any);
           }
         }
@@ -2062,12 +2099,8 @@ async function preprocessPageImages(
   outputDir: string,
   opts: BinarizeConfig,
 ): Promise<string[]> {
-  // Dynamic import — graceful no-op if Sharp isn't installed
-  let sharpFn: ((input: string) => any) | null = null;
-  try {
-    const mod = await import("sharp");
-    sharpFn = (mod.default ?? mod) as (input: string) => any;
-  } catch {
+  const sharpFn = await loadSharp();
+  if (!sharpFn) {
     console.warn("[Pipeline] Sharp not installed — skipping image preprocessing. Run: pnpm add sharp");
     return files;
   }
@@ -2226,6 +2259,41 @@ async function convertToPages(
 async function imageContent(filePath: string): Promise<{ type: "image_url"; image_url: { url: string } }> {
   const b64 = await readFile(filePath, "base64");
   return { type: "image_url", image_url: { url: `data:image/png;base64,${b64}` } };
+}
+
+// Lazily loaded sharp singleton — one dynamic import shared by binarizeImages and cropRegionImage.
+let _sharpFn: ((input: string) => any) | null | undefined;
+async function loadSharp(): Promise<((input: string) => any) | null> {
+  if (_sharpFn !== undefined) return _sharpFn;
+  try {
+    const mod = await import("sharp");
+    _sharpFn = (mod.default ?? mod) as (input: string) => any;
+  } catch {
+    _sharpFn = null;
+  }
+  return _sharpFn;
+}
+
+/**
+ * Crop a single bbox region from a page image and return it as a base64 data-URL image part.
+ * bbox coordinates are percentages (0–100) of page dimensions.
+ * Clamps the extract rectangle to the image bounds so an oversized bbox never throws.
+ */
+async function cropRegionImage(
+  imagePath: string,
+  bbox: { x: number; y: number; w: number; h: number },
+): Promise<{ type: "image_url"; image_url: { url: string } }> {
+  const sharp = await loadSharp();
+  if (!sharp) throw new Error("[Pipeline] Sharp not available — cannot crop region image. Run: pnpm add sharp");
+  const meta = await sharp(imagePath).metadata();
+  const W = meta.width ?? 1000;
+  const H = meta.height ?? 1000;
+  const left   = Math.max(0, Math.round(bbox.x / 100 * W));
+  const top    = Math.max(0, Math.round(bbox.y / 100 * H));
+  const width  = Math.max(1, Math.min(Math.round(bbox.w / 100 * W), W - left));
+  const height = Math.max(1, Math.min(Math.round(bbox.h / 100 * H), H - top));
+  const buffer = await sharp(imagePath).extract({ left, top, width, height }).png().toBuffer();
+  return { type: "image_url", image_url: { url: `data:image/png;base64,${buffer.toString("base64")}` } };
 }
 
 // ── Unsloth / VLM dataset export ──────────────────────────────────────────────
