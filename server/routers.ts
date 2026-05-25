@@ -385,7 +385,7 @@ export const appRouter = router({
     upsert: adminProcedure
       .input(z.object({
         name: z.string().max(128),
-        category: z.enum(["pipeline", "console_experience"]),
+        category: z.enum(["pipeline", "console_experience", "schema"]),
         description: z.string().optional(),
         promptText: z.string(),
         version: z.number().int().optional(),

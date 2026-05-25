@@ -5,7 +5,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import { Terminal, Save, RefreshCw, Wand2, Database, Zap, Search, FileSearch, ScanLine, Table2, Gavel, History, RotateCcw, GitCompare } from "lucide-react";
+import { Terminal, Save, RefreshCw, Wand2, Database, Zap, Search, FileSearch, ScanLine, Table2, Gavel, History, RotateCcw, GitCompare, Braces } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { getLoginUrl } from "@/const";
 
@@ -119,11 +119,176 @@ function DiffView({ before, after, label }: { before: string; after: string; lab
 interface PromptTab {
   name: string;
   label: string;
-  category: "pipeline" | "console_experience";
+  category: "pipeline" | "console_experience" | "schema";
   icon: React.ElementType;
   description: string;
   variables: string[];
 }
+
+// ── Default schema content (shown as placeholder until the user saves to DB) ───
+
+const DEFAULT_PIPELINE_SCHEMAS = JSON.stringify({
+  $schema: "http://json-schema.org/draft-07/schema#",
+  title: "TTRPG Pipeline Structured Output Schemas",
+  description: "Standalone JSON Schema for each pipeline stage output. Copy the relevant $def value into response_format.json_schema.schema when configuring structured output on a model endpoint.",
+  $defs: {
+    document_intelligence: {
+      type: "object",
+      required: ["canonical_title", "publisher", "document_type", "document_summary", "game_system"],
+      additionalProperties: false,
+      properties: {
+        canonical_title:  { type: "string" },
+        publisher:        { type: ["string", "null"] },
+        document_type:    { type: "string", enum: ["rulebook", "sourcebook", "adventure", "supplement", "setting", "magazine", "other"] },
+        document_summary: { type: "string" },
+        game_system:      { type: ["string", "null"] },
+      },
+    },
+    layout_analysis: {
+      type: "object",
+      required: ["layout_type", "columns", "has_table", "has_image_or_art", "has_list"],
+      additionalProperties: false,
+      properties: {
+        layout_type:      { type: "string", enum: ["cover", "title_page", "toc", "chapter_header", "body_text", "stat_block", "table", "illustration_full", "illustration_with_text", "index", "appendix", "mixed"] },
+        columns:          { type: "integer", minimum: 1, maximum: 6 },
+        has_table:        { type: "boolean" },
+        has_image_or_art: { type: "boolean" },
+        has_list:         { type: "boolean" },
+      },
+    },
+    bbox_detection: {
+      type: "object",
+      required: ["regions"],
+      additionalProperties: false,
+      properties: {
+        regions: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["type", "label", "bbox"],
+            additionalProperties: false,
+            properties: {
+              type:  { type: "string", enum: ["heading", "subheading", "paragraph", "list", "sidebar", "callout", "caption", "table", "stat_block", "illustration", "map", "graphic", "advertisement", "header", "footer", "page_number", "unknown"] },
+              label: { type: "string" },
+              bbox: {
+                type: "object",
+                required: ["x", "y", "w", "h"],
+                additionalProperties: false,
+                properties: {
+                  x: { type: "number", minimum: 0, maximum: 100 },
+                  y: { type: "number", minimum: 0, maximum: 100 },
+                  w: { type: "number", minimum: 0, maximum: 100 },
+                  h: { type: "number", minimum: 0, maximum: 100 },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    ocr_extraction: {
+      type: "object",
+      required: ["confidence", "region_sequence", "regionType", "content_blocks", "reading_order_verified"],
+      additionalProperties: false,
+      properties: {
+        confidence:             { type: "integer", minimum: 0, maximum: 100 },
+        region_sequence:        { type: "integer", minimum: 1 },
+        regionType:             { type: "string" },
+        content_blocks: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["block_type"],
+            additionalProperties: false,
+            properties: {
+              block_type:  { type: "string", enum: ["heading", "paragraph", "stat_line", "rule_term"] },
+              text:        { type: "string" },
+              level:       { type: "integer", minimum: 1, maximum: 6 },
+              term:        { type: "string" },
+              definition:  { type: "string" },
+              formatting:  { type: "array", items: { type: "string", enum: ["bold", "italic"] } },
+            },
+          },
+        },
+        reading_order_verified: { type: "boolean" },
+      },
+    },
+    content_break_detect: {
+      type: "object",
+      required: ["page_number", "structural_breaks", "continuity", "confidence"],
+      additionalProperties: false,
+      properties: {
+        page_number: { type: "integer", minimum: 1 },
+        structural_breaks: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["break_type", "heading_text", "position"],
+            additionalProperties: false,
+            properties: {
+              break_type:   { type: "string", enum: ["chapter", "section", "subsection", "appendix"] },
+              heading_text: { type: "string" },
+              position:     { type: "integer", minimum: 1 },
+            },
+          },
+        },
+        continuity: {
+          type: "object",
+          required: ["continues_from_previous_page", "continues_to_next_page", "mid_sentence_break_at_end", "section_continues_from_previous_page"],
+          additionalProperties: false,
+          properties: {
+            continues_from_previous_page:        { type: "boolean" },
+            continues_to_next_page:              { type: "boolean" },
+            mid_sentence_break_at_end:           { type: "boolean" },
+            section_continues_from_previous_page: { type: "boolean" },
+          },
+        },
+        confidence: { type: "integer", minimum: 0, maximum: 100 },
+      },
+    },
+    tabular_extraction: {
+      type: "object",
+      required: ["region_sequence", "table_type", "caption", "column_headers", "rows", "merged_cells", "footnotes", "confidence"],
+      additionalProperties: false,
+      properties: {
+        region_sequence: { type: ["integer", "null"], minimum: 1 },
+        table_type:      { type: "string", enum: ["stat_block", "spell_list", "equipment", "combat", "saving_throw", "ability_score", "class_features", "random_table", "other"] },
+        caption:         { type: ["string", "null"] },
+        column_headers:  { type: "array", items: { type: "string" } },
+        rows:            { type: "array", items: { type: "object", additionalProperties: { type: "string" } } },
+        merged_cells: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["header", "spans"],
+            additionalProperties: false,
+            properties: {
+              header: { type: "string" },
+              spans:  { type: "array", items: { type: "string" } },
+            },
+          },
+        },
+        footnotes:  { type: "array", items: { type: "string" } },
+        confidence: { type: "integer", minimum: 0, maximum: 100 },
+      },
+    },
+    section_summary: {
+      type: "object",
+      required: ["short_summary", "long_summary", "key_terms", "key_entities"],
+      additionalProperties: false,
+      properties: {
+        short_summary: { type: "string" },
+        long_summary:  { type: "string" },
+        key_terms:     { type: "array", items: { type: "string" } },
+        key_entities:  { type: "array", items: { type: "string" } },
+      },
+    },
+  },
+}, null, 2);
+
+const SCHEMA_DEFAULTS: Partial<Record<string, string>> = {
+  pipeline_schemas: DEFAULT_PIPELINE_SCHEMAS,
+};
 
 const PROMPT_TABS: PromptTab[] = [
   // ── Phase 1: Ingestion & Layout ──────────────────────────────────────────
@@ -232,6 +397,15 @@ const PROMPT_TABS: PromptTab[] = [
     description: "Instructions for the AI that acts as an authoritative rules referee — answering specific rules questions, resolving edge cases, and citing the relevant source material from the lore database.",
     variables: ["{{rules_question}}", "{{game_system}}", "{{edition}}", "{{retrieved_context}}"],
   },
+  // ── Schemas ───────────────────────────────────────────────────────────────
+  {
+    name: "pipeline_schemas",
+    label: "Pipeline Output Schemas",
+    category: "schema",
+    icon: Braces,
+    description: "JSON Schema definitions for all pipeline stage structured outputs. Each $def is a self-contained schema — copy the relevant one into response_format.json_schema.schema when enabling strict structured output on a model endpoint.",
+    variables: [],
+  },
 ];
 
 export default function IncantationsRunes() {
@@ -276,7 +450,7 @@ export default function IncantationsRunes() {
   }, {});
 
   const activeTabDef = PROMPT_TABS.find((t) => t.name === activeTab)!;
-  const currentText = editedText[activeTab] ?? promptMap[activeTab] ?? "";
+  const currentText = editedText[activeTab] ?? promptMap[activeTab] ?? SCHEMA_DEFAULTS[activeTab] ?? "";
 
   const handleTextChange = (text: string) => {
     setEditedText((e) => ({ ...e, [activeTab]: text }));
@@ -383,6 +557,30 @@ export default function IncantationsRunes() {
               </button>
             );
           })}
+
+          <Separator className="bg-border/40 my-3" />
+
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Schemas</p>
+          {PROMPT_TABS.filter((t) => t.category === "schema").map((tab) => {
+            const Icon = tab.icon;
+            const isActive = activeTab === tab.name;
+            const dirty = isDirty[tab.name];
+            return (
+              <button
+                key={tab.name}
+                onClick={() => switchTab(tab.name)}
+                className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-md text-sm text-left transition-colors duration-200 ${
+                  isActive
+                    ? "bg-primary/15 border border-primary/40 text-foreground"
+                    : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                }`}
+              >
+                <Icon className={`w-4 h-4 flex-shrink-0 ${isActive ? "text-primary" : ""}`} />
+                <span className="truncate flex-1">{tab.label}</span>
+                {dirty && <div className="w-1.5 h-1.5 rounded-full bg-orange-400 flex-shrink-0" />}
+              </button>
+            );
+          })}
         </div>
 
         {/* Editor */}
@@ -392,8 +590,11 @@ export default function IncantationsRunes() {
               <div>
                 <div className="flex items-center gap-2 mb-1">
                   <h2 className="text-lg font-bold">{activeTabDef.label}</h2>
-                  <Badge variant={activeTabDef.category === "pipeline" ? "default" : "secondary"} className="text-xs">
-                    {activeTabDef.category === "pipeline" ? "Pipeline" : "Console AI"}
+                  <Badge
+                    variant={activeTabDef.category === "pipeline" ? "default" : activeTabDef.category === "schema" ? "outline" : "secondary"}
+                    className="text-xs"
+                  >
+                    {activeTabDef.category === "pipeline" ? "Pipeline" : activeTabDef.category === "schema" ? "Schema" : "Console AI"}
                   </Badge>
                   {isDirty[activeTab] && (
                     <Badge variant="outline" className="text-xs text-orange-400 border-orange-400/40">
