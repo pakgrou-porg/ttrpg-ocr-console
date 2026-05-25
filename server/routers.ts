@@ -13,7 +13,7 @@ import {
   getUserPermissions, setUserPermission, deleteUserPermission, getAllPermissionsForAllUsers,
   createInvitation, getAllInvitations, revokeInvitation,
   getAllSystemConfig, getSystemConfigByCategory, upsertSystemConfig, deleteSystemConfig,
-  getAllIngestionJobs, getActiveIngestionJobs, getIngestionJobById, createIngestionJob, updateIngestionJobStatus, getIngestionJobStats, deleteIngestionJob, clearIngestionJobsByStatus, cancelIngestionJobChain, purgeJobPages, clearHitlItems, wipeProcessingData,
+  getAllIngestionJobs, getActiveIngestionJobs, getIngestionJobById, createIngestionJob, updateIngestionJobStatus, getIngestionJobStats, deleteIngestionJob, clearIngestionJobsByStatus, cancelIngestionJobChain, purgeJobPages, clearHitlItems, wipeProcessingData, getPipelineStats,
   recordTelemetryEvent, getTelemetryEvents, getTelemetrySummary,
   pingDatabase,
   getAllLlmProviders, getLlmProviderById, createLlmProvider, updateLlmProvider, deleteLlmProvider,
@@ -2813,6 +2813,9 @@ export const appRouter = router({
           percentComplete: pages.length > 0 ? Math.round((ocrCompleteCount / pages.length) * 100) : 0,
         };
       }),
+
+    /** Aggregate pipeline health stats for the Oversee the Scribes dashboard. */
+    stats: protectedProcedure.query(() => getPipelineStats()),
   }),
 
   // ─── Google Drive ─────────────────────────────────────────────────────────────

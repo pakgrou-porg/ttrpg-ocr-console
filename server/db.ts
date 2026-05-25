@@ -1386,6 +1386,88 @@ export async function getPageIdsWithFallback(pageIds: number[]): Promise<Set<num
   return new Set(rows.map(r => r.pageId).filter((id): id is number => id != null));
 }
 
+/**
+ * Pipeline health dashboard stats — single round-trip via four parallel
+ * aggregate queries. Uses PostgreSQL FILTER (WHERE …) for efficiency.
+ */
+export async function getPipelineStats() {
+  const db = await getDb();
+  const zero = {
+    pages: { total: 0, withLayout: 0, withRegions: 0, ocrComplete: 0, highConf: 0, medConf: 0, lowConf: 0, noScore: 0, errorState: 0, savedCorrections: 0 },
+    hitl:  { queued: 0, inProgress: 0, resolved: 0, skipped: 0, total: 0 },
+    retry: { pendingQueue: 0, running: 0, failed: 0, succeeded: 0 },
+  };
+  if (!db) return zero;
+
+  const n = (v: unknown) => Number(v ?? 0);
+
+  const [pageRow, hitlRow, retryRow, ocrRow] = await Promise.all([
+    db.select({
+      total:            sql<number>`COUNT(*)`,
+      withLayout:       sql<number>`COUNT(*) FILTER (WHERE ${documentPages.layoutType} IS NOT NULL)`,
+      withRegions:      sql<number>`COUNT(*) FILTER (WHERE ${documentPages.contentRegions} IS NOT NULL)`,
+      ocrComplete:      sql<number>`COUNT(*) FILTER (WHERE ${documentPages.ocrCompleted} = TRUE)`,
+      highConf:         sql<number>`COUNT(*) FILTER (WHERE ${documentPages.ocrConfidence} >= 80)`,
+      medConf:          sql<number>`COUNT(*) FILTER (WHERE ${documentPages.ocrConfidence} >= 50 AND ${documentPages.ocrConfidence} < 80)`,
+      lowConf:          sql<number>`COUNT(*) FILTER (WHERE ${documentPages.ocrConfidence} IS NOT NULL AND ${documentPages.ocrConfidence} < 50)`,
+      noScore:          sql<number>`COUNT(*) FILTER (WHERE ${documentPages.ocrCompleted} = TRUE AND ${documentPages.ocrConfidence} IS NULL)`,
+    }).from(documentPages),
+
+    db.select({
+      queued:     sql<number>`COUNT(*) FILTER (WHERE ${hitlQueue.status} = 'queued')`,
+      inProgress: sql<number>`COUNT(*) FILTER (WHERE ${hitlQueue.status} = 'in_progress')`,
+      resolved:   sql<number>`COUNT(*) FILTER (WHERE ${hitlQueue.status} = 'resolved')`,
+      skipped:    sql<number>`COUNT(*) FILTER (WHERE ${hitlQueue.status} = 'skipped')`,
+      total:      sql<number>`COUNT(*)`,
+    }).from(hitlQueue),
+
+    db.select({
+      pendingQueue: sql<number>`COUNT(*) FILTER (WHERE ${hitlRetryAttempts.status} = 'pending_queue')`,
+      running:      sql<number>`COUNT(*) FILTER (WHERE ${hitlRetryAttempts.status} = 'running')`,
+      failed:       sql<number>`COUNT(*) FILTER (WHERE ${hitlRetryAttempts.status} = 'failed')`,
+      succeeded:    sql<number>`COUNT(*) FILTER (WHERE ${hitlRetryAttempts.status} = 'succeeded')`,
+    }).from(hitlRetryAttempts),
+
+    db.select({
+      errorState:       sql<number>`COUNT(*) FILTER (WHERE ${ocrResults.status} = 'failed')`,
+      savedCorrections: sql<number>`COUNT(*) FILTER (WHERE ${ocrResults.correctedText} IS NOT NULL OR ${ocrResults.correctedStructuredData} IS NOT NULL)`,
+    }).from(ocrResults),
+  ]);
+
+  const p = pageRow[0]!;
+  const h = hitlRow[0]!;
+  const r = retryRow[0]!;
+  const o = ocrRow[0]!;
+
+  return {
+    pages: {
+      total:            n(p.total),
+      withLayout:       n(p.withLayout),
+      withRegions:      n(p.withRegions),
+      ocrComplete:      n(p.ocrComplete),
+      highConf:         n(p.highConf),
+      medConf:          n(p.medConf),
+      lowConf:          n(p.lowConf),
+      noScore:          n(p.noScore),
+      errorState:       n(o.errorState),
+      savedCorrections: n(o.savedCorrections),
+    },
+    hitl: {
+      queued:     n(h.queued),
+      inProgress: n(h.inProgress),
+      resolved:   n(h.resolved),
+      skipped:    n(h.skipped),
+      total:      n(h.total),
+    },
+    retry: {
+      pendingQueue: n(r.pendingQueue),
+      running:      n(r.running),
+      failed:       n(r.failed),
+      succeeded:    n(r.succeeded),
+    },
+  };
+}
+
 /** Returns the most recent HITL item reason string for each page ID in the set. */
 export async function getLatestHitlReasonByPageIds(pageIds: number[]): Promise<Map<number, string>> {
   const db = await getDb();

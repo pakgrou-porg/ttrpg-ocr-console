@@ -5,6 +5,8 @@ import {
   Activity, Clock, CheckCircle2, AlertCircle, Pause, RotateCcw, Loader2,
   Gamepad2, Plus, Trash2, Pencil, Check, X, ChevronDown, ChevronRight,
   BookOpen, Flag, Eye, ImageOff, ChevronLeft, Timer, BarChart2,
+  Layers, ScanText, MapPin, ShieldCheck, ShieldAlert, RefreshCw, Save,
+  FlaskConical,
 } from "lucide-react";
 import { PipelineStatusBadge, derivePipelineStatus, PIPELINE_STATUS_CONFIG } from "@/components/PipelineStatusBadge";
 import { Button } from "@/components/ui/button";
@@ -424,6 +426,7 @@ function JobMetricsPanel({ jobId, onClose }: { jobId: number; onClose: () => voi
 
 export default function OverseeScribes() {
   const { data: stats, isLoading: statsLoading } = trpc.jobs.stats.useQuery(undefined, { refetchInterval: 10000 });
+  const { data: pStats, isLoading: pStatsLoading } = trpc.pipeline.stats.useQuery(undefined, { refetchInterval: 15000 });
   const { data: jobs, isLoading: jobsLoading, refetch } = trpc.jobs.list.useQuery(undefined, { refetchInterval: 10000 });
 
   const [expandedJobId, setExpandedJobId]   = useState<number | null>(null);
@@ -640,55 +643,105 @@ export default function OverseeScribes() {
         </p>
       </div>
 
-      {/* ── Stats ── */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <Card className="bg-card/50 backdrop-blur-sm border-border/50">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <Clock className="w-4 h-4" /> Active Scribes
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {statsLoading ? <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /> : (
-              <>
-                <div className="text-3xl font-bold font-mono">{(stats?.active ?? 0) + (stats?.queued ?? 0)}</div>
-                <p className="text-xs text-muted-foreground mt-1">{stats?.active ?? 0} processing, {stats?.queued ?? 0} queued</p>
-              </>
-            )}
-          </CardContent>
-        </Card>
-        <Card className="bg-card/50 backdrop-blur-sm border-border/50">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-green-500" /> Completed
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {statsLoading ? <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /> : (
-              <>
-                <div className="text-3xl font-bold font-mono text-green-500">{stats?.completed ?? 0}</div>
-                <p className="text-xs text-muted-foreground mt-1">Total completed jobs</p>
-              </>
-            )}
-          </CardContent>
-        </Card>
-        <Card className="bg-card/50 backdrop-blur-sm border-border/50">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 text-orange-500" /> Scribe Queries (HITL)
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {statsLoading ? <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /> : (
-              <>
-                <div className="text-3xl font-bold font-mono text-orange-500">
-                  {(stats?.total ?? 0) - (stats?.completed ?? 0) - (stats?.failed ?? 0) - (stats?.active ?? 0) - (stats?.queued ?? 0)}
+      {/* ── Pipeline Metrics Dashboard ── */}
+      <div className="space-y-3">
+
+        {/* Section: Jobs */}
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">Jobs</p>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {[
+            { label: "Active",    value: (stats?.active ?? 0),    sub: `${stats?.queued ?? 0} queued`,       icon: Activity,      cls: "text-blue-400" },
+            { label: "Completed", value: stats?.completed ?? 0,   sub: "jobs finished",                       icon: CheckCircle2,  cls: "text-green-400" },
+            { label: "Review",    value: (stats?.total ?? 0) - (stats?.completed ?? 0) - (stats?.failed ?? 0) - (stats?.active ?? 0) - (stats?.queued ?? 0),
+                                                                   sub: "awaiting sign-off",                   icon: Clock,         cls: "text-orange-400" },
+            { label: "Failed",    value: stats?.failed ?? 0,      sub: "job-level errors",                    icon: AlertCircle,   cls: "text-red-400" },
+          ].map(({ label, value, sub, icon: Icon, cls }) => (
+            <div key={label} className="flex items-center gap-3 rounded-lg border border-border/40 bg-card/30 px-4 py-3">
+              <Icon className={`w-5 h-5 flex-shrink-0 ${cls}`} />
+              <div>
+                <div className={`text-2xl font-bold font-mono leading-none ${statsLoading ? "text-muted-foreground" : cls}`}>
+                  {statsLoading ? "—" : value}
                 </div>
-                <p className="text-xs text-muted-foreground mt-1">Requires manual review</p>
-              </>
-            )}
-          </CardContent>
-        </Card>
+                <div className="text-[11px] text-muted-foreground mt-0.5">{label} · {sub}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Section: Pipeline Funnel */}
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest pt-2">Pipeline Funnel</p>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {(() => {
+            const total = pStats?.pages.total ?? 0;
+            const pct = (n: number) => total > 0 ? `${Math.round((n / total) * 100)}%` : "—";
+            return [
+              { label: "Pages Ingested",    value: total,                          sub: "total across all docs",                 icon: Layers,      cls: "text-slate-300" },
+              { label: "Layout Classified", value: pStats?.pages.withLayout ?? 0,  sub: pct(pStats?.pages.withLayout ?? 0),      icon: MapPin,      cls: "text-purple-400" },
+              { label: "Regions Detected",  value: pStats?.pages.withRegions ?? 0, sub: pct(pStats?.pages.withRegions ?? 0),     icon: FlaskConical,cls: "text-indigo-400" },
+              { label: "OCR Extracted",     value: pStats?.pages.ocrComplete ?? 0, sub: pct(pStats?.pages.ocrComplete ?? 0),     icon: ScanText,    cls: "text-cyan-400" },
+            ];
+          })().map(({ label, value, sub, icon: Icon, cls }) => (
+            <div key={label} className="flex items-center gap-3 rounded-lg border border-border/40 bg-card/30 px-4 py-3">
+              <Icon className={`w-5 h-5 flex-shrink-0 ${cls}`} />
+              <div>
+                <div className={`text-2xl font-bold font-mono leading-none ${pStatsLoading ? "text-muted-foreground" : cls}`}>
+                  {pStatsLoading ? "—" : value.toLocaleString()}
+                </div>
+                <div className="text-[11px] text-muted-foreground mt-0.5">{label} · {sub}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Section: OCR Quality */}
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest pt-2">OCR Quality</p>
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+          {(() => {
+            const complete = pStats?.pages.ocrComplete ?? 0;
+            const pct = (n: number) => complete > 0 ? `${Math.round((n / complete) * 100)}%` : "—";
+            return [
+              { label: "High ≥80%",    value: pStats?.pages.highConf ?? 0,        sub: pct(pStats?.pages.highConf ?? 0),        cls: "text-green-400" },
+              { label: "Med 50–79%",   value: pStats?.pages.medConf ?? 0,         sub: pct(pStats?.pages.medConf ?? 0),         cls: "text-amber-400" },
+              { label: "Low <50%",     value: pStats?.pages.lowConf ?? 0,         sub: pct(pStats?.pages.lowConf ?? 0),         cls: "text-orange-400" },
+              { label: "No Score",     value: pStats?.pages.noScore ?? 0,         sub: "model silent",                          cls: "text-slate-400" },
+              { label: "OCR Errors",   value: pStats?.pages.errorState ?? 0,      sub: "failed extraction",                     cls: "text-red-400" },
+            ];
+          })().map(({ label, value, sub, cls }) => (
+            <div key={label} className="flex items-center justify-between rounded-lg border border-border/40 bg-card/30 px-3 py-2.5">
+              <div className="text-[11px] text-muted-foreground">{label}</div>
+              <div className="text-right">
+                <div className={`text-lg font-bold font-mono leading-none ${pStatsLoading ? "text-muted-foreground" : cls}`}>
+                  {pStatsLoading ? "—" : value.toLocaleString()}
+                </div>
+                <div className="text-[10px] text-muted-foreground">{sub}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Section: Review & Rescan */}
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest pt-2">Review &amp; Rescan</p>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          {[
+            { label: "HITL Pending",    value: pStats?.hitl.queued ?? 0,          sub: "awaiting review",    icon: AlertCircle,  cls: "text-orange-400" },
+            { label: "Under Review",    value: pStats?.hitl.inProgress ?? 0,      sub: "being reviewed",     icon: Eye,          cls: "text-blue-400" },
+            { label: "HITL Resolved",   value: pStats?.hitl.resolved ?? 0,        sub: "review complete",    icon: CheckCircle2, cls: "text-green-400" },
+            { label: "Rescan Queued",   value: pStats?.retry.pendingQueue ?? 0,   sub: "pending retry",      icon: RotateCcw,    cls: "text-purple-400" },
+            { label: "Rescanning",      value: pStats?.retry.running ?? 0,        sub: "retry in progress",  icon: RefreshCw,    cls: "text-cyan-400" },
+            { label: "Corrections",     value: pStats?.pages.savedCorrections ?? 0, sub: "pages saved",      icon: Save,         cls: "text-emerald-400" },
+          ].map(({ label, value, sub, icon: Icon, cls }) => (
+            <div key={label} className="flex items-center gap-2.5 rounded-lg border border-border/40 bg-card/30 px-3 py-2.5">
+              <Icon className={`w-4 h-4 flex-shrink-0 ${cls}`} />
+              <div>
+                <div className={`text-xl font-bold font-mono leading-none ${pStatsLoading ? "text-muted-foreground" : cls}`}>
+                  {pStatsLoading ? "—" : value.toLocaleString()}
+                </div>
+                <div className="text-[10px] text-muted-foreground mt-0.5">{label} · {sub}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+
       </div>
 
       {/* ── Transcription Queue ── */}
