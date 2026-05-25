@@ -1468,6 +1468,18 @@ export async function getPipelineStats() {
   };
 }
 
+/** Returns IDs of pages that completed OCR but never had bbox_detection write contentRegions. */
+export async function getPagesMissingRegions(): Promise<number[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const { isNull } = await import("drizzle-orm");
+  const rows = await db
+    .select({ id: documentPages.id })
+    .from(documentPages)
+    .where(and(eq(documentPages.ocrCompleted, true), isNull(documentPages.contentRegions)));
+  return rows.map(r => r.id);
+}
+
 /** Returns the most recent HITL item reason string for each page ID in the set. */
 export async function getLatestHitlReasonByPageIds(pageIds: number[]): Promise<Map<number, string>> {
   const db = await getDb();

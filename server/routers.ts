@@ -13,7 +13,7 @@ import {
   getUserPermissions, setUserPermission, deleteUserPermission, getAllPermissionsForAllUsers,
   createInvitation, getAllInvitations, revokeInvitation,
   getAllSystemConfig, getSystemConfigByCategory, upsertSystemConfig, deleteSystemConfig,
-  getAllIngestionJobs, getActiveIngestionJobs, getIngestionJobById, createIngestionJob, updateIngestionJobStatus, getIngestionJobStats, deleteIngestionJob, clearIngestionJobsByStatus, cancelIngestionJobChain, purgeJobPages, clearHitlItems, wipeProcessingData, getPipelineStats,
+  getAllIngestionJobs, getActiveIngestionJobs, getIngestionJobById, createIngestionJob, updateIngestionJobStatus, getIngestionJobStats, deleteIngestionJob, clearIngestionJobsByStatus, cancelIngestionJobChain, purgeJobPages, clearHitlItems, wipeProcessingData, getPipelineStats, getPagesMissingRegions,
   recordTelemetryEvent, getTelemetryEvents, getTelemetrySummary,
   pingDatabase,
   getAllLlmProviders, getLlmProviderById, createLlmProvider, updateLlmProvider, deleteLlmProvider,
@@ -2816,6 +2816,16 @@ export const appRouter = router({
 
     /** Aggregate pipeline health stats for the Oversee the Scribes dashboard. */
     stats: protectedProcedure.query(() => getPipelineStats()),
+
+    /** Enqueue a bbox_detection retry for every OCR-complete page that has no
+     *  contentRegions — typically pages processed before the bbox stagesFailed fix. */
+    enqueueBboxRescan: protectedProcedure.mutation(async () => {
+      const pageIds = await getPagesMissingRegions();
+      for (const pageId of pageIds) {
+        enqueuePageRetry(pageId, ["bbox_detection"], undefined, {});
+      }
+      return { enqueued: pageIds.length };
+    }),
   }),
 
   // ─── Google Drive ─────────────────────────────────────────────────────────────

@@ -29,7 +29,7 @@ import {
   ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
   ZoomIn, ZoomOut, RotateCw, Maximize2, Minimize2, ImageOff,
   Edit3, Search, X, Filter, FastForward,
-  Layers, Activity, RefreshCw,
+  Layers, Activity, RefreshCw, LayoutGrid,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -83,12 +83,43 @@ function pipelinePageUrl(fsPath: string | null | undefined): string | null {
   return `/api/pipeline/pages/${relative}`;
 }
 
+// ─── Region overlay colour map ──────────────────────────────────────────────
+
+const REGION_COLORS: Record<string, string> = {
+  heading:     "#f59e0b",
+  subheading:  "#fbbf24",
+  paragraph:   "#3b82f6",
+  list:        "#60a5fa",
+  sidebar:     "#f97316",
+  callout:     "#06b6d4",
+  table:       "#8b5cf6",
+  stat_block:  "#ec4899",
+  illustration:"#10b981",
+  map:         "#22c55e",
+  graphic:     "#4ade80",
+  caption:     "#84cc16",
+  header:      "#94a3b8",
+  footer:      "#94a3b8",
+  page_number: "#64748b",
+};
+
 // ─── Image Viewer ───────────────────────────────────────────────────────────
 
-function ImageViewer({ imageUrl, pageNumber }: { imageUrl: string | null | undefined; pageNumber: number }) {
+type BboxRegion = { type?: string; regionType?: string; label?: string; bbox: { x: number; y: number; w: number; h: number } };
+
+function ImageViewer({
+  imageUrl,
+  pageNumber,
+  regions,
+}: {
+  imageUrl: string | null | undefined;
+  pageNumber: number;
+  regions?: BboxRegion[] | null;
+}) {
   const [zoom, setZoom] = useState(1);
   const [rotation, setRotation] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showRegions, setShowRegions] = useState(false);
 
   if (!imageUrl) {
     return (
@@ -99,6 +130,7 @@ function ImageViewer({ imageUrl, pageNumber }: { imageUrl: string | null | undef
     );
   }
 
+  const hasRegions = regions && regions.length > 0;
   const containerClass = isFullscreen
     ? "fixed inset-0 z-50 bg-background/95 backdrop-blur-sm flex flex-col"
     : "flex flex-col h-full";
@@ -108,6 +140,9 @@ function ImageViewer({ imageUrl, pageNumber }: { imageUrl: string | null | undef
       <div className="flex items-center justify-between px-3 py-2 border-b border-border/50 bg-card/50 flex-shrink-0">
         <span className="text-xs font-mono text-muted-foreground">
           Page {pageNumber} &middot; {Math.round(zoom * 100)}%
+          {hasRegions && (
+            <span className="ml-2 text-muted-foreground/60">{regions.length} region{regions.length !== 1 ? "s" : ""}</span>
+          )}
         </span>
         <div className="flex items-center gap-1">
           <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setZoom(z => Math.max(z - 0.25, 0.25))}>
@@ -119,6 +154,20 @@ function ImageViewer({ imageUrl, pageNumber }: { imageUrl: string | null | undef
           <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setRotation(r => (r + 90) % 360)}>
             <RotateCw className="w-3.5 h-3.5" />
           </Button>
+          {hasRegions && (
+            <>
+              <Separator orientation="vertical" className="h-4 mx-1" />
+              <Button
+                variant="ghost"
+                size="icon"
+                className={`h-7 w-7 ${showRegions ? "text-violet-400 bg-violet-500/10" : ""}`}
+                title="Toggle region overlay"
+                onClick={() => setShowRegions(s => !s)}
+              >
+                <LayoutGrid className="w-3.5 h-3.5" />
+              </Button>
+            </>
+          )}
           <Separator orientation="vertical" className="h-4 mx-1" />
           <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setIsFullscreen(f => !f)}>
             {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
@@ -126,13 +175,51 @@ function ImageViewer({ imageUrl, pageNumber }: { imageUrl: string | null | undef
         </div>
       </div>
       <div className="flex-1 overflow-auto bg-muted/5 flex items-center justify-center p-4">
-        <img
-          src={imageUrl}
-          alt={`Page ${pageNumber}`}
-          className="max-w-full transition-transform duration-200 shadow-lg rounded"
+        {/* Wrapper applies zoom/rotation to both the image and SVG overlay together */}
+        <div
+          className="relative transition-transform duration-200"
           style={{ transform: `scale(${zoom}) rotate(${rotation}deg)`, transformOrigin: "center center" }}
-          draggable={false}
-        />
+        >
+          <img
+            src={imageUrl}
+            alt={`Page ${pageNumber}`}
+            className="max-w-full shadow-lg rounded block"
+            draggable={false}
+          />
+          {showRegions && hasRegions && (
+            <svg
+              className="absolute inset-0 w-full h-full pointer-events-none"
+              viewBox="0 0 100 100"
+              preserveAspectRatio="none"
+            >
+              {regions.map((r, i) => {
+                const rtype = r.type ?? r.regionType ?? "paragraph";
+                const color = REGION_COLORS[rtype] ?? "#7c3aed";
+                return (
+                  <g key={i}>
+                    <rect
+                      x={r.bbox.x} y={r.bbox.y}
+                      width={r.bbox.w} height={r.bbox.h}
+                      fill={color + "1a"}
+                      stroke={color}
+                      strokeWidth="0.8"
+                      vectorEffect="non-scaling-stroke"
+                    />
+                    <text
+                      x={r.bbox.x + 0.5}
+                      y={r.bbox.y + 3}
+                      fontSize="2.5"
+                      fill={color}
+                      style={{ fontFamily: "monospace", textShadow: "0 0 2px #000" }}
+                    >
+                      {r.label ?? rtype}
+                    </text>
+                  </g>
+                );
+              })}
+            </svg>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -194,6 +281,14 @@ export default function ArchivistsDesk() {
       advanceToNext();
     },
     onError: (err) => toast.error(`Failed to skip: ${err.message}`),
+  });
+
+  const bboxRescanMutation = trpc.pipeline.enqueueBboxRescan.useMutation({
+    onSuccess: (data) => {
+      toast.success(`Enqueued ${data.enqueued} page${data.enqueued !== 1 ? "s" : ""} for region detection.`);
+      utils.hitl.stats.invalidate();
+    },
+    onError: (err) => toast.error(`Rescan failed: ${err.message}`),
   });
 
   const escalateMutation = trpc.hitl.escalate.useMutation({
@@ -287,11 +382,29 @@ export default function ArchivistsDesk() {
               </p>
               <p className="text-xs text-muted-foreground">Layout</p>
             </div>
-            <div className="text-center">
-              <p className="text-xl font-bold text-violet-400">
-                {pStats?.pages.total ? Math.round((pStats.pages.withRegions / pStats.pages.total) * 100) : 0}%
-              </p>
-              <p className="text-xs text-muted-foreground">Regions</p>
+            <div className="text-center col-span-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-center flex-1">
+                  <p className={`text-xl font-bold ${(pStats?.pages.withRegions ?? 0) === 0 ? "text-amber-400" : "text-violet-400"}`}>
+                    {pStats?.pages.total ? Math.round((pStats.pages.withRegions / pStats.pages.total) * 100) : 0}%
+                  </p>
+                  <p className="text-xs text-muted-foreground">Regions</p>
+                </div>
+                {(pStats?.pages.withRegions ?? 0) < (pStats?.pages.ocrComplete ?? 0) && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-xs gap-1 border-amber-500/40 text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 flex-shrink-0"
+                    disabled={bboxRescanMutation.isPending}
+                    onClick={() => bboxRescanMutation.mutate()}
+                  >
+                    {bboxRescanMutation.isPending
+                      ? <Loader2 className="w-3 h-3 animate-spin" />
+                      : <RefreshCw className="w-3 h-3" />}
+                    Rescan
+                  </Button>
+                )}
+              </div>
             </div>
             <div className="text-center">
               <p className="text-xl font-bold text-violet-400">
@@ -575,6 +688,7 @@ export default function ArchivistsDesk() {
                       pipelinePageUrl(itemDetail.page.rawPngUrl)
                     }
                     pageNumber={itemDetail.page.pageNumber}
+                    regions={itemDetail.page.contentRegions as BboxRegion[] | null}
                   />
                 ) : (
                   <div className="flex items-center justify-center h-full text-muted-foreground">
