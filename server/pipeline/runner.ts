@@ -82,7 +82,7 @@ ${STRICT_RULES}
 Domain Rules:
 1. Abbreviations are canonical. Do not expand or correct AC, HP, STR, DEX, CON, INT, WIS, CHA, CR, XP, DC, or dice notation (d4/d20/etc). Follow any lexicon_terms supplied in context for spelling corrections.
 2. Preserve formatting semantics. Translate bold text to rules terms (rule_term blocks), italics to spells/titles.
-3. Obey reading order context provided in content_regions. Extract every column completely for multi-column pages.
+3. Obey the CONTENT REGIONS context when provided. Extract ONLY from regions listed under "CONTENT REGIONS — extract" in the sequence order given; do NOT extract text from regions listed under "SKIP" (illustrations, maps, headers, footers, page numbers, decorative elements). Each extract region produces one or more content_blocks in sequence order. Extract every column completely for multi-column pages.
 4. CRITICAL: output MUST contain a "content_blocks" array. Do NOT output a flat "text" field.
 5. When a "--- Native PDF text ---" section appears in context, trust it for word-level accuracy (spelling, numbers, punctuation) but derive structure (block types, reading order, column layout) from the image. Do NOT copy native text wholesale.
 
@@ -1394,8 +1394,31 @@ async function _runJob(jobId: number): Promise<number | null> {
       const contextParts: string[] = [];
       if (columnCount && columnCount > 1)
         contextParts.push(`Layout analysis determined this page has ${columnCount} columns. Extract text from ALL columns in left-to-right, top-to-bottom reading order — do NOT stop after the first column.`);
-      if (regions.length > 0)
-        contextParts.push(`Content regions already detected: ${JSON.stringify(regions.slice(0, 5))}`);
+      if (regions.length > 0) {
+        const extractRegions = regions.filter((r: any) =>
+          TEXT_CONTENT_TYPES.has(r.type) || TABULAR_CONTENT_TYPES.has(r.type)
+        );
+        const skipRegions = regions.filter((r: any) =>
+          VISUAL_CONTENT_TYPES.has(r.type) || DECORATIVE_CONTENT_TYPES.has(r.type) || !r.type || r.type === "unknown"
+        );
+        const fmtRegion = (r: any, idx: number) => {
+          const seq = typeof r.sequence === "number" ? r.sequence : idx + 1;
+          const blockHint = TABULAR_CONTENT_TYPES.has(r.type) ? " → stat_line/paragraph blocks" : " → heading/paragraph/stat_line/rule_term blocks";
+          return `  [#${seq} ${r.type}${blockHint}] x:${r.bbox?.x ?? 0} y:${r.bbox?.y ?? 0} w:${r.bbox?.w ?? 0} h:${r.bbox?.h ?? 0}`;
+        };
+        const lines: string[] = ["CONTENT REGIONS — extract in reading-order sequence:"];
+        extractRegions.forEach((r: any, i: number) => lines.push(fmtRegion(r, i)));
+        if (skipRegions.length > 0) {
+          lines.push("\nSKIP — do NOT extract text from these regions:");
+          skipRegions.forEach((r: any, i: number) => {
+            const seq = typeof r.sequence === "number" ? r.sequence : i + 1;
+            lines.push(`  [${r.type ?? "unknown"}] x:${r.bbox?.x ?? 0} y:${r.bbox?.y ?? 0} w:${r.bbox?.w ?? 0} h:${r.bbox?.h ?? 0}`);
+            void seq;
+          });
+        }
+        lines.push("\nEach extract region maps to one or more content_blocks in the output, in sequence order.");
+        contextParts.push(lines.join("\n"));
+      }
       const nativeText = nativePageTexts[i];
       if (nativeText)
         contextParts.push(`--- Native PDF text (ground-truth reference) ---\n${nativeText.slice(0, 6000)}\n--- End native PDF text ---`);
@@ -1886,9 +1909,30 @@ export async function retryPageStages(
         const layoutCtx = layoutType
           ? `Reviewed page_layout: ${layoutType}`
           : undefined;
-        const regionCtx = regions.length > 0
-          ? `Reviewed content_regions (${regions.length}) in percent coordinates; use sequence order when present: ${JSON.stringify(regions.slice(0, 50))}`
-          : undefined;
+        let regionCtx: string | undefined;
+        if (regions.length > 0) {
+          const extractRegions = regions.filter((r: any) =>
+            TEXT_CONTENT_TYPES.has(r.type) || TABULAR_CONTENT_TYPES.has(r.type)
+          );
+          const skipRegions = regions.filter((r: any) =>
+            VISUAL_CONTENT_TYPES.has(r.type) || DECORATIVE_CONTENT_TYPES.has(r.type) || !r.type || r.type === "unknown"
+          );
+          const fmtRegion = (r: any, idx: number) => {
+            const seq = typeof r.sequence === "number" ? r.sequence : idx + 1;
+            const blockHint = TABULAR_CONTENT_TYPES.has(r.type) ? " → stat_line/paragraph blocks" : " → heading/paragraph/stat_line/rule_term blocks";
+            return `  [#${seq} ${r.type}${blockHint}] x:${r.bbox?.x ?? 0} y:${r.bbox?.y ?? 0} w:${r.bbox?.w ?? 0} h:${r.bbox?.h ?? 0}`;
+          };
+          const lines: string[] = ["CONTENT REGIONS (HITL-reviewed) — extract in reading-order sequence:"];
+          extractRegions.forEach((r: any, i: number) => lines.push(fmtRegion(r, i)));
+          if (skipRegions.length > 0) {
+            lines.push("\nSKIP — do NOT extract text from these regions:");
+            skipRegions.forEach((r: any) => {
+              lines.push(`  [${r.type ?? "unknown"}] x:${r.bbox?.x ?? 0} y:${r.bbox?.y ?? 0} w:${r.bbox?.w ?? 0} h:${r.bbox?.h ?? 0}`);
+            });
+          }
+          lines.push("\nEach extract region maps to one or more content_blocks in the output, in sequence order.");
+          regionCtx = lines.join("\n");
+        }
         const pageNativeText = typeof (page as any).nativeText === "string" && (page as any).nativeText.trim()
           ? (page as any).nativeText.trim()
           : null;
