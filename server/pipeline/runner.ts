@@ -1797,7 +1797,15 @@ async function _runJob(jobId: number): Promise<number | null> {
 
     // Queue for HITL review: stage failure, low model confidence (only when the
     // model actually returned a score), or significant native-text divergence.
-    const poorNativeAlignment = nativeSimilarity !== null && nativeSimilarity < NATIVE_SIMILARITY_THRESHOLD;
+    // Multi-column and mixed layouts: native extraction order is inherently less
+    // reliable even with reading-order mode, so we store the score for display
+    // but don't use it to trigger HITL (too many false positives).
+    const isMultiColumnLayout = ["two_column", "three_column", "mixed"].includes(
+      layoutData.layout_type as string,
+    );
+    const poorNativeAlignment = !isMultiColumnLayout
+      && nativeSimilarity !== null
+      && nativeSimilarity < NATIVE_SIMILARITY_THRESHOLD;
     const lowConfidence = confidenceFromModel !== null && ocrConfidence < HITL_CONFIDENCE_THRESHOLD;
     const needsHitl = stagesFailed.length > 0 || lowConfidence || poorNativeAlignment;
     if (needsHitl) {
@@ -2294,9 +2302,15 @@ async function extractNativePdfTextBatch(
   firstPage: number,
   lastPage: number,
 ): Promise<string[]> {
+  // No -layout flag: default pdftotext reads in logical reading order.
+  // -layout preserves the 2-D spatial layout with padding spaces, which
+  // places both columns on the same line for multi-column pages and causes
+  // mid-word breaks at the column gutter — making comparison and display worse.
+  // The reading-order mode reads left column top-to-bottom then right column
+  // top-to-bottom, which is both more readable and better for token comparison.
   const { stdout } = await execFileAsync(
     "pdftotext",
-    ["-f", String(firstPage), "-l", String(lastPage), "-layout", pdfPath, "-"],
+    ["-f", String(firstPage), "-l", String(lastPage), pdfPath, "-"],
     { timeout: 60_000 },
   );
   // pdftotext terminates each page with \f, including the last one
@@ -2317,13 +2331,32 @@ function hasUsableEmbeddedText(raw: string): boolean {
 }
 
 /**
+ * Normalise PDF-extracted text before token comparison.
+ * Heals two artifacts that appear even with reading-order extraction:
+ *   1. Hyphenated line breaks ("compan-\nion" → "companion")
+ *   2. Mid-word line breaks where a word-char ends one line and a lowercase
+ *      letter starts the next ("secre\nts" → "secrets", "well w\north" → "well worth").
+ *      Uppercase-to-anything breaks are preserved so heading/paragraph boundaries
+ *      ("INTRODUCTION\neventually") are not incorrectly joined.
+ * Finally collapses all remaining whitespace runs to a single space.
+ */
+function normaliseNativeText(s: string): string {
+  return s
+    .replace(/-\n/g, "")                          // heal hyphenated line-breaks
+    .replace(/([a-z])\n([a-z])/g, "$1$2")         // heal lowercase mid-word breaks
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
  * Token-level F1 similarity between native PDF text and OCR output (0–1).
- * Tokenises on word boundaries, deduplicates each side, then measures
- * precision and recall of OCR tokens against the native token set.
+ * Normalises both sides first (healing line-break artifacts), then tokenises
+ * on word boundaries, deduplicates each side, and measures precision/recall.
  * Returns 0 when either input produces no tokens.
  */
 function nativeTextSimilarity(native: string, ocr: string): number {
-  const tokenize = (s: string): string[] => s.toLowerCase().match(/\b[a-z0-9']+\b/g) ?? [];
+  const tokenize = (s: string): string[] =>
+    normaliseNativeText(s).toLowerCase().match(/\b[a-z0-9']+\b/g) ?? [];
   const tokNative = tokenize(native);
   const tokOcr    = tokenize(ocr);
   if (tokNative.length === 0 || tokOcr.length === 0) return 0;
