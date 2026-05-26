@@ -866,7 +866,7 @@ export async function cancelIngestionJobChain(sourceFile: string, driveFileId: s
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   // Mark all queued/converting/processing jobs for this source as cancelled
-  const cancellable = ["queued", "converting", "pass1_ocr", "pass2_ocr", "enriching"];
+  const cancellable = ["queued", "paused", "converting", "pass1_ocr", "pass2_ocr", "enriching"];
   const { inArray } = await import("drizzle-orm");
   const matches = await db.select({ id: ingestionJobs.id })
     .from(ingestionJobs)

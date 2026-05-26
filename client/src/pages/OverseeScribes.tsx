@@ -2,7 +2,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
-  Activity, Clock, CheckCircle2, AlertCircle, Pause, RotateCcw, Loader2,
+  Activity, Clock, CheckCircle2, AlertCircle, Pause, Play, StopCircle, RotateCcw, Loader2,
   Gamepad2, Plus, Trash2, Pencil, Check, X, ChevronDown, ChevronRight,
   BookOpen, Flag, Eye, ImageOff, ChevronLeft, Timer, BarChart2,
 } from "lucide-react";
@@ -443,6 +443,14 @@ export default function OverseeScribes() {
     onSuccess: () => { refetch(); toast.success("Job chain cancelled."); },
     onError: (e) => toast.error(e.message),
   });
+  const pauseMut = trpc.jobs.pause.useMutation({
+    onSuccess: () => { refetch(); toast.success("Job will pause at the next page boundary."); },
+    onError: (e) => toast.error(e.message),
+  });
+  const resumeMut = trpc.jobs.resume.useMutation({
+    onSuccess: () => { refetch(); toast.success("Job resumed."); },
+    onError: (e) => toast.error(e.message),
+  });
   const purgeMut = trpc.jobs.purgePages.useMutation({
     onSuccess: () => { refetch(); toast.success("Pages purged."); },
     onError: (e) => toast.error(e.message),
@@ -487,15 +495,16 @@ export default function OverseeScribes() {
   };
 
   const statusColors: Record<string, { bg: string; text: string; dot?: boolean }> = {
-    queued:            { bg: "bg-muted/50",          text: "text-muted-foreground" },
-    processing:        { bg: "bg-blue-500/10",        text: "text-blue-500",   dot: true },
-    pass1_layout:      { bg: "bg-yellow-500/10",      text: "text-yellow-500", dot: true },
-    pass2_extraction:  { bg: "bg-blue-500/10",        text: "text-blue-500",   dot: true },
-    binarization:      { bg: "bg-yellow-500/10",      text: "text-yellow-500", dot: true },
-    completed:         { bg: "bg-green-500/10",       text: "text-green-500" },
-    failed:            { bg: "bg-red-500/10",         text: "text-red-500" },
-    review:            { bg: "bg-orange-500/10",      text: "text-orange-500" },
-    hitl_review:       { bg: "bg-orange-500/10",      text: "text-orange-500", dot: true },
+    queued:            { bg: "bg-muted/50",           text: "text-muted-foreground" },
+    processing:        { bg: "bg-blue-500/10",         text: "text-blue-500",    dot: true },
+    pass1_layout:      { bg: "bg-yellow-500/10",       text: "text-yellow-500",  dot: true },
+    pass2_extraction:  { bg: "bg-blue-500/10",         text: "text-blue-500",    dot: true },
+    binarization:      { bg: "bg-yellow-500/10",       text: "text-yellow-500",  dot: true },
+    completed:         { bg: "bg-green-500/10",        text: "text-green-500" },
+    failed:            { bg: "bg-red-500/10",          text: "text-red-500" },
+    review:            { bg: "bg-orange-500/10",       text: "text-orange-500" },
+    hitl_review:       { bg: "bg-orange-500/10",       text: "text-orange-500",  dot: true },
+    paused:            { bg: "bg-amber-500/10",        text: "text-amber-500" },
   };
 
   const getStatusStyle = (s: string) => statusColors[s] ?? statusColors.queued;
@@ -504,17 +513,20 @@ export default function OverseeScribes() {
 
   const FINISHED_STATUSES = new Set(["completed", "failed", "review"]);
 
-  // Split jobs into three buckets:
-  //   running  — actively processing (any non-queued, non-finished status)
-  //   queued   — waiting for a concurrency slot, FIFO: lowest id (oldest) first
+  // Split jobs into four buckets:
+  //   running — actively processing
+  //   queued  — waiting for a concurrency slot, FIFO
+  //   paused  — user-paused; resumable
   //   finished — completed / failed / review
-  const { runningJobs, queuedJobs, finishedJobs } = useMemo(() => {
+  const { runningJobs, queuedJobs, pausedJobs, finishedJobs } = useMemo(() => {
     const all = (jobs as any[] ?? []);
     return {
-      runningJobs:  all.filter(j => j.status !== "queued" && !FINISHED_STATUSES.has(j.status))
+      runningJobs:  all.filter(j => j.status !== "queued" && j.status !== "paused" && !FINISHED_STATUSES.has(j.status))
                        .sort((a: any, b: any) => b.id - a.id),
       queuedJobs:   all.filter(j => j.status === "queued")
                        .sort((a: any, b: any) => a.id - b.id),
+      pausedJobs:   all.filter(j => j.status === "paused")
+                       .sort((a: any, b: any) => b.id - a.id),
       finishedJobs: all.filter(j => FINISHED_STATUSES.has(j.status))
                        .sort((a: any, b: any) => b.id - a.id),
     };
@@ -590,10 +602,20 @@ export default function OverseeScribes() {
               <BarChart2 className="w-3 h-3" />
               {isMetrics ? "Close" : "Metrics"}
             </Button>
-            {["queued", "converting", "pass1_ocr", "pass2_ocr", "enriching"].includes(job.status) && (
+            {["queued", "converting", "pass1_ocr", "pass2_ocr", "enriching"].includes(job.status) && (<>
+              <button onClick={() => pauseMut.mutate({ id: job.id })} disabled={pauseMut.isPending}
+                title="Pause at next page boundary" className="text-muted-foreground hover:text-amber-400 transition-colors p-1">
+                <Pause className="w-3.5 h-3.5" />
+              </button>
               <button onClick={() => cancelMut.mutate({ id: job.id })} disabled={cancelMut.isPending}
                 title="Cancel job chain" className="text-muted-foreground hover:text-orange-400 transition-colors p-1">
-                <Pause className="w-3.5 h-3.5" />
+                <StopCircle className="w-3.5 h-3.5" />
+              </button>
+            </>)}
+            {job.status === "paused" && (
+              <button onClick={() => resumeMut.mutate({ id: job.id })} disabled={resumeMut.isPending}
+                title="Resume from where it paused" className="text-muted-foreground hover:text-emerald-400 transition-colors p-1">
+                <Play className="w-3.5 h-3.5" />
               </button>
             )}
             <button
@@ -778,6 +800,22 @@ export default function OverseeScribes() {
                     </span>
                   </div>
                   {queuedJobs.map(renderJobRow)}
+                </>
+              )}
+
+              {/* ── Paused ──────────────────────────────────────────────────── */}
+              {pausedJobs.length > 0 && (
+                <>
+                  <div className="px-4 py-1.5 bg-amber-500/5 border-b border-amber-500/15 flex items-center gap-2">
+                    <Pause className="w-3 h-3 text-amber-400 flex-shrink-0" />
+                    <span className="text-[11px] font-semibold text-amber-400 uppercase tracking-widest">
+                      Paused · {pausedJobs.length}
+                    </span>
+                    <span className="text-[10px] text-amber-400/50 normal-case">
+                      press ▶ to resume
+                    </span>
+                  </div>
+                  {pausedJobs.map(renderJobRow)}
                 </>
               )}
 

@@ -269,6 +269,10 @@ const MAX_CONCURRENT_DOCS: number = pipelineConfig.pipeline.maxConcurrentDocumen
 let activeDocCount = 0;
 const pendingJobIds: number[] = [];
 
+// Jobs for which a pause has been requested but the in-flight page hasn't
+// finished yet.  The per-page check and block-chain check both poll this set.
+const pauseRequestedJobIds = new Set<number>();
+
 // ── Async retry queue ─────────────────────────────────────────────────────────
 // Retry requests are enqueued here and processed one at a time in the background,
 // so the tRPC mutation returns immediately instead of blocking the HTTP request.
@@ -1081,12 +1085,58 @@ export function startJob(jobId: number): void {
  * In-flight LLM calls for the current page finish naturally (HTTP can't be
  * aborted without an AbortController thread-through), but no new pages start.
  */
+/**
+ * Signal a running or queued job to pause at the next page boundary.
+ * - If queued (not yet dispatched): remove from queue, mark DB "paused" immediately.
+ * - If running: add to pauseRequestedJobIds; the per-page check picks it up before
+ *   the next page starts and sets the DB status to "paused" with saved progress.
+ */
+export async function pauseJob(jobId: number): Promise<void> {
+  const idx = pendingJobIds.indexOf(jobId);
+  if (idx !== -1) {
+    pendingJobIds.splice(idx, 1);
+    await updateIngestionJobStatus(jobId, { status: "paused", completedAt: new Date() }).catch(() => {});
+    console.log(`[Pipeline] Job ${jobId} paused from queue (never started)`);
+    return;
+  }
+  pauseRequestedJobIds.add(jobId);
+  console.log(`[Pipeline] Job ${jobId} pause requested — will stop at next page boundary`);
+}
+
+/**
+ * Resume a paused job by creating a new block starting at the first unprocessed page.
+ * Returns the new job ID, or null if the job isn't paused.
+ */
+export async function resumeJob(jobId: number): Promise<number | null> {
+  pauseRequestedJobIds.delete(jobId); // clear any lingering signal
+  const job = await getIngestionJobById(jobId);
+  if (!job || job.status !== "paused") return null;
+
+  const resumeOffset = (job.pageOffset ?? 0) + (job.processedPages ?? 0);
+  const newJobId = await createIngestionJob({
+    sourceFile: job.sourceFile,
+    storageProvider: (job as any).storageProvider ?? "local",
+    driveFileId: (job as any).driveFileId ?? null,
+    gameSystem: job.gameSystem ?? null,
+    documentId: job.documentId ?? undefined,
+    pageOffset: resumeOffset,
+    blockSize: job.blockSize ?? 10,
+    status: "queued",
+  } as any);
+  console.log(`[Pipeline] Job ${jobId} resumed — new job ${newJobId} starting at page ${resumeOffset + 1}`);
+  startJob(newJobId);
+  return newJobId;
+}
+
 export async function cancelAllActiveJobs(): Promise<{ cancelledCount: number }> {
   // 1. Prevent any queued jobs from being dispatched.
   const clearedPending = pendingJobIds.length;
   pendingJobIds.length = 0;
 
-  // 2. Prevent any queued retry tasks from being dispatched.
+  // 2. Clear any pending pause signals so they don't interfere post-wipe.
+  pauseRequestedJobIds.clear();
+
+  // 3. Prevent any queued retry tasks from being dispatched.
   retryTaskQueue.length = 0;
 
   // 3. Mark every active DB job cancelled so running chains stop looping.
@@ -1340,10 +1390,24 @@ async function _runJob(jobId: number): Promise<number | null> {
   const VISUAL_REGION_TYPES = new Set(["illustration", "image", "map", "graphic", "advertisement"]);
 
   for (let i = 0; i < pageFiles.length; i++) {
-    // Check before each page: job deleted (wipe) or marked cancelled → stop immediately.
+    // Check before each page: deleted/cancelled → stop; pause requested → save progress and stop.
     const jobCheck = await getIngestionJobById(jobId);
     if (!jobCheck || (jobCheck.status === "failed" && jobCheck.errorMessage === "Cancelled by user")) {
       console.log(`[Pipeline] Job ${jobId} cancelled — stopping before page ${pageOffset + i + 1}`);
+      return null;
+    }
+    if (pauseRequestedJobIds.has(jobId) || jobCheck.status === "paused") {
+      pauseRequestedJobIds.delete(jobId);
+      const avgConf = confidences.length > 0
+        ? Math.round(confidences.reduce((a, b) => a + b, 0) / confidences.length)
+        : undefined;
+      await updateIngestionJobStatus(jobId, {
+        status: "paused",
+        processedPages,
+        ...(avgConf !== undefined && { avgConfidence: avgConf }),
+        completedAt: new Date(),
+      }).catch(() => {});
+      console.log(`[Pipeline] Job ${jobId} paused — stopped before page ${pageOffset + i + 1} (${processedPages} pages done in this block)`);
       return null;
     }
 
@@ -1825,11 +1889,17 @@ async function _runJob(jobId: number): Promise<number | null> {
   }
 
   // ── Auto-chain next block ─────────────────────────────────────────────────
-  // Re-fetch the job to check whether a cancel was requested while this block ran
+  // Re-fetch to check whether a cancel or pause arrived while the last page ran.
   const currentJob = await getIngestionJobById(jobId);
   const wasCancelled = currentJob?.status === "failed" && currentJob?.errorMessage === "Cancelled by user";
+  const wasPaused = pauseRequestedJobIds.has(jobId);
+  if (wasPaused) {
+    pauseRequestedJobIds.delete(jobId);
+    await updateIngestionJobStatus(jobId, { status: "paused" }).catch(() => {});
+    console.log(`[Pipeline] Job ${jobId} paused at block boundary (next block would start at page ${nextOffset + 1})`);
+  }
 
-  if (hasMore && !wasCancelled) {
+  if (hasMore && !wasCancelled && !wasPaused) {
     console.log(`[Pipeline] Job ${jobId}: chaining next block starting at page ${nextOffset + 1}`);
     const nextJobId = await createIngestionJob({
       sourceFile: job.sourceFile,

@@ -32,7 +32,7 @@ import {
   getContentSummariesByDocument, updateContentSummary,
 } from "./db";
 import { encryptSecret, decryptSecret, storeSecretHint, renderMaskedSecret } from "./crypto";
-import { startJob, retryPageStages, RetryStage, enqueuePageRetry, exportDocumentAsUnsloth, cancelAllActiveJobs } from "./pipeline/runner";
+import { startJob, retryPageStages, RetryStage, enqueuePageRetry, exportDocumentAsUnsloth, cancelAllActiveJobs, pauseJob, resumeJob } from "./pipeline/runner";
 import { ENV } from "./_core/env";
 import { FEATURE_AREAS, PROVIDER_TYPES, PIPELINE_STAGES, SUPABASE_CONNECTION_TYPES, SUPABASE_ROLES, SUPABASE_SYNC_MODES, DOCUMENT_STATUSES, OCR_RESULT_STATUSES, HITL_PRIORITIES, HITL_STATUSES, type LlmProvider } from "../drizzle/schema";
 
@@ -577,6 +577,24 @@ export const appRouter = router({
         if (!job) throw new TRPCError({ code: "NOT_FOUND", message: "Job not found." });
         await cancelIngestionJobChain(job.sourceFile, (job as any).driveFileId ?? null);
         return { success: true };
+      }),
+
+    /** Pause a running or queued job at the next page boundary */
+    pause: adminProcedure
+      .input(z.object({ id: z.number().int() }))
+      .mutation(async ({ input }) => {
+        await pauseJob(input.id);
+        return { success: true };
+      }),
+
+    /** Resume a paused job — creates a new block from where it stopped */
+    resume: adminProcedure
+      .input(z.object({ id: z.number().int() }))
+      .mutation(async ({ input }) => {
+        const newJobId = await resumeJob(input.id);
+        if (newJobId === null)
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Job is not paused." });
+        return { success: true, newJobId };
       }),
 
     /** Update job status (used by pipeline workers) */
