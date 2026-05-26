@@ -92,6 +92,10 @@ function isMissingModelResponse(status: number, body: string): boolean {
   return status === 404 && /model[\s\S]{0,160}(does not exist|not found)/i.test(body);
 }
 
+function isUnsupportedResponseFormat(status: number, body: string): boolean {
+  return status === 400 && /response_format/i.test(body);
+}
+
 async function buildProviderCall(
   provider: any,
   messages: any[],
@@ -189,6 +193,20 @@ async function dispatchToProvider(
       if (!res.ok) {
         const retryText = await res.text().catch(() => "");
         const errMsg = `[${stage}] Provider ${provider.name} HTTP ${res.status}: ${retryText.slice(0, 1000)} (after model discovery: ${models.join(", ") || "none"})`;
+        logFailure(errMsg);
+        throw new Error(errMsg);
+      }
+    } else if (isUnsupportedResponseFormat(res.status, errText) && "response_format" in body) {
+      // Provider rejected response_format (e.g. only accepts 'json_schema' or 'text', not 'json_object').
+      // Retry without it — prefillJson + explicit user instruction still steers JSON output.
+      console.warn(
+        `[invoke] ${stage} provider ${provider.name} rejected response_format; retrying without it.`,
+      );
+      const { response_format: _rf, ...bodyWithout } = body as any;
+      res = await postChat(bodyWithout);
+      if (!res.ok) {
+        const retryText = await res.text().catch(() => "");
+        const errMsg = `[${stage}] Provider ${provider.name} HTTP ${res.status}: ${retryText.slice(0, 1000)} (after dropping response_format)`;
         logFailure(errMsg);
         throw new Error(errMsg);
       }
