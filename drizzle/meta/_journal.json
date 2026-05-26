@@ -99,6 +99,13 @@
       "when": 1748044800000,
       "tag": "0013_job_document_id",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1748131200000,
+      "tag": "0014_provider_exchange_logs",
+      "breakpoints": true
     }
   ]
 }
