@@ -1436,7 +1436,7 @@ export async function getPageIdsWithFallback(pageIds: number[]): Promise<Set<num
 export async function getPipelineStats() {
   const db = await getDb();
   const zero = {
-    pages: { total: 0, withLayout: 0, withRegions: 0, ocrComplete: 0, highConf: 0, medConf: 0, lowConf: 0, noScore: 0, errorState: 0, savedCorrections: 0 },
+    pages: { total: 0, withLayout: 0, withRegions: 0, ocrComplete: 0, highConf: 0, medConf: 0, lowConf: 0, noScore: 0, errorState: 0, savedCorrections: 0, processed: 0, layoutFailed: 0, bboxFailed: 0, ocrFailed: 0 },
     hitl:  { queued: 0, inProgress: 0, resolved: 0, skipped: 0, total: 0 },
     retry: { pendingQueue: 0, running: 0, failed: 0, succeeded: 0 },
   };
@@ -1454,6 +1454,12 @@ export async function getPipelineStats() {
       medConf:          sql<number>`COUNT(*) FILTER (WHERE ${documentPages.ocrConfidence} >= 50 AND ${documentPages.ocrConfidence} < 80)`,
       lowConf:          sql<number>`COUNT(*) FILTER (WHERE ${documentPages.ocrConfidence} IS NOT NULL AND ${documentPages.ocrConfidence} < 50)`,
       noScore:          sql<number>`COUNT(*) FILTER (WHERE ${documentPages.ocrCompleted} = TRUE AND ${documentPages.ocrConfidence} IS NULL)`,
+      // Per-stage failures — queried from the stages_failed array stored in pageJsonOutput.
+      // Only pages with pageJsonOutput set (pipeline ran at least once) can have failures.
+      processed:        sql<number>`COUNT(*) FILTER (WHERE ${documentPages.pageJsonOutput} IS NOT NULL)`,
+      layoutFailed:     sql<number>`COUNT(*) FILTER (WHERE (${documentPages.pageJsonOutput}->'stages_failed') @> '["layout_analysis"]'::jsonb)`,
+      bboxFailed:       sql<number>`COUNT(*) FILTER (WHERE (${documentPages.pageJsonOutput}->'stages_failed') @> '["bbox_detection"]'::jsonb)`,
+      ocrFailed:        sql<number>`COUNT(*) FILTER (WHERE (${documentPages.pageJsonOutput}->'stages_failed') @> '["ocr_extraction"]'::jsonb)`,
     }).from(documentPages),
 
     db.select({
@@ -1494,6 +1500,10 @@ export async function getPipelineStats() {
       noScore:          n(p.noScore),
       errorState:       n(o.errorState),
       savedCorrections: n(o.savedCorrections),
+      processed:        n(p.processed),
+      layoutFailed:     n(p.layoutFailed),
+      bboxFailed:       n(p.bboxFailed),
+      ocrFailed:        n(p.ocrFailed),
     },
     hitl: {
       queued:     n(h.queued),

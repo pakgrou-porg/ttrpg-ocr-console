@@ -371,47 +371,64 @@ export default function ArchivistsDesk() {
               <Layers className="w-3.5 h-3.5" /> Pipeline Funnel
             </CardTitle>
           </CardHeader>
-          <CardContent className="px-3 pb-3 grid grid-cols-2 gap-2">
-            <div className="text-center">
-              <p className="text-xl font-bold">{pStats?.pages.total ?? 0}</p>
-              <p className="text-xs text-muted-foreground">Ingested</p>
+          <CardContent className="px-3 pb-3 space-y-1.5">
+            {/* Header row */}
+            <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 text-[10px] text-muted-foreground/60 uppercase tracking-wide pb-0.5 border-b border-border/30">
+              <span>Stage</span>
+              <span className="text-green-500 text-right">✓ Pass</span>
+              <span className="text-red-400 text-right">✗ Fail</span>
             </div>
-            <div className="text-center">
-              <p className="text-xl font-bold text-violet-400">
-                {pStats?.pages.total ? Math.round((pStats.pages.withLayout / pStats.pages.total) * 100) : 0}%
-              </p>
-              <p className="text-xs text-muted-foreground">Layout</p>
+            {/* Ingested */}
+            <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 items-center">
+              <span className="text-xs text-muted-foreground">Ingested</span>
+              <span className="text-sm font-bold text-right tabular-nums">{pStats?.pages.total ?? 0}</span>
+              <span className="text-sm text-right text-muted-foreground/40 tabular-nums">—</span>
             </div>
-            <div className="text-center col-span-2">
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-center flex-1">
-                  <p className={`text-xl font-bold ${(pStats?.pages.withRegions ?? 0) === 0 ? "text-amber-400" : "text-violet-400"}`}>
-                    {pStats?.pages.total ? Math.round((pStats.pages.withRegions / pStats.pages.total) * 100) : 0}%
-                  </p>
-                  <p className="text-xs text-muted-foreground">Regions</p>
-                </div>
+            {/* Layout Analysis */}
+            <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 items-center">
+              <span className="text-xs text-muted-foreground">Layout</span>
+              <span className="text-sm font-bold text-green-400 text-right tabular-nums">{pStats?.pages.withLayout ?? 0}</span>
+              <span className={`text-sm font-bold text-right tabular-nums ${(pStats?.pages.layoutFailed ?? 0) > 0 ? "text-red-400" : "text-muted-foreground/40"}`}>
+                {(pStats?.pages.layoutFailed ?? 0) > 0 ? pStats!.pages.layoutFailed : "—"}
+              </span>
+            </div>
+            {/* Bbox / Regions */}
+            <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 items-center">
+              <div className="flex items-center gap-1">
+                <span className="text-xs text-muted-foreground">Regions</span>
                 {(pStats?.pages.withRegions ?? 0) < (pStats?.pages.ocrComplete ?? 0) && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-7 text-xs gap-1 border-amber-500/40 text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 flex-shrink-0"
+                  <button
+                    className="text-[10px] text-amber-400 hover:text-amber-300 underline underline-offset-2 disabled:opacity-50"
                     disabled={bboxRescanMutation.isPending}
                     onClick={() => bboxRescanMutation.mutate()}
+                    title="Re-run bbox detection on pages missing regions"
                   >
-                    {bboxRescanMutation.isPending
-                      ? <Loader2 className="w-3 h-3 animate-spin" />
-                      : <RefreshCw className="w-3 h-3" />}
-                    Rescan
-                  </Button>
+                    {bboxRescanMutation.isPending ? <Loader2 className="w-2.5 h-2.5 inline animate-spin" /> : "rescan"}
+                  </button>
                 )}
               </div>
+              <span className="text-sm font-bold text-green-400 text-right tabular-nums">{pStats?.pages.withRegions ?? 0}</span>
+              <span className={`text-sm font-bold text-right tabular-nums ${(pStats?.pages.bboxFailed ?? 0) > 0 ? "text-red-400" : "text-muted-foreground/40"}`}>
+                {(pStats?.pages.bboxFailed ?? 0) > 0 ? pStats!.pages.bboxFailed : "—"}
+              </span>
             </div>
-            <div className="text-center">
-              <p className="text-xl font-bold text-violet-400">
-                {pStats?.pages.total ? Math.round((pStats.pages.ocrComplete / pStats.pages.total) * 100) : 0}%
-              </p>
-              <p className="text-xs text-muted-foreground">OCR Done</p>
+            {/* OCR */}
+            <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 items-center">
+              <span className="text-xs text-muted-foreground">OCR</span>
+              <span className="text-sm font-bold text-green-400 text-right tabular-nums">{pStats?.pages.ocrComplete ?? 0}</span>
+              <span className={`text-sm font-bold text-right tabular-nums ${(pStats?.pages.ocrFailed ?? 0) > 0 ? "text-red-400" : "text-muted-foreground/40"}`}>
+                {(pStats?.pages.ocrFailed ?? 0) > 0 ? pStats!.pages.ocrFailed : "—"}
+              </span>
             </div>
+            {/* Pending (not yet processed) */}
+            {((pStats?.pages.total ?? 0) - (pStats?.pages.processed ?? 0)) > 0 && (
+              <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 items-center pt-0.5 border-t border-border/30">
+                <span className="text-xs text-muted-foreground/60">Pending</span>
+                <span className="text-sm text-amber-400 text-right tabular-nums col-span-2">
+                  {(pStats?.pages.total ?? 0) - (pStats?.pages.processed ?? 0)}
+                </span>
+              </div>
+            )}
           </CardContent>
         </Card>
 
