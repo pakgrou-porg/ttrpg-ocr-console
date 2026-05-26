@@ -1,4 +1,4 @@
-import { getLlmProviderById, getStageInscriptionByStage, getSystemPromptByName, insertLlmTimingMetric, updateLlmProvider } from "../db";
+import { getLlmProviderById, getStageInscriptionByStage, getSystemPromptByName, insertLlmTimingMetric, insertProviderExchangeLog, updateLlmProvider } from "../db";
 import { decryptSecret } from "../crypto";
 import { fetchWithRetry, PER_ATTEMPT_TIMEOUT_MS } from "../_core/fetch-retry";
 
@@ -137,6 +137,7 @@ async function dispatchToProvider(
   inscription: { temperature?: number | null; maxTokens?: number | null; llmSettings?: unknown },
   options?: InvokeOptions,
   withRetry = true,
+  context?: InvokeContext,
 ): Promise<StageInvokeResult> {
   const { url, headers, body } = await buildProviderCall(provider, messages, inscription, options);
 
@@ -149,6 +150,25 @@ async function dispatchToProvider(
   };
 
   let usedModel = typeof body.model === "string" ? body.model : undefined;
+  const logFailure = (errorMessage: string) => {
+    const { messages: _msgs, ...restBody } = body as any;
+    logExchange({
+      providerId: provider.id,
+      providerName: provider.displayName ?? provider.name,
+      stage,
+      jobId: context?.jobId ?? null,
+      pageId: context?.pageId ?? null,
+      model: usedModel ?? cleanModelId(provider.modelId) ?? null,
+      requestMessages: sanitizeMessagesForLog(messages),
+      requestMeta: restBody as Record<string, unknown>,
+      responseRaw: null,
+      durationMs: Date.now() - startMs,
+      tokensUsed: 0,
+      success: false,
+      errorMessage,
+    });
+  };
+
   let res = await postChat(body);
   if (!res.ok) {
     const errText = await res.text().catch(() => "");
@@ -168,10 +188,14 @@ async function dispatchToProvider(
       }
       if (!res.ok) {
         const retryText = await res.text().catch(() => "");
-        throw new Error(`[${stage}] Provider ${provider.name} HTTP ${res.status}: ${retryText.slice(0, 1000)} (after model discovery: ${models.join(", ") || "none"})`);
+        const errMsg = `[${stage}] Provider ${provider.name} HTTP ${res.status}: ${retryText.slice(0, 1000)} (after model discovery: ${models.join(", ") || "none"})`;
+        logFailure(errMsg);
+        throw new Error(errMsg);
       }
     } else {
-      throw new Error(`[${stage}] Provider ${provider.name} HTTP ${res.status}: ${errText.slice(0, 1000)}`);
+      const errMsg = `[${stage}] Provider ${provider.name} HTTP ${res.status}: ${errText.slice(0, 1000)}`;
+      logFailure(errMsg);
+      throw new Error(errMsg);
     }
   }
 
@@ -189,18 +213,63 @@ async function dispatchToProvider(
     content = "{" + content;
   }
 
+  const resolvedModel = data.model ?? usedModel ?? cleanModelId(provider.modelId) ?? "";
+  const durationMsFinal = Date.now() - startMs;
+
+  // Strip images and log the exchange to the ring buffer (fire-and-forget).
+  const { messages: _msgs, ...restBody } = body as any;
+  logExchange({
+    providerId: provider.id,
+    providerName: provider.displayName ?? provider.name,
+    stage,
+    jobId: context?.jobId ?? null,
+    pageId: context?.pageId ?? null,
+    model: resolvedModel,
+    requestMessages: sanitizeMessagesForLog(messages),
+    requestMeta: restBody as Record<string, unknown>,
+    responseRaw: content,
+    durationMs: durationMsFinal,
+    tokensUsed: data.usage?.total_tokens ?? 0,
+    success: true,
+  });
+
   return {
     content,
-    model: data.model ?? usedModel ?? cleanModelId(provider.modelId) ?? "",
+    model: resolvedModel,
     tokensUsed: data.usage?.total_tokens ?? 0,
     providerId: provider.id,
-    durationMs,
+    durationMs: durationMsFinal,
   };
 }
 
 function logMetric(row: Parameters<typeof insertLlmTimingMetric>[0]): void {
   insertLlmTimingMetric(row).catch(err =>
     console.warn("[invoke] metric insert failed:", err?.message)
+  );
+}
+
+/**
+ * Replace base64 image data in a messages array with a size placeholder so
+ * the exchange log row stays a manageable size (typically a few KB vs. several MB).
+ */
+function sanitizeMessagesForLog(messages: any[]): any[] {
+  return messages.map(msg => {
+    if (!Array.isArray(msg.content)) return msg;
+    return {
+      ...msg,
+      content: msg.content.map((part: any) => {
+        if (part.type !== "image_url") return part;
+        const url: string = part.image_url?.url ?? "";
+        const kb = Math.round(url.length * 0.75 / 1024);
+        return { type: "image_url", image_url: { url: `[image omitted: ~${kb} kb]` } };
+      }),
+    };
+  });
+}
+
+function logExchange(data: Parameters<typeof insertProviderExchangeLog>[0]): void {
+  insertProviderExchangeLog(data).catch(err =>
+    console.warn("[invoke] exchange log insert failed:", err?.message)
   );
 }
 
@@ -267,7 +336,7 @@ export async function invokeStage(
     }
 
     try {
-      const result = await dispatchToProvider(stage, provider, messages, inscription, options, candidate.withRetry);
+      const result = await dispatchToProvider(stage, provider, messages, inscription, options, candidate.withRetry, context);
       options?.validateResult?.(result);
       if (candidate.role !== "primary") {
         console.log(`[invoke] ${stage} ${candidate.role} provider succeeded (model: ${result.model})`);

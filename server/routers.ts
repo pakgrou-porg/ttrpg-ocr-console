@@ -13,7 +13,7 @@ import {
   getUserPermissions, setUserPermission, deleteUserPermission, getAllPermissionsForAllUsers,
   createInvitation, getAllInvitations, revokeInvitation,
   getAllSystemConfig, getSystemConfigByCategory, upsertSystemConfig, deleteSystemConfig,
-  getAllIngestionJobs, getActiveIngestionJobs, getIngestionJobById, createIngestionJob, updateIngestionJobStatus, getIngestionJobStats, deleteIngestionJob, clearIngestionJobsByStatus, cancelIngestionJobChain, purgeJobPages, clearHitlItems, wipeProcessingData, type WipeTarget, getPipelineStats, getPagesMissingRegions,
+  getAllIngestionJobs, getActiveIngestionJobs, getIngestionJobById, createIngestionJob, updateIngestionJobStatus, getIngestionJobStats, deleteIngestionJob, clearIngestionJobsByStatus, cancelIngestionJobChain, purgeJobPages, clearHitlItems, wipeProcessingData, type WipeTarget, getPipelineStats, getPagesMissingRegions, getProviderExchangeLogs,
   recordTelemetryEvent, getTelemetryEvents, getTelemetrySummary,
   pingDatabase,
   getAllLlmProviders, getLlmProviderById, createLlmProvider, updateLlmProvider, deleteLlmProvider,
@@ -766,7 +766,7 @@ export const appRouter = router({
         targets: z.array(z.enum([
           "ingestion_jobs", "documents", "pages", "ocr_results",
           "hitl_items", "content_summaries", "metrics",
-          "page_layouts", "page_regions",
+          "page_layouts", "page_regions", "exchange_logs",
         ])).optional(),
       }).optional())
       .mutation(async ({ input }) => {
@@ -2832,6 +2832,11 @@ export const appRouter = router({
 
     /** Aggregate pipeline health stats for the Oversee the Scribes dashboard. */
     stats: protectedProcedure.query(() => getPipelineStats()),
+
+    /** Provider exchange logs — ring buffer of last 21 per provider. Optionally filter by providerId. */
+    exchangeLogs: adminProcedure
+      .input(z.object({ providerId: z.number().int().optional() }).optional())
+      .query(({ input }) => getProviderExchangeLogs(input?.providerId)),
 
     /** Enqueue a bbox_detection retry for every OCR-complete page that has no
      *  contentRegions — typically pages processed before the bbox stagesFailed fix. */

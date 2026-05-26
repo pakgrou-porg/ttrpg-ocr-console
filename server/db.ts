@@ -23,6 +23,7 @@ import {
   gameSystems, InsertGameSystem,
   llmTimingMetrics, InsertLlmTimingMetric,
   contentSummaries, InsertContentSummary,
+  providerExchangeLogs, InsertProviderExchangeLog, PROVIDER_EXCHANGE_LOG_LIMIT,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
@@ -764,7 +765,8 @@ export type WipeTarget =
   | "content_summaries"
   | "metrics"
   | "page_layouts"
-  | "page_regions";
+  | "page_regions"
+  | "exchange_logs";
 
 export async function wipeProcessingData(
   targets?: WipeTarget[],
@@ -796,6 +798,10 @@ export async function wipeProcessingData(
   if (has("metrics")) {
     counts.llmTimingMetrics       = n(await db.delete(llmTimingMetrics).returning({ id: llmTimingMetrics.id }));
     counts.pageProcessingAttempts = n(await db.delete(pageProcessingAttempts).returning({ id: pageProcessingAttempts.id }));
+  }
+
+  if (has("exchange_logs")) {
+    counts.providerExchangeLogs = n(await db.delete(providerExchangeLogs).returning({ id: providerExchangeLogs.id }));
   }
 
   if (has("content_summaries")) {
@@ -1689,6 +1695,45 @@ export async function getLlmMetricsPageSummary(jobId: number) {
   return rows as unknown as Array<{
     page_id: number; call_count: number; total_duration_ms: number; total_tokens: number;
   }>;
+}
+
+// ── Provider Exchange Logs ────────────────────────────────────────────────────
+
+/**
+ * Insert a provider exchange log entry and trim the per-provider ring buffer
+ * to PROVIDER_EXCHANGE_LOG_LIMIT rows.  Fire-and-forget — errors are logged,
+ * never thrown, so a logging failure never aborts a pipeline call.
+ */
+export async function insertProviderExchangeLog(data: InsertProviderExchangeLog): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.insert(providerExchangeLogs).values(data);
+  // Trim: keep only the most recent PROVIDER_EXCHANGE_LOG_LIMIT rows per provider.
+  await db.execute(sql`
+    DELETE FROM provider_exchange_logs
+    WHERE provider_id = ${data.providerId}
+      AND id NOT IN (
+        SELECT id FROM provider_exchange_logs
+        WHERE provider_id = ${data.providerId}
+        ORDER BY created_at DESC
+        LIMIT ${PROVIDER_EXCHANGE_LOG_LIMIT}
+      )
+  `);
+}
+
+/**
+ * Return exchange logs for a specific provider (most recent first),
+ * or all logs across all providers if providerId is omitted.
+ */
+export async function getProviderExchangeLogs(providerId?: number) {
+  const db = await getDb();
+  if (!db) return [];
+  const query = db.select().from(providerExchangeLogs);
+  if (providerId !== undefined) {
+    return query.where(eq(providerExchangeLogs.providerId, providerId))
+      .orderBy(desc(providerExchangeLogs.createdAt));
+  }
+  return query.orderBy(desc(providerExchangeLogs.createdAt));
 }
 
 // ─── Content Summaries ────────────────────────────────────────────────────────

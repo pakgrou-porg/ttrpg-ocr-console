@@ -716,6 +716,49 @@ export const llmTimingMetrics = pgTable("llm_timing_metrics", {
 export type LlmTimingMetric = typeof llmTimingMetrics.$inferSelect;
 export type InsertLlmTimingMetric = typeof llmTimingMetrics.$inferInsert;
 
+// ─── Provider Exchange Logs ───────────────────────────────────────────────────
+// DB-persistent ring buffer: the most recent PROVIDER_EXCHANGE_LOG_LIMIT
+// request+response exchanges per provider, written by invokeStage on every
+// call (success or failure).  Images are stripped from request messages before
+// storage to keep row sizes manageable.  Used for diagnosing provider failures,
+// prompt issues, and response format problems without live log tailing.
+
+export const PROVIDER_EXCHANGE_LOG_LIMIT = 21;
+
+export const providerExchangeLogs = pgTable("provider_exchange_logs", {
+  id: serial("id").primaryKey(),
+  /** Provider used for this exchange. */
+  providerId: integer("provider_id").notNull(),
+  providerName: varchar("provider_name", { length: 128 }).notNull(),
+  /** Pipeline stage that made the request (e.g. "ocr_extraction"). */
+  stage: varchar("stage", { length: 64 }).notNull(),
+  /** Ingestion job that triggered the call (null for standalone/retry calls). */
+  jobId: integer("job_id"),
+  /** Page being processed at time of call. */
+  pageId: integer("page_id"),
+  /** Model id returned by the provider (or sent in request). */
+  model: varchar("model", { length: 256 }),
+  /** Full messages array sent to the provider (image data replaced with size placeholder). */
+  requestMessages: jsonb("request_messages").$type<any[]>(),
+  /** Non-message fields from the request body (temperature, max_tokens, response_format, etc.). */
+  requestMeta: jsonb("request_meta").$type<Record<string, unknown>>(),
+  /** Raw string content returned by the provider on success; null on failure. */
+  responseRaw: text("response_raw"),
+  durationMs: integer("duration_ms").notNull(),
+  tokensUsed: integer("tokens_used").default(0).notNull(),
+  success: boolean("success").default(true).notNull(),
+  /** HTTP status + error body excerpt on failure. */
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  providerIdIdx: index("pex_provider_id_idx").on(t.providerId),
+  stageIdx:      index("pex_stage_idx").on(t.stage),
+  createdAtIdx:  index("pex_created_at_idx").on(t.createdAt),
+}));
+
+export type ProviderExchangeLog = typeof providerExchangeLogs.$inferSelect;
+export type InsertProviderExchangeLog = typeof providerExchangeLogs.$inferInsert;
+
 // ─── Content Summaries ────────────────────────────────────────────────────────
 //
 // Hierarchical summaries for chapters, sections, subsections, and pages.
