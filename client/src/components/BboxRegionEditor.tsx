@@ -12,22 +12,24 @@ import {
 import type { BboxRegion } from "@/components/BboxOverlay";
 
 export const REGION_TYPES = [
+  // Priority types — most common in TTRPG material, shown first
   "heading",
   "subheading",
   "paragraph",
-  "list",
-  "sidebar",
-  "callout",
-  "caption",
   "table",
-  "stat_block",
-  "illustration",
-  "map",
   "graphic",
-  "advertisement",
   "header",
   "footer",
   "page_number",
+  // Remaining types — alphabetical
+  "advertisement",
+  "callout",
+  "caption",
+  "illustration",
+  "list",
+  "map",
+  "sidebar",
+  "stat_block",
   "unknown",
 ] as const;
 

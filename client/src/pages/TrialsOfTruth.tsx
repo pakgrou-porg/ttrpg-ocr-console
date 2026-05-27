@@ -308,7 +308,7 @@ const LAYOUT_METADATA_TEMPLATES: Partial<Record<string, Record<string, unknown>>
   title_page:             { columns: 1, has_table: false, has_image_or_art: false, has_list: false },
   toc:                    { columns: 1, has_table: false, has_image_or_art: false, has_list: true  },
   chapter_header:         { columns: 1, has_table: false, has_image_or_art: false, has_list: false },
-  body_text:              { columns: 1, has_table: false, has_image_or_art: false, has_list: false },
+  body_text:              { columns: 2, has_table: true,  has_image_or_art: false, has_list: false },
   stat_block:             { columns: 1, has_table: true,  has_image_or_art: false, has_list: false },
   table:                  { columns: 1, has_table: true,  has_image_or_art: false, has_list: false },
   illustration_full:      { columns: 1, has_table: false, has_image_or_art: true,  has_list: false },
