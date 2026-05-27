@@ -643,6 +643,13 @@ export const hitlRetryAttempts = pgTable("hitl_retry_attempts", {
   startedAt: timestamp("started_at").defaultNow().notNull(),
   completedAt: timestamp("completed_at"),
   durationMs: integer("duration_ms"),
+  // Before-state snapshot — captured at attempt creation so we can measure
+  // the qualitative improvement each human intervention actually produced.
+  previousConfidence: integer("previous_confidence"),
+  confidenceDelta: integer("confidence_delta"),
+  previousRegionCount: integer("previous_region_count"),
+  regionsBefore: jsonb("regions_before").$type<unknown[]>(),
+  previousLayoutType: varchar("previous_layout_type", { length: 64 }),
 }, (t) => ({
   pageIdIdx: index("hitl_retry_attempts_page_id_idx").on(t.pageId),
   hitlItemIdIdx: index("hitl_retry_attempts_hitl_item_id_idx").on(t.hitlItemId),

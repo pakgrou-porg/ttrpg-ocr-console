@@ -1998,6 +1998,12 @@ export async function retryPageStages(
     || currentOcrBefore?.correctedText != null
     || corrected.structure_correction != null
     || corrected.json_correction != null;
+  // Snapshot the page state before running so we can measure the delta afterward.
+  const previousConfidence = page.ocrConfidence ?? currentOcrBefore?.confidence ?? null;
+  const regionsBefore = Array.isArray(page.contentRegions) ? (page.contentRegions as unknown[]) : null;
+  const previousRegionCount = regionsBefore?.length ?? null;
+  const previousLayoutType = page.layoutType ?? null;
+
   let retryAttemptId: number | null = null;
   try {
     const attempt = await createHitlRetryAttempt({
@@ -2015,6 +2021,11 @@ export async function retryPageStages(
       modelTrace: {},
       ocrResultId: retryOcrResultId,
       createdBy: metadata.reviewerUserId ?? null,
+      previousConfidence,
+      confidenceDelta: null,
+      previousRegionCount,
+      regionsBefore,
+      previousLayoutType,
     } as any);
     retryAttemptId = attempt.id;
   } catch (err: any) {
@@ -2194,6 +2205,7 @@ export async function retryPageStages(
       await updateHitlRetryAttempt(retryAttemptId, {
         status: stagesFailed.length === 0 ? "succeeded" : "failed",
         confidence: ocrConfidence,
+        confidenceDelta: previousConfidence != null ? ocrConfidence - previousConfidence : null,
         stagesFailed,
         stageErrors,
         modelTrace,

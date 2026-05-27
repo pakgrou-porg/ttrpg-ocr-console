@@ -14,7 +14,7 @@ import {
   CheckCircle2, XCircle, ArrowUpCircle, ChevronDown, ChevronRight,
   Loader2, ClipboardList, FileText, Layout, BoxSelect, ListTree, Braces, BookOpen,
   Trash2, ChevronLeft, Download, RefreshCw, Scissors, Save, Copy, ClipboardPaste,
-  ArrowUp, ArrowDown, RotateCcw,
+  ArrowUp, ArrowDown, RotateCcw, History, TrendingUp, TrendingDown, Minus,
 } from "lucide-react";
 import { BboxOverlayToggle } from "@/components/BboxOverlay";
 import { BboxRegionEditor, parseRegionJson, TYPE_COLORS, sortRegionsByPosition } from "@/components/BboxRegionEditor";
@@ -66,7 +66,7 @@ function formatExportRecord(item: any) {
 }
 
 type HitlAction = "resolved" | "skipped" | "escalated";
-type TabId = "text" | "layout" | "regions" | "structure" | "json" | "document";
+type TabId = "text" | "layout" | "regions" | "structure" | "json" | "document" | "history";
 
 // Empty JSON templates shown when a section has no source data.
 // Pre-populate the correction field so reviewers have a starting structure.
@@ -536,6 +536,221 @@ function DocumentTab({ item }: { item: any }) {
   );
 }
 
+// ── History tab ───────────────────────────────────────────────────────────────
+
+function ConfidenceDelta({ delta }: { delta: number | null | undefined }) {
+  if (delta == null) return null;
+  const abs = Math.abs(delta);
+  if (delta > 0) return (
+    <span className="flex items-center gap-0.5 text-green-400 font-medium">
+      <TrendingUp className="w-3 h-3" />+{abs}pp
+    </span>
+  );
+  if (delta < 0) return (
+    <span className="flex items-center gap-0.5 text-red-400 font-medium">
+      <TrendingDown className="w-3 h-3" />−{abs}pp
+    </span>
+  );
+  return (
+    <span className="flex items-center gap-0.5 text-muted-foreground">
+      <Minus className="w-3 h-3" />0pp
+    </span>
+  );
+}
+
+function HistoryTab({ item }: { item: any }) {
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const attempts: any[] = Array.isArray(item.retryAttempts) ? item.retryAttempts : [];
+
+  if (attempts.length === 0) {
+    return (
+      <div className="py-8 text-center text-muted-foreground text-sm italic">
+        No retry history for this page yet.
+      </div>
+    );
+  }
+
+  // Most recent first — the list comes back DESC from the DB but the item list
+  // query may not guarantee order, so sort defensively here.
+  const sorted = attempts.slice().sort((a: any, b: any) =>
+    new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime()
+  );
+
+  return (
+    <div className="space-y-2">
+      {sorted.map((attempt: any, idx: number) => {
+        const isExpanded = expandedId === attempt.id;
+        const isRunning  = attempt.status === "running";
+        const isSuccess  = attempt.status === "succeeded";
+        const stages: string[]  = attempt.requestedStages ?? [];
+        const fields: string[]  = attempt.savedCorrectionFields ?? [];
+        const failed: string[]  = attempt.stagesFailed ?? [];
+        const errors: Record<string, string> = attempt.stageErrors ?? {};
+        const models: Record<string, string> = attempt.modelTrace ?? {};
+        const regionsBefore: any[] | null = Array.isArray(attempt.regionsBefore) ? attempt.regionsBefore : null;
+        const regionsAfter: number | null = attempt.confidence != null
+          ? null  // region count after isn't stored separately — use page regions from parent
+          : null;
+        const attemptNum = sorted.length - idx;
+        const date = attempt.startedAt ? new Date(attempt.startedAt) : null;
+
+        return (
+          <div key={attempt.id} className="rounded border border-border/40 bg-muted/10 overflow-hidden">
+            {/* Summary row */}
+            <button
+              type="button"
+              onClick={() => setExpandedId(isExpanded ? null : attempt.id)}
+              className="w-full flex items-start gap-3 px-3 py-2.5 text-left hover:bg-muted/20 transition-colors"
+            >
+              {/* Status icon */}
+              <span className="mt-0.5 flex-shrink-0">
+                {isRunning  ? <Loader2 className="w-4 h-4 text-amber-400 animate-spin" /> :
+                 isSuccess  ? <CheckCircle2 className="w-4 h-4 text-green-400" /> :
+                              <XCircle className="w-4 h-4 text-red-400" />}
+              </span>
+
+              <div className="flex-1 min-w-0 space-y-1">
+                {/* Top row: attempt label + timestamp + duration */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-medium">Attempt #{attemptNum}</span>
+                  {date && (
+                    <span className="text-[10px] text-muted-foreground">
+                      {date.toLocaleDateString()} {date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    </span>
+                  )}
+                  {attempt.durationMs != null && (
+                    <span className="text-[10px] text-muted-foreground">
+                      {attempt.durationMs < 1000 ? `${attempt.durationMs}ms` : `${(attempt.durationMs / 1000).toFixed(1)}s`}
+                    </span>
+                  )}
+                </div>
+
+                {/* Stages + correction flags */}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {stages.map(s => (
+                    <span key={s} className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary/80 font-mono">
+                      {s.replace(/_/g, " ")}
+                    </span>
+                  ))}
+                  {fields.includes("layout")    && <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400">layout ✓</span>}
+                  {fields.includes("regions")   && <span className="text-[10px] px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-400">regions ✓</span>}
+                  {fields.includes("structure") && <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400">structure ✓</span>}
+                  {fields.includes("text")      && <span className="text-[10px] px-1.5 py-0.5 rounded bg-teal-500/10 text-teal-400">text ✓</span>}
+                  {failed.length > 0 && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/10 text-red-400">
+                      {failed.length} stage{failed.length > 1 ? "s" : ""} failed
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Confidence column */}
+              <div className="flex-shrink-0 text-right space-y-0.5">
+                {(attempt.previousConfidence != null || attempt.confidence != null) && (
+                  <div className="flex items-center gap-1.5 justify-end text-xs">
+                    {attempt.previousConfidence != null && (
+                      <span className="text-muted-foreground font-mono">{attempt.previousConfidence}%</span>
+                    )}
+                    {attempt.previousConfidence != null && attempt.confidence != null && (
+                      <span className="text-muted-foreground/40">→</span>
+                    )}
+                    {attempt.confidence != null && (
+                      <span className={`font-mono font-medium ${attempt.confidence >= 80 ? "text-green-400" : attempt.confidence >= 60 ? "text-amber-400" : "text-red-400"}`}>
+                        {attempt.confidence}%
+                      </span>
+                    )}
+                  </div>
+                )}
+                <div className="flex justify-end">
+                  <ConfidenceDelta delta={attempt.confidenceDelta} />
+                </div>
+              </div>
+
+              <ChevronRight className={`w-3.5 h-3.5 flex-shrink-0 text-muted-foreground/40 mt-1 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
+            </button>
+
+            {/* Expanded detail */}
+            {isExpanded && (
+              <div className="border-t border-border/30 px-3 py-2.5 space-y-2.5 text-xs">
+                {/* Before-state */}
+                {(attempt.previousLayoutType != null || attempt.previousRegionCount != null) && (
+                  <div>
+                    <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide mb-1">Before</p>
+                    <div className="flex gap-4 flex-wrap">
+                      {attempt.previousLayoutType != null && (
+                        <span className="text-muted-foreground">
+                          Layout: <span className="text-foreground font-mono">{attempt.previousLayoutType}</span>
+                        </span>
+                      )}
+                      {attempt.previousRegionCount != null && (
+                        <span className="text-muted-foreground">
+                          Regions: <span className="text-foreground font-mono">{attempt.previousRegionCount}</span>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Region snapshot diff summary */}
+                {regionsBefore && regionsBefore.length > 0 && (
+                  <div>
+                    <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide mb-1">
+                      Region snapshot ({regionsBefore.length} before)
+                    </p>
+                    <div className="space-y-0.5 max-h-32 overflow-y-auto font-mono text-[10px] text-muted-foreground">
+                      {regionsBefore.map((r: any, i: number) => (
+                        <div key={i} className="flex items-center gap-2">
+                          <span className="w-4 text-muted-foreground/50">{i + 1}</span>
+                          <span className="text-foreground/70">{r.type ?? r.regionType ?? "unknown"}</span>
+                          {r.bbox && (
+                            <span className="text-muted-foreground/50">
+                              ({(r.bbox.x ?? 0).toFixed(0)},{(r.bbox.y ?? 0).toFixed(0)})
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Model trace */}
+                {Object.keys(models).length > 0 && (
+                  <div>
+                    <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide mb-1">Models</p>
+                    <div className="space-y-0.5">
+                      {Object.entries(models).map(([stage, model]) => (
+                        <div key={stage} className="flex gap-2">
+                          <span className="text-muted-foreground/60 w-28 flex-shrink-0 font-mono">{stage.replace(/_/g, " ")}</span>
+                          <span className="text-foreground/80 font-mono truncate">{model as string}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Stage errors */}
+                {Object.keys(errors).length > 0 && (
+                  <div>
+                    <p className="text-[11px] font-medium text-red-400/80 uppercase tracking-wide mb-1">Errors</p>
+                    <div className="space-y-1">
+                      {Object.entries(errors).map(([stage, msg]) => (
+                        <div key={stage} className="rounded bg-red-500/5 border border-red-500/20 px-2 py-1">
+                          <span className="text-red-400/80 font-mono">{stage.replace(/_/g, " ")}: </span>
+                          <span className="text-muted-foreground">{msg as string}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Main HITL card ────────────────────────────────────────────────────────────
 
 const TABS: { id: TabId; label: string; icon: ElementType }[] = [
@@ -545,6 +760,7 @@ const TABS: { id: TabId; label: string; icon: ElementType }[] = [
   { id: "structure", label: "Structure", icon: ListTree  },
   { id: "json",      label: "JSON",      icon: Braces    },
   { id: "document",  label: "Document",  icon: BookOpen  },
+  { id: "history",   label: "History",   icon: History   },
 ];
 
 function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate, onNext }: {
@@ -573,6 +789,7 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
       structure: hasStructure ? "" : (EMPTY_TEMPLATES.structure ?? ""),
       json:      hasJson      ? "" : (EMPTY_TEMPLATES.json      ?? ""),
       document:  "",
+      history:   "",
     };
   });
   const [notes, setNotes] = useState("");
@@ -770,7 +987,7 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
   };
 
   const hasCorrections = Object.values(corrections).some(v => v.trim());
-  const activeEditableTab = activeTab !== "document";
+  const activeEditableTab = activeTab !== "document" && activeTab !== "history";
   const retryAttempts: any[] = Array.isArray(item.retryAttempts) ? item.retryAttempts : [];
 
   return (
@@ -881,9 +1098,13 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
                   >
                     <Icon className="w-3 h-3" />
                     {label}
-                    {corrections[id]?.trim() && (
+                    {id === "history" && retryAttempts.length > 0 ? (
+                      <span className="min-w-[1.1rem] h-[1.1rem] rounded-full bg-primary/20 text-primary text-[9px] font-bold flex items-center justify-center px-0.5 flex-shrink-0">
+                        {retryAttempts.length}
+                      </span>
+                    ) : id !== "history" && corrections[id]?.trim() ? (
                       <span className="w-1.5 h-1.5 rounded-full bg-orange-400 flex-shrink-0" title="Has correction" />
-                    )}
+                    ) : null}
                   </button>
                 ))}
               </div>
@@ -901,6 +1122,7 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
                 {activeTab === "structure" && <StructureTab item={item} correction={corrections.structure} onCorrect={setCorrection("structure")} onSave={saveSection("structure")} isSaving={saveCorrectionMut.isPending} />}
                 {activeTab === "json"      && <JsonTab      item={item} correction={corrections.json}      onCorrect={setCorrection("json")}      onSave={saveSection("json")}      isSaving={saveCorrectionMut.isPending} />}
                 {activeTab === "document"  && <DocumentTab  item={item} />}
+                {activeTab === "history"   && <HistoryTab   item={item} />}
               </div>
             </div>
           </div>
