@@ -200,12 +200,32 @@ export function BboxRegionEditor({
 
   const selected = baseDrafts.find(r => r.id === selectedId) ?? baseDrafts[0] ?? null;
 
-  // In auto-sort mode: sort top-to-bottom then left-to-right on every emit.
-  // In manual mode: preserve the existing sequence order the reviewer set.
+  // In auto-sort mode: group into columns left-to-right (a new column starts when a
+  // region's left edge is >10 percentage-points further right than the current column's
+  // leftmost x), then sort each column top-to-bottom.  Single-column pages degenerate
+  // to a simple top-to-bottom sort.
+  // In manual mode: preserve the explicit sequence the reviewer set.
   const emit = (drafts: DraftRegion[]) => {
-    const ordered = manualOrder
-      ? drafts.slice().sort((a, b) => a.sequence - b.sequence)
-      : drafts.slice().sort((a, b) => (a.bbox.y - b.bbox.y) || (a.bbox.x - b.bbox.x));
+    let ordered: DraftRegion[];
+    if (manualOrder) {
+      ordered = drafts.slice().sort((a, b) => a.sequence - b.sequence);
+    } else {
+      const byX = drafts.slice().sort((a, b) => a.bbox.x - b.bbox.x);
+      const columns: DraftRegion[][] = [];
+      let col: DraftRegion[] = [];
+      let colMinX = byX[0]?.bbox.x ?? 0;
+      for (const r of byX) {
+        if (r.bbox.x > colMinX + 10) {
+          columns.push(col);
+          col = [r];
+          colMinX = r.bbox.x;
+        } else {
+          col.push(r);
+        }
+      }
+      if (col.length > 0) columns.push(col);
+      ordered = columns.flatMap(c => c.slice().sort((a, b) => a.bbox.y - b.bbox.y));
+    }
     onChange(serialiseDrafts(ordered.map((r, i) => ({ ...r, sequence: i + 1 }))));
   };
 

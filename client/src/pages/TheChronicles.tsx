@@ -393,6 +393,21 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
     onError: (err) => toast.error(err.message),
   });
 
+  const exportFullMutation = trpc.library.exportFull.useMutation({
+    onSuccess: (data) => {
+      const json = JSON.stringify(data, null, 2);
+      const blob = new Blob([json], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `document-${documentId}-full.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success(`Exported ${data.pages.length} pages.`);
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
   const { data, isLoading } = trpc.library.listPages.useQuery(
     { documentId, offset, limit: LIMIT },
     { enabled: documentId > 0 },
@@ -475,16 +490,28 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
             ) : (
               <span className="text-xs text-muted-foreground">{total} pages total</span>
             )}
-            <Button
-              size="sm"
-              variant="outline"
-              className="gap-1.5 text-xs ml-auto"
-              onClick={() => exportMutation.mutate({ documentId })}
-              disabled={exportMutation.isPending || documentId === 0}
-            >
-              {exportMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
-              Export Unsloth JSONL
-            </Button>
+            <div className="flex gap-2 ml-auto">
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-1.5 text-xs"
+                onClick={() => exportMutation.mutate({ documentId })}
+                disabled={exportMutation.isPending || documentId === 0}
+              >
+                {exportMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
+                Export Unsloth JSONL
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-1.5 text-xs"
+                onClick={() => exportFullMutation.mutate({ documentId })}
+                disabled={exportFullMutation.isPending || documentId === 0}
+              >
+                {exportFullMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Code2 className="w-3.5 h-3.5" />}
+                Export Full JSON
+              </Button>
+            </div>
           </div>
         </>
       )}

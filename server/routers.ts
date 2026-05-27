@@ -1929,7 +1929,7 @@ export const appRouter = router({
      */
     exportFull: protectedProcedure
       .input(z.object({ documentId: z.number().int() }))
-      .query(async ({ ctx, input }) => {
+      .mutation(async ({ ctx, input }) => {
         const doc = assertDocumentAccess(ctx, await getDocumentById(input.documentId));
         const pages = await getPagesByDocumentId(input.documentId);
         const summaries = await getContentSummariesByDocument(input.documentId);

@@ -2493,17 +2493,23 @@ export async function exportDocumentAsUnsloth(documentId: number): Promise<strin
 
     if (!assistantContent) continue;
 
-    // Image reference — use the served URL path (not raw filesystem path)
-    const imageUrl = page.rawPngUrl
-      ? `/api/pipeline/pages/${page.rawPngUrl.replace(/.*\/workspace\//, "")}`
-      : null;
+    // Embed image as base64 data URL so the JSONL is self-contained
+    let imageEntry: { type: string; image: string } | null = null;
+    if (page.rawPngUrl) {
+      try {
+        const imgBytes = await readFile(page.rawPngUrl);
+        imageEntry = { type: "image", image: `data:image/png;base64,${imgBytes.toString("base64")}` };
+      } catch {
+        // File missing — skip image rather than breaking the export
+      }
+    }
 
     const record = {
       messages: [
         {
           role: "user",
           content: [
-            ...(imageUrl ? [{ type: "image", image: imageUrl }] : []),
+            ...(imageEntry ? [imageEntry] : []),
             {
               type: "text",
               text: "Identify and extract all text regions from this document page. For each region, output its semantic type, bounding box, and text content.",
