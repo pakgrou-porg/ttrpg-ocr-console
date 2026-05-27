@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
-import { Move, Plus, Trash2, ArrowUp, ArrowDown, RotateCcw } from "lucide-react";
+import { Move, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -57,7 +57,7 @@ type DraftRegion = BboxRegion & {
   bbox: Box;
 };
 
-const TYPE_COLORS: Record<string, string> = {
+export const TYPE_COLORS: Record<string, string> = {
   heading:       "#a855f7",
   subheading:    "#c084fc",
   paragraph:     "#3b82f6",
@@ -156,6 +156,32 @@ function serialiseDrafts(regions: DraftRegion[]): BboxRegion[] {
   }));
 }
 
+/**
+ * Re-sort a raw BboxRegion array by visual position using the column-aware algorithm
+ * (same logic as the auto-sort inside BboxRegionEditor). Safe to call from parent
+ * context, e.g. the RegionsTab "Auto-sort" button.
+ */
+export function sortRegionsByPosition(regions: BboxRegion[]): BboxRegion[] {
+  const drafts = prepareDrafts(regions);
+  if (drafts.length === 0) return regions;
+  const byX = drafts.slice().sort((a, b) => a.bbox.x - b.bbox.x);
+  const columns: DraftRegion[][] = [];
+  let col: DraftRegion[] = [];
+  let colMinX = byX[0].bbox.x;
+  for (const r of byX) {
+    if (r.bbox.x > colMinX + 10) {
+      columns.push(col);
+      col = [r];
+      colMinX = r.bbox.x;
+    } else {
+      col.push(r);
+    }
+  }
+  if (col.length > 0) columns.push(col);
+  const ordered = columns.flatMap(c => c.slice().sort((a, b) => a.bbox.y - b.bbox.y));
+  return serialiseDrafts(ordered.map((r, i) => ({ ...r, sequence: i + 1 })));
+}
+
 function pointerPercent(e: PointerEvent<HTMLElement>, el: HTMLElement) {
   const rect = el.getBoundingClientRect();
   return {
@@ -178,10 +204,15 @@ export function BboxRegionEditor({
   imageUrl,
   regions,
   onChange,
+  manualOrder,
+  onManualOrderChange,
 }: {
   imageUrl: string;
   regions: BboxRegion[];
   onChange: (regions: BboxRegion[]) => void;
+  /** Controlled: when provided the parent owns the manual-order flag. */
+  manualOrder?: boolean;
+  onManualOrderChange?: (v: boolean) => void;
 }) {
   const baseDrafts = useMemo(() => prepareDrafts(regions), [regions]);
   const [selectedId, setSelectedId] = useState<string | null>(baseDrafts[0]?.id ?? null);
@@ -194,9 +225,13 @@ export function BboxRegionEditor({
   }>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const [kbMode, setKbMode] = useState<"none" | "move" | "resize">("none");
-  // When false, emit auto-sorts by position (default). When true, the reviewer
-  // has manually reordered regions and the explicit sequence is preserved.
-  const [manualOrder, setManualOrder] = useState(false);
+  // Uncontrolled fallback: when manualOrder prop is not provided, track it internally.
+  const [internalManualOrder, setInternalManualOrder] = useState(false);
+  const effectiveManualOrder = manualOrder ?? internalManualOrder;
+  const setEffectiveManualOrder = (v: boolean) => {
+    if (manualOrder === undefined) setInternalManualOrder(v);
+    onManualOrderChange?.(v);
+  };
 
   const selected = baseDrafts.find(r => r.id === selectedId) ?? baseDrafts[0] ?? null;
 
@@ -207,7 +242,7 @@ export function BboxRegionEditor({
   // In manual mode: preserve the explicit sequence the reviewer set.
   const emit = (drafts: DraftRegion[]) => {
     let ordered: DraftRegion[];
-    if (manualOrder) {
+    if (effectiveManualOrder) {
       ordered = drafts.slice().sort((a, b) => a.sequence - b.sequence);
     } else {
       const byX = drafts.slice().sort((a, b) => a.bbox.x - b.bbox.x);
@@ -229,19 +264,18 @@ export function BboxRegionEditor({
     onChange(serialiseDrafts(ordered.map((r, i) => ({ ...r, sequence: i + 1 }))));
   };
 
-  // Reorder the reading sequence: move item at position idx up or down by one step.
-  const reorderSequence = (idx: number, direction: "up" | "down") => {
+  // Move the selected region to an explicit sequence position, shifting others around it.
+  const setSequenceNumber = (id: string, targetSeq: number) => {
+    if (!Number.isFinite(targetSeq)) return;
     const ordered = baseDrafts.slice().sort((a, b) => a.sequence - b.sequence);
-    const swapWith = direction === "up" ? idx - 1 : idx + 1;
-    if (swapWith < 0 || swapWith >= ordered.length) return;
-    [ordered[idx], ordered[swapWith]] = [ordered[swapWith], ordered[idx]];
-    setManualOrder(true);
+    const fromIdx = ordered.findIndex(r => r.id === id);
+    if (fromIdx < 0) return;
+    const toIdx = clamp(Math.round(targetSeq) - 1, 0, ordered.length - 1);
+    if (fromIdx === toIdx) return;
+    const [item] = ordered.splice(fromIdx, 1);
+    ordered.splice(toIdx, 0, item);
+    setEffectiveManualOrder(true);
     onChange(serialiseDrafts(ordered.map((r, i) => ({ ...r, sequence: i + 1 }))));
-  };
-
-  const resetToAutoOrder = () => {
-    setManualOrder(false);
-    emit(baseDrafts);
   };
 
   const updateRegion = (id: string, patch: Partial<DraftRegion> & { bbox?: Partial<Box> }) => {
@@ -553,6 +587,17 @@ export function BboxRegionEditor({
                 {REGION_TYPES.map(type => <SelectItem key={type} value={type}>{type}</SelectItem>)}
               </SelectContent>
             </Select>
+            <span className="text-[11px] text-muted-foreground/60 ml-auto flex-shrink-0">#</span>
+            <Input
+              type="number"
+              min="1"
+              max={baseDrafts.length}
+              value={selected.sequence}
+              onChange={e => setSequenceNumber(selected.id, Number(e.target.value))}
+              className="h-8 w-14 text-xs flex-shrink-0"
+              aria-label="Sequence position"
+              title="Reading order position — type a number to move this region"
+            />
           </div>
           <div className="grid grid-cols-4 gap-2">
             {(["x", "y", "w", "h"] as const).map(key => (
@@ -568,81 +613,6 @@ export function BboxRegionEditor({
                 aria-label={key}
               />
             ))}
-          </div>
-        </div>
-      )}
-
-      {/* Reading order panel — shown when there are 2+ regions */}
-      {baseDrafts.length >= 2 && (
-        <div className="rounded border border-border/40 bg-muted/10 p-2 space-y-1.5">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
-              Reading Order
-              {manualOrder && (
-                <span className="ml-2 text-[10px] text-primary/70 normal-case tracking-normal font-normal">manual</span>
-              )}
-            </p>
-            {manualOrder && (
-              <button
-                type="button"
-                onClick={resetToAutoOrder}
-                className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border border-border/40 text-muted-foreground hover:text-foreground transition-colors"
-                title="Reset to position-based auto-sort (top→bottom, left→right)"
-              >
-                <RotateCcw className="w-2.5 h-2.5" />
-                Auto-sort
-              </button>
-            )}
-          </div>
-          <div className="space-y-0.5 max-h-48 overflow-y-auto">
-            {baseDrafts
-              .slice()
-              .sort((a, b) => a.sequence - b.sequence)
-              .map((region, idx, arr) => {
-                const color = TYPE_COLORS[region.type] ?? TYPE_COLORS.unknown;
-                const isSelected = region.id === selectedId;
-                return (
-                  <div
-                    key={region.id}
-                    className={`flex items-center gap-2 px-2 py-1 rounded text-xs cursor-pointer transition-colors ${
-                      isSelected ? "bg-primary/10 text-foreground" : "hover:bg-muted/30 text-muted-foreground"
-                    }`}
-                    onClick={() => setSelectedId(region.id)}
-                  >
-                    <span className="font-mono w-5 text-center flex-shrink-0 text-muted-foreground/60">
-                      {idx + 1}
-                    </span>
-                    <span
-                      className="w-2 h-2 rounded-sm flex-shrink-0"
-                      style={{ background: color }}
-                    />
-                    <span className="flex-1 truncate">{region.type}</span>
-                    <span className="text-[10px] text-muted-foreground/40 flex-shrink-0 font-mono">
-                      {region.bbox.x.toFixed(0)},{region.bbox.y.toFixed(0)}
-                    </span>
-                    <div className="flex gap-0.5 flex-shrink-0">
-                      <button
-                        type="button"
-                        onClick={e => { e.stopPropagation(); reorderSequence(idx, "up"); }}
-                        disabled={idx === 0}
-                        className="p-0.5 rounded hover:bg-muted/50 disabled:opacity-20 transition-colors"
-                        title="Move earlier in reading order"
-                      >
-                        <ArrowUp className="w-3 h-3" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={e => { e.stopPropagation(); reorderSequence(idx, "down"); }}
-                        disabled={idx === arr.length - 1}
-                        className="p-0.5 rounded hover:bg-muted/50 disabled:opacity-20 transition-colors"
-                        title="Move later in reading order"
-                      >
-                        <ArrowDown className="w-3 h-3" />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
           </div>
         </div>
       )}

@@ -14,9 +14,10 @@ import {
   CheckCircle2, XCircle, ArrowUpCircle, ChevronDown, ChevronRight,
   Loader2, ClipboardList, FileText, Layout, BoxSelect, ListTree, Braces, BookOpen,
   Trash2, ChevronLeft, Download, RefreshCw, Scissors, Save, Copy, ClipboardPaste,
+  ArrowUp, ArrowDown, RotateCcw,
 } from "lucide-react";
 import { BboxOverlayToggle } from "@/components/BboxOverlay";
-import { BboxRegionEditor, parseRegionJson } from "@/components/BboxRegionEditor";
+import { BboxRegionEditor, parseRegionJson, TYPE_COLORS, sortRegionsByPosition } from "@/components/BboxRegionEditor";
 import { trpc } from "@/lib/trpc";
 import { useToast } from "@/hooks/use-toast";
 
@@ -360,9 +361,27 @@ function LayoutTab({ item, correction, onCorrect, onSave, isSaving }: TabProps) 
   );
 }
 
-function RegionsTab({ item, correction, onCorrect, onSave, isSaving }: TabProps) {
+function RegionsTab({ item, correction, onCorrect, onSave, isSaving, editableRegions, onReorder, manualOrder, onAutoSort }: TabProps & {
+  editableRegions?: any[];
+  onReorder?: (regions: any[]) => void;
+  manualOrder?: boolean;
+  onAutoSort?: () => void;
+}) {
   const sd = item.ocr?.structuredData as any;
   const regions = item.page?.contentRegions ?? sd?.regions ?? sd?.bounding_boxes ?? sd?.content_regions;
+
+  const sortedRegions = editableRegions
+    ? editableRegions.slice().sort((a: any, b: any) => (a.sequence ?? 0) - (b.sequence ?? 0))
+    : null;
+
+  const reorderByStep = (idx: number, direction: "up" | "down") => {
+    if (!sortedRegions || !onReorder) return;
+    const ordered = sortedRegions.slice();
+    const swapWith = direction === "up" ? idx - 1 : idx + 1;
+    if (swapWith < 0 || swapWith >= ordered.length) return;
+    [ordered[idx], ordered[swapWith]] = [ordered[swapWith], ordered[idx]];
+    onReorder(ordered.map((r: any, i: number) => ({ ...r, sequence: i + 1 })));
+  };
 
   return (
     <div className="space-y-3">
@@ -374,6 +393,69 @@ function RegionsTab({ item, correction, onCorrect, onSave, isSaving }: TabProps)
       <JsonViewer value={regions ?? null} emptyTemplate={EMPTY_TEMPLATES.regions} onCopyToEdit={onCorrect} />
       <CorrectionField label="Region correction (JSON array)"
         value={correction} onChange={onCorrect} onSave={onSave} isSaving={isSaving} />
+
+      {sortedRegions && sortedRegions.length >= 2 && (
+        <div className="rounded border border-border/40 bg-muted/10 p-2 space-y-1.5">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+              Reading Order
+              {manualOrder && (
+                <span className="ml-2 text-[10px] text-primary/70 normal-case tracking-normal font-normal">manual</span>
+              )}
+            </p>
+            {manualOrder && onAutoSort && (
+              <button
+                type="button"
+                onClick={onAutoSort}
+                className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border border-border/40 text-muted-foreground hover:text-foreground transition-colors"
+                title="Reset to position-based auto-sort"
+              >
+                <RotateCcw className="w-2.5 h-2.5" />
+                Auto-sort
+              </button>
+            )}
+          </div>
+          <div className="space-y-0.5 max-h-48 overflow-y-auto">
+            {sortedRegions.map((region: any, idx: number, arr: any[]) => {
+              const type = region.type ?? region.regionType ?? "unknown";
+              const color = TYPE_COLORS[type] ?? TYPE_COLORS.unknown;
+              return (
+                <div
+                  key={region.reviewId ?? idx}
+                  className="flex items-center gap-2 px-2 py-1 rounded text-xs text-muted-foreground hover:bg-muted/30 transition-colors"
+                >
+                  <span className="font-mono w-5 text-center flex-shrink-0 text-muted-foreground/60">{idx + 1}</span>
+                  <span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ background: color }} />
+                  <span className="flex-1 truncate">{type}</span>
+                  <span className="text-[10px] text-muted-foreground/40 flex-shrink-0 font-mono">
+                    {(region.bbox?.x ?? 0).toFixed(0)},{(region.bbox?.y ?? 0).toFixed(0)}
+                  </span>
+                  <div className="flex gap-0.5 flex-shrink-0">
+                    <button
+                      type="button"
+                      onClick={e => { e.stopPropagation(); reorderByStep(idx, "up"); }}
+                      disabled={idx === 0}
+                      className="p-0.5 rounded hover:bg-muted/50 disabled:opacity-20 transition-colors"
+                      title="Move earlier in reading order"
+                    >
+                      <ArrowUp className="w-3 h-3" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={e => { e.stopPropagation(); reorderByStep(idx, "down"); }}
+                      disabled={idx === arr.length - 1}
+                      className="p-0.5 rounded hover:bg-muted/50 disabled:opacity-20 transition-colors"
+                      title="Move later in reading order"
+                    >
+                      <ArrowDown className="w-3 h-3" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -494,6 +576,10 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
     };
   });
   const [notes, setNotes] = useState("");
+  // Tracks whether the reviewer has manually reordered regions (disables auto-sort).
+  // Shared between BboxRegionEditor (canvas) and RegionsTab (reading order list) so
+  // both sides stay in sync when either one triggers a reorder.
+  const [regionsManualOrder, setRegionsManualOrder] = useState(false);
 
   const resolveMut = trpc.hitl.resolve.useMutation({
     onSuccess: () => { toast({ title: "Approved" }); onResolved(); },
@@ -762,6 +848,8 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
                     imageUrl={pageImagePath}
                     regions={editableRegions}
                     onChange={setEditableRegions}
+                    manualOrder={regionsManualOrder}
+                    onManualOrderChange={setRegionsManualOrder}
                   />
                 ) : (
                   <BboxOverlayToggle
@@ -804,7 +892,12 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
               <div className="flex-1 overflow-auto">
                 {activeTab === "text"      && <TextTab      item={item} correction={corrections.text}      onCorrect={setCorrection("text")}      onSave={saveSection("text")}      isSaving={saveCorrectionMut.isPending} />}
                 {activeTab === "layout"    && <LayoutTab    item={item} correction={corrections.layout}    onCorrect={setCorrection("layout")}    onSave={saveSection("layout")}    isSaving={saveCorrectionMut.isPending} />}
-                {activeTab === "regions"   && <RegionsTab   item={item} correction={corrections.regions}   onCorrect={setCorrection("regions")}   onSave={saveSection("regions")}   isSaving={saveCorrectionMut.isPending} />}
+                {activeTab === "regions"   && <RegionsTab   item={item} correction={corrections.regions}   onCorrect={setCorrection("regions")}   onSave={saveSection("regions")}   isSaving={saveCorrectionMut.isPending}
+                  editableRegions={editableRegions}
+                  onReorder={(rs) => { setRegionsManualOrder(true); setEditableRegions(rs); }}
+                  manualOrder={regionsManualOrder}
+                  onAutoSort={() => { setRegionsManualOrder(false); setEditableRegions(sortRegionsByPosition(editableRegions)); }}
+                />}
                 {activeTab === "structure" && <StructureTab item={item} correction={corrections.structure} onCorrect={setCorrection("structure")} onSave={saveSection("structure")} isSaving={saveCorrectionMut.isPending} />}
                 {activeTab === "json"      && <JsonTab      item={item} correction={corrections.json}      onCorrect={setCorrection("json")}      onSave={saveSection("json")}      isSaving={saveCorrectionMut.isPending} />}
                 {activeTab === "document"  && <DocumentTab  item={item} />}
