@@ -33,6 +33,7 @@ import {
 } from "./db";
 import { encryptSecret, decryptSecret, storeSecretHint, renderMaskedSecret } from "./crypto";
 import { startJob, retryPageStages, RetryStage, enqueuePageRetry, exportDocumentAsUnsloth, cancelAllActiveJobs, pauseJob, resumeJob } from "./pipeline/runner";
+import { getAllCircuitBreakerStates } from "./pipeline/invoke";
 import { ENV } from "./_core/env";
 import { FEATURE_AREAS, PROVIDER_TYPES, PIPELINE_STAGES, SUPABASE_CONNECTION_TYPES, SUPABASE_ROLES, SUPABASE_SYNC_MODES, DOCUMENT_STATUSES, OCR_RESULT_STATUSES, HITL_PRIORITIES, HITL_STATUSES, type LlmProvider } from "../drizzle/schema";
 
@@ -238,17 +239,13 @@ async function probeSingleLocalProvider(p: LlmProvider): Promise<{ ok: boolean; 
   }
 }
 
-async function pingLocalAgents(providers: LlmProvider[]): Promise<{ ok: boolean; latencyMs: number; detail: string }> {
-  if (providers.length === 0) return { ok: false, latencyMs: 0, detail: "No local providers configured" };
-  const results = await Promise.all(providers.map(probeSingleLocalProvider));
-  const ok = results.some(r => r.ok);
-  const latencyMs = Math.max(...results.map(r => r.latencyMs));
-  const good = results.filter(r => r.ok);
-  const bad  = results.filter(r => !r.ok);
-  const detail = ok
-    ? good.map(r => `${r.label} — ${r.latencyMs}ms`).join(" · ")
-    : bad.map(r => r.label).join(" · ");
-  return { ok, latencyMs, detail };
+/** Probe any active provider, routing to the appropriate strategy by type. */
+async function probeProvider(p: LlmProvider): Promise<{ ok: boolean; latencyMs: number; detail: string }> {
+  if (p.providerType === "openrouter") {
+    return pingCloudConduit(p);
+  }
+  const result = await probeSingleLocalProvider(p);
+  return { ok: result.ok, latencyMs: result.latencyMs, detail: result.label };
 }
 
 /**
@@ -313,13 +310,46 @@ export const appRouter = router({
         getAllLlmProviders(),
       ]);
 
-      const localAgents = allProviders.filter(p => p.isActive && LOCAL_PROVIDER_TYPES.has(p.providerType));
-      const orProvider  = allProviders.find(p => p.isActive && p.providerType === "openrouter");
+      // Build circuit breaker state map for all known providers (in-memory).
+      const circuitMap = new Map(getAllCircuitBreakerStates().map(s => [s.providerId, s]));
 
-      const [agentsResult, cloudResult] = await Promise.all([
-        pingLocalAgents(localAgents),
-        pingCloudConduit(orProvider),
-      ]);
+      // Probe each active provider in parallel.
+      const activeProviders = allProviders.filter(p => p.isActive);
+      const probeResults = await Promise.all(activeProviders.map(probeProvider));
+
+      const providers = activeProviders.map((p, i) => {
+        const probe   = probeResults[i];
+        const circuit = circuitMap.get(p.id) ?? { failCount: 0, trippedAt: null, cooldownRemainingMs: 0 };
+        return {
+          id:           p.id,
+          name:         p.name,
+          displayName:  p.displayName ?? p.name,
+          providerType: p.providerType,
+          modelId:      p.modelId ?? null,
+          ok:           probe.ok,
+          latencyMs:    probe.latencyMs,
+          detail:       probe.detail,
+          circuit: {
+            failCount:           circuit.failCount,
+            trippedAt:           circuit.trippedAt,
+            cooldownRemainingMs: circuit.cooldownRemainingMs,
+          },
+        };
+      });
+
+      // Derive aggregated legacy fields from per-provider results for backward compat.
+      const localResults = providers.filter(p => LOCAL_PROVIDER_TYPES.has(p.providerType));
+      const agentsOk     = localResults.some(p => p.ok);
+      const agentsDetail = localResults.length === 0
+        ? "No local providers configured"
+        : agentsOk
+          ? localResults.filter(p => p.ok).map(p => `${p.displayName} — ${p.latencyMs}ms`).join(" · ")
+          : localResults.map(p => p.detail).join(" · ");
+
+      const orResult    = providers.find(p => p.providerType === "openrouter");
+      const cloudResult = orResult
+        ? { ok: orResult.ok, latencyMs: orResult.latencyMs, detail: orResult.detail }
+        : { ok: false, latencyMs: 0, detail: "No cloud provider configured" };
 
       const jobCount = activeJobs.length;
       const scribesDetail = jobCount === 0
@@ -328,9 +358,10 @@ export const appRouter = router({
 
       return {
         database:     dbResult,
-        agents:       agentsResult,
+        agents:       { ok: agentsOk, latencyMs: localResults.reduce((m, p) => Math.max(m, p.latencyMs), 0), detail: agentsDetail },
         scribes:      { ok: jobCount === 0, latencyMs: 0, detail: scribesDetail },
         cloudConduit: cloudResult,
+        providers,
       };
     }),
   }),
@@ -1102,7 +1133,13 @@ export const appRouter = router({
           }
 
           // ── OpenAI (no standalone "openai" type — handled via openai_compatible) ──
-          if (input.providerType === "openai_compatible") {
+          // openai_compatible with a local/LAN baseUrl should fall through to the local path below
+          // (no gpt-/o3-/o4- name filter). Only route to this OpenAI-specific path when the
+          // baseUrl is genuinely api.openai.com or absent (defaults to api.openai.com).
+          const isLocalOpenAiCompatible = input.providerType === "openai_compatible"
+            && (input.baseUrl?.startsWith("http://") || input.baseUrl?.startsWith("https://localhost"));
+
+          if (input.providerType === "openai_compatible" && !isLocalOpenAiCompatible) {
             const host = (input.baseUrl ?? "https://api.openai.com").replace(/\/$/, "");
             const portSuffix = input.port ? `:${input.port}` : "";
             const prefix = (input.apiPrefix ?? "/v1").replace(/\/$/, "");

@@ -18,6 +18,7 @@ import {
   AlertCircle, Pencil, Trash2, Hash, ExternalLink, BookOpen,
   Wrench, Info,
 } from "lucide-react";
+import { getProviderIcon } from "@/lib/providerUtils";
 
 // ─── Phase groupings ──────────────────────────────────────────────────────────
 
@@ -610,10 +611,9 @@ export default function TheAssignments() {
     `${p.displayName || p.name}${p.modelId ? ` — ${p.modelId}` : ""}`;
 
   const providerIcon = (providerType: string) => {
-    if (providerType === "lm_studio" || providerType === "openai_compatible") {
-      return <Cpu className="h-3.5 w-3.5 text-violet-400 flex-shrink-0" />;
-    }
-    return <Cloud className="h-3.5 w-3.5 text-blue-400 flex-shrink-0" />;
+    const Icon = getProviderIcon(providerType);
+    const colorClass = providerType === "openrouter" ? "text-blue-400" : "text-violet-400";
+    return <Icon className={`h-3.5 w-3.5 ${colorClass} flex-shrink-0`} />;
   };
 
   // A stage is "configured" if it has a DB inscription (LLM stages) OR is a non-LLM stage

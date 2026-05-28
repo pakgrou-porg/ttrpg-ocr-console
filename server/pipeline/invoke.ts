@@ -2,6 +2,83 @@ import { getLlmProviderById, getStageInscriptionByStage, getSystemPromptByName, 
 import { decryptSecret } from "../crypto";
 import { fetchWithRetry, PER_ATTEMPT_TIMEOUT_MS } from "../_core/fetch-retry";
 
+// ─── Circuit Breaker ──────────────────────────────────────────────────────────
+// Tracks consecutive full-call failures per provider (in-memory, process lifetime).
+// After CIRCUIT_TRIP_THRESHOLD exhaustion failures the circuit opens; the provider
+// is skipped entirely until the cooldown window elapses (half-open probe is then
+// allowed — success resets the circuit, failure re-trips it immediately).
+
+interface CircuitState {
+  failCount: number;
+  trippedAt: number | null;
+  lastFailedAt: number;
+}
+
+const providerCircuit = new Map<number, CircuitState>();
+
+const CIRCUIT_TRIP_THRESHOLD = 3;
+export const CIRCUIT_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+
+function getCircuit(id: number): CircuitState {
+  let state = providerCircuit.get(id);
+  if (!state) {
+    state = { failCount: 0, trippedAt: null, lastFailedAt: 0 };
+    providerCircuit.set(id, state);
+  }
+  return state;
+}
+
+/** Returns ms remaining in the cooldown window, or 0 if the circuit is closed/absent. */
+function getCircuitCooldownRemaining(id: number): number {
+  const state = providerCircuit.get(id);
+  if (!state?.trippedAt) return 0;
+  return Math.max(0, CIRCUIT_COOLDOWN_MS - (Date.now() - state.trippedAt));
+}
+
+function recordProviderSuccess(id: number): void {
+  const state = providerCircuit.get(id);
+  if (!state) return;
+  const wasTripped = state.trippedAt !== null;
+  state.failCount = 0;
+  state.trippedAt = null;
+  if (wasTripped) {
+    console.log(`[circuit] Provider ${id} recovered — circuit closed.`);
+  }
+}
+
+function recordProviderFailure(id: number): void {
+  const state = getCircuit(id);
+  state.failCount++;
+  state.lastFailedAt = Date.now();
+  if (state.failCount >= CIRCUIT_TRIP_THRESHOLD) {
+    const wasAlreadyTripped = state.trippedAt !== null;
+    state.trippedAt = Date.now();
+    if (!wasAlreadyTripped) {
+      console.warn(`[circuit] Provider ${id} tripped after ${state.failCount} consecutive failures. Cooling down for ${CIRCUIT_COOLDOWN_MS / 1000}s.`);
+    } else {
+      console.warn(`[circuit] Provider ${id} failed again in half-open state — re-tripped.`);
+    }
+  }
+}
+
+export interface CircuitBreakerState {
+  providerId: number;
+  failCount: number;
+  trippedAt: number | null;
+  lastFailedAt: number;
+  cooldownRemainingMs: number;
+}
+
+export function getAllCircuitBreakerStates(): CircuitBreakerState[] {
+  return Array.from(providerCircuit.entries()).map(([providerId, state]) => ({
+    providerId,
+    failCount: state.failCount,
+    trippedAt: state.trippedAt,
+    lastFailedAt: state.lastFailedAt,
+    cooldownRemainingMs: getCircuitCooldownRemaining(providerId),
+  }));
+}
+
 export interface StageContent {
   type: "text";
   text: string;
@@ -347,6 +424,16 @@ export async function invokeStage(
   const providerOrder = buildProviderOrder(inscription);
   const failures: string[] = [];
   for (const candidate of providerOrder) {
+    // Skip providers whose circuit breaker is open (cooling down after repeated failures).
+    const cooldownMs = getCircuitCooldownRemaining(candidate.id);
+    if (cooldownMs > 0) {
+      const remainingSec = Math.ceil(cooldownMs / 1000);
+      const msg = `circuit breaker open — ${remainingSec}s cooldown remaining`;
+      failures.push(`${candidate.role}: ${msg}`);
+      console.warn(`[invoke] ${stage} skipping ${candidate.role} provider ${candidate.id}: ${msg}`);
+      continue;
+    }
+
     const provider = await getLlmProviderById(candidate.id);
     if (!provider) {
       failures.push(`${candidate.role}: provider ${candidate.id} not found`);
@@ -356,6 +443,7 @@ export async function invokeStage(
     try {
       const result = await dispatchToProvider(stage, provider, messages, inscription, options, candidate.withRetry, context);
       options?.validateResult?.(result);
+      recordProviderSuccess(candidate.id);
       if (candidate.role !== "primary") {
         console.log(`[invoke] ${stage} ${candidate.role} provider succeeded (model: ${result.model})`);
       }
@@ -374,6 +462,7 @@ export async function invokeStage(
       return result;
     } catch (err: any) {
       const msg = err?.message ?? String(err);
+      recordProviderFailure(candidate.id);
       failures.push(`${candidate.role}: ${msg.slice(0, 240)}`);
       if (candidate !== providerOrder[providerOrder.length - 1]) {
         console.warn(`[invoke] ${stage} ${candidate.role} provider failed (${msg.slice(0, 120)}), trying next provider.`);
