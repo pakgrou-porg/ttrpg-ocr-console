@@ -319,6 +319,125 @@ const LAYOUT_METADATA_TEMPLATES: Partial<Record<string, Record<string, unknown>>
   mixed:                  { columns: 1, has_table: false, has_image_or_art: false, has_list: false },
 };
 
+/** Structured form editor for the "body_text" layout type — replaces raw JSON editing. */
+function BodyTextLayoutForm({ corrected, onCorrect, onSave, isSaving }: {
+  corrected: Record<string, unknown>;
+  onCorrect: (v: string) => void;
+  onSave: () => void;
+  isSaving: boolean;
+}) {
+  const columns  = typeof corrected.columns        === "number"  ? corrected.columns        : 2;
+  const hasTable = corrected.has_table        != null ? Boolean(corrected.has_table)        : false;
+  const hasArt   = corrected.has_image_or_art != null ? Boolean(corrected.has_image_or_art) : false;
+  const hasList  = corrected.has_list         != null ? Boolean(corrected.has_list)         : false;
+
+  // Seed the correction JSON with body_text defaults the first time the form appears
+  useEffect(() => {
+    if (!corrected.layout_type) {
+      onCorrect(JSON.stringify(
+        { layout_type: "body_text", columns: 2, has_table: false, has_image_or_art: false, has_list: false },
+        null, 2,
+      ));
+    }
+  // One-time seed on mount only
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Write the full JSON object on every field change so the correction string stays complete
+  const push = (patch: Record<string, unknown>) => {
+    onCorrect(JSON.stringify({
+      layout_type: "body_text",
+      columns,
+      has_table: hasTable,
+      has_image_or_art: hasArt,
+      has_list: hasList,
+      ...patch,
+    }, null, 2));
+  };
+
+  const toggles: Array<{ key: string; label: string; value: boolean }> = [
+    { key: "has_table",        label: "Has Table",       value: hasTable },
+    { key: "has_image_or_art", label: "Has Image / Art", value: hasArt   },
+    { key: "has_list",         label: "Has List",        value: hasList  },
+  ];
+
+  return (
+    <div className="mt-3 rounded-lg border border-border/40 bg-muted/10 divide-y divide-border/30 overflow-hidden">
+      {/* Layout Style — read-only fixed label */}
+      <div className="flex items-center gap-3 px-3 py-2.5">
+        <span className="text-xs text-muted-foreground w-36 flex-shrink-0">Layout Style</span>
+        <span className="text-xs font-medium px-2.5 py-0.5 rounded-full bg-primary/10 border border-primary/20 text-primary/80">
+          Body Text
+        </span>
+      </div>
+
+      {/* Columns — number with ± stepper */}
+      <div className="flex items-center gap-3 px-3 py-2.5">
+        <span className="text-xs text-muted-foreground w-36 flex-shrink-0">Columns</span>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => push({ columns: Math.max(1, columns - 1) })}
+            disabled={columns <= 1}
+            className="w-6 h-6 rounded border border-border/50 text-sm leading-none text-muted-foreground hover:text-foreground hover:border-border disabled:opacity-30 transition-colors"
+          >−</button>
+          <Input
+            type="number"
+            min={1}
+            max={6}
+            value={columns}
+            onChange={e => {
+              const v = parseInt(e.target.value);
+              if (!Number.isNaN(v)) push({ columns: Math.max(1, Math.min(6, v)) });
+            }}
+            className="w-12 h-7 text-center text-sm bg-background/50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+          />
+          <button
+            type="button"
+            onClick={() => push({ columns: Math.min(6, columns + 1) })}
+            disabled={columns >= 6}
+            className="w-6 h-6 rounded border border-border/50 text-sm leading-none text-muted-foreground hover:text-foreground hover:border-border disabled:opacity-30 transition-colors"
+          >+</button>
+        </div>
+      </div>
+
+      {/* Boolean toggles */}
+      {toggles.map(({ key, label, value }) => (
+        <div key={key} className="flex items-center gap-3 px-3 py-2.5">
+          <span className="text-xs text-muted-foreground w-36 flex-shrink-0">{label}</span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={value}
+            onClick={() => push({ [key]: !value })}
+            className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ${
+              value ? "bg-primary" : "bg-input"
+            }`}
+          >
+            <span className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow-sm ring-0 transition-transform duration-200 ${
+              value ? "translate-x-4" : "translate-x-0"
+            }`} />
+          </button>
+          <span className="text-xs text-muted-foreground/60">{value ? "Yes" : "No"}</span>
+        </div>
+      ))}
+
+      {/* Save row */}
+      <div className="flex justify-end px-3 py-2 bg-muted/5">
+        <button
+          type="button"
+          onClick={onSave}
+          disabled={isSaving}
+          className="flex items-center gap-1.5 text-xs px-3 py-1 rounded border border-border/40 text-muted-foreground hover:text-foreground hover:border-border transition-colors disabled:opacity-50"
+        >
+          {isSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+          Save Layout
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function LayoutTab({ item, correction, onCorrect, onSave, isSaving }: TabProps) {
   const sd = item.ocr?.structuredData as any;
   const corrected = parseLayoutCorrection(correction);
@@ -351,12 +470,24 @@ function LayoutTab({ item, correction, onCorrect, onSave, isSaving }: TabProps) 
           </SelectContent>
         </Select>
       </div>
-      <div>
-        <p className="text-xs text-muted-foreground mb-1">Layout metadata</p>
-        <JsonViewer value={layoutMeta ?? null} emptyTemplate={EMPTY_TEMPLATES.layout} onCopyToEdit={onCorrect} />
-      </div>
-      <CorrectionField label="Layout correction (JSON)"
-        value={correction} onChange={onCorrect} onSave={onSave} isSaving={isSaving} />
+
+      {layoutType === "body_text" ? (
+        <BodyTextLayoutForm
+          corrected={corrected}
+          onCorrect={onCorrect}
+          onSave={onSave}
+          isSaving={isSaving}
+        />
+      ) : (
+        <>
+          <div>
+            <p className="text-xs text-muted-foreground mb-1">Layout metadata</p>
+            <JsonViewer value={layoutMeta ?? null} emptyTemplate={EMPTY_TEMPLATES.layout} onCopyToEdit={onCorrect} />
+          </div>
+          <CorrectionField label="Layout correction (JSON)"
+            value={correction} onChange={onCorrect} onSave={onSave} isSaving={isSaving} />
+        </>
+      )}
     </div>
   );
 }
