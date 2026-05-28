@@ -1,57 +1,7 @@
-import { useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  CheckCircle2, ClipboardCheck, Loader2, Activity, Layers, RefreshCw,
-  Filter, ExternalLink,
-} from "lucide-react";
+import { Layers, Activity, RefreshCw, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-
-// ─── Types ──────────────────────────────────────────────────────────────────
-
-type HitlStatus = "queued" | "in_progress" | "resolved" | "skipped" | "escalated";
-type HitlPriority = "low" | "medium" | "high" | "critical";
-
-// ─── Helper Badges ──────────────────────────────────────────────────────────
-
-function PriorityBadge({ priority }: { priority: string }) {
-  const styles: Record<string, string> = {
-    critical: "bg-red-500/10 text-red-500 border-red-500/30",
-    high: "bg-orange-500/10 text-orange-500 border-orange-500/30",
-    medium: "bg-amber-500/10 text-amber-500 border-amber-500/30",
-    low: "bg-blue-500/10 text-blue-500 border-blue-500/30",
-  };
-  return (
-    <Badge variant="outline" className={styles[priority] ?? "bg-muted text-muted-foreground"}>
-      {priority}
-    </Badge>
-  );
-}
-
-function HitlStatusBadge({ status }: { status: string }) {
-  const styles: Record<string, string> = {
-    queued: "bg-muted text-muted-foreground",
-    in_progress: "bg-blue-500/10 text-blue-500 border-blue-500/30",
-    resolved: "bg-green-500/10 text-green-500 border-green-500/30",
-    skipped: "bg-slate-500/10 text-slate-500 border-slate-500/30",
-    escalated: "bg-red-500/10 text-red-500 border-red-500/30",
-  };
-  return (
-    <Badge variant="outline" className={styles[status] ?? "bg-muted text-muted-foreground"}>
-      {status.replace(/_/g, " ")}
-    </Badge>
-  );
-}
 
 // ─── Pipeline Funnel ────────────────────────────────────────────────────────
 
@@ -75,7 +25,11 @@ interface FunnelStage {
   failCount?: number;
 }
 
-function PipelineFunnel({ pStats }: { pStats: PipelineStatsData }) {
+function PipelineFunnel({ pStats, onRescan, rescanPending }: {
+  pStats: PipelineStatsData;
+  onRescan: () => void;
+  rescanPending: boolean;
+}) {
   const totalPages = pStats?.pages.total ?? 0;
   const totalDocs  = pStats?.docs?.total ?? 0;
   const pct = (n: number, d: number) => (d > 0 ? Math.round((n / d) * 100) : 0);
@@ -116,23 +70,25 @@ function PipelineFunnel({ pStats }: { pStats: PipelineStatsData }) {
     },
   ];
 
-  const ocrDone    = pStats?.pages.ocrComplete ?? 0;
-  const highConf   = pStats?.pages.highConf ?? 0;
-  const medConf    = pStats?.pages.medConf ?? 0;
-  const lowConf    = pStats?.pages.lowConf ?? 0;
+  const ocrDone  = pStats?.pages.ocrComplete ?? 0;
+  const highConf = pStats?.pages.highConf ?? 0;
+  const medConf  = pStats?.pages.medConf ?? 0;
+  const lowConf  = pStats?.pages.lowConf ?? 0;
+
+  const regionsMissing = (pStats?.pages.withRegions ?? 0) < (pStats?.pages.ocrComplete ?? 0);
 
   return (
-    <Card className="flex-1 bg-card/50 backdrop-blur-sm border-border/50 overflow-hidden flex flex-col">
-      <CardHeader className="pb-2 pt-3 px-4 border-b border-border/50 flex-shrink-0">
+    <Card className="bg-card/50 backdrop-blur-sm border-border/50">
+      <CardHeader className="pb-2 pt-3 px-4 border-b border-border/50">
         <CardTitle className="text-sm flex items-center gap-2">
           <Layers className="w-4 h-4 text-primary" />
           Pipeline Progress
         </CardTitle>
       </CardHeader>
-      <CardContent className="p-4 flex-1 overflow-auto">
+      <CardContent className="p-6">
         <div className="space-y-5">
           {/* Column headers */}
-          <div className="grid grid-cols-[200px_1fr_96px_96px] gap-3 text-[10px] text-muted-foreground/60 uppercase tracking-wide pb-1 border-b border-border/30">
+          <div className="grid grid-cols-[200px_1fr_120px_120px] gap-4 text-[10px] text-muted-foreground/60 uppercase tracking-wide pb-1 border-b border-border/30">
             <span>Stage</span>
             <span>Pages</span>
             <span className="text-right">Count / %</span>
@@ -145,19 +101,29 @@ function PipelineFunnel({ pStats }: { pStats: PipelineStatsData }) {
             const docPct  = stage.docs !== null ? pct(stage.docs, totalDocs) : null;
 
             return (
-              <div key={stage.name} className="grid grid-cols-[200px_1fr_96px_96px] gap-3 items-center">
-                {/* Stage name + optional fail pill */}
+              <div key={stage.name} className="grid grid-cols-[200px_1fr_120px_120px] gap-4 items-center">
+                {/* Stage name + optional fail pill + rescan */}
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-xs font-medium truncate">{stage.name}</span>
+                  <span className="text-sm font-medium truncate">{stage.name}</span>
                   {(stage.failCount ?? 0) > 0 && (
                     <span className="text-[10px] text-red-400 bg-red-500/10 border border-red-500/20 rounded px-1.5 py-0.5 flex-shrink-0">
                       {stage.failCount} failed
                     </span>
                   )}
+                  {stage.name === "Region Detection" && regionsMissing && (
+                    <button
+                      className="text-[10px] text-amber-400 hover:text-amber-300 underline underline-offset-2 disabled:opacity-50 flex-shrink-0"
+                      disabled={rescanPending}
+                      onClick={onRescan}
+                      title="Re-run bbox detection on pages missing regions"
+                    >
+                      {rescanPending ? <Loader2 className="w-2.5 h-2.5 inline animate-spin" /> : "rescan"}
+                    </button>
+                  )}
                 </div>
 
                 {/* Progress bar */}
-                <div className="h-2.5 bg-muted/20 rounded-full overflow-hidden">
+                <div className="h-3 bg-muted/20 rounded-full overflow-hidden">
                   <div
                     className={`h-full ${stage.barColor} rounded-full transition-all duration-700`}
                     style={{ width: `${pagePct}%` }}
@@ -167,7 +133,7 @@ function PipelineFunnel({ pStats }: { pStats: PipelineStatsData }) {
                 {/* Pages */}
                 <div className="text-right leading-tight">
                   <span className="text-sm font-bold tabular-nums">{stage.pages.toLocaleString()}</span>
-                  <span className="text-[10px] text-muted-foreground ml-1">({pagePct}%)</span>
+                  <span className="text-xs text-muted-foreground ml-1">({pagePct}%)</span>
                 </div>
 
                 {/* Docs */}
@@ -175,50 +141,33 @@ function PipelineFunnel({ pStats }: { pStats: PipelineStatsData }) {
                   {docPct !== null ? (
                     <>
                       <span className="text-sm font-bold tabular-nums">{(stage.docs ?? 0).toLocaleString()}</span>
-                      <span className="text-[10px] text-muted-foreground ml-1">({docPct}%)</span>
+                      <span className="text-xs text-muted-foreground ml-1">({docPct}%)</span>
                     </>
                   ) : (
-                    <span className="text-xs text-muted-foreground/40">—</span>
+                    <span className="text-sm text-muted-foreground/40">—</span>
                   )}
                 </div>
               </div>
             );
           })}
 
-          {/* OCR Confidence Distribution (only when pages have completed OCR) */}
+          {/* OCR Confidence Distribution */}
           {ocrDone > 0 && (
-            <div className="mt-2 pt-4 border-t border-border/30 space-y-2.5">
+            <div className="pt-4 border-t border-border/30 space-y-3">
               <p className="text-[10px] text-muted-foreground/60 uppercase tracking-wide">
                 OCR Confidence Distribution ({ocrDone.toLocaleString()} pages)
               </p>
               <div className="h-3 bg-muted/20 rounded-full overflow-hidden flex">
-                <div
-                  className="bg-green-500 h-full transition-all duration-700"
-                  style={{ width: `${pct(highConf, ocrDone)}%` }}
-                />
-                <div
-                  className="bg-amber-500 h-full transition-all duration-700"
-                  style={{ width: `${pct(medConf, ocrDone)}%` }}
-                />
-                <div
-                  className="bg-red-500 h-full transition-all duration-700"
-                  style={{ width: `${pct(lowConf, ocrDone)}%` }}
-                />
+                <div className="bg-green-500 h-full transition-all duration-700" style={{ width: `${pct(highConf, ocrDone)}%` }} />
+                <div className="bg-amber-500 h-full transition-all duration-700" style={{ width: `${pct(medConf, ocrDone)}%` }} />
+                <div className="bg-red-500 h-full transition-all duration-700"   style={{ width: `${pct(lowConf, ocrDone)}%` }} />
               </div>
-              <div className="flex flex-wrap gap-4 text-xs">
-                <span className="text-green-400">
-                  High ≥80: {highConf.toLocaleString()} ({pct(highConf, ocrDone)}%)
-                </span>
-                <span className="text-amber-400">
-                  Med 50–79: {medConf.toLocaleString()} ({pct(medConf, ocrDone)}%)
-                </span>
-                <span className="text-red-400">
-                  Low &lt;50: {lowConf.toLocaleString()} ({pct(lowConf, ocrDone)}%)
-                </span>
+              <div className="flex flex-wrap gap-6 text-xs">
+                <span className="text-green-400">High ≥80: {highConf.toLocaleString()} ({pct(highConf, ocrDone)}%)</span>
+                <span className="text-amber-400">Med 50–79: {medConf.toLocaleString()} ({pct(medConf, ocrDone)}%)</span>
+                <span className="text-red-400">Low &lt;50: {lowConf.toLocaleString()} ({pct(lowConf, ocrDone)}%)</span>
                 {(pStats?.pages.errorState ?? 0) > 0 && (
-                  <span className="text-red-500">
-                    Errors: {pStats!.pages.errorState}
-                  </span>
+                  <span className="text-red-500">Errors: {pStats!.pages.errorState}</span>
                 )}
               </div>
             </div>
@@ -226,25 +175,21 @@ function PipelineFunnel({ pStats }: { pStats: PipelineStatsData }) {
 
           {/* HITL summary */}
           {(pStats?.hitl.total ?? 0) > 0 && (
-            <div className="mt-2 pt-4 border-t border-border/30 space-y-2.5">
+            <div className="pt-4 border-t border-border/30 space-y-3">
               <p className="text-[10px] text-muted-foreground/60 uppercase tracking-wide">HITL Queue</p>
-              <div className="flex flex-wrap gap-4 text-xs">
-                <span className="text-muted-foreground">
-                  Queued: <span className="font-bold text-foreground">{pStats?.hitl.queued}</span>
-                </span>
-                <span className="text-blue-400">
-                  In Review: <span className="font-bold">{pStats?.hitl.inProgress}</span>
-                </span>
-                <span className="text-green-400">
-                  Resolved: <span className="font-bold">{pStats?.hitl.resolved}</span>
-                </span>
-                <span className="text-muted-foreground">
-                  Skipped: <span className="font-bold text-foreground">{pStats?.hitl.skipped}</span>
-                </span>
+              <div className="flex flex-wrap gap-6 text-xs">
+                <span className="text-muted-foreground">Queued: <span className="font-bold text-foreground">{pStats?.hitl.queued}</span></span>
+                <span className="text-blue-400">In Review: <span className="font-bold">{pStats?.hitl.inProgress}</span></span>
+                <span className="text-green-400">Resolved: <span className="font-bold">{pStats?.hitl.resolved}</span></span>
+                <span className="text-muted-foreground">Skipped: <span className="font-bold text-foreground">{pStats?.hitl.skipped}</span></span>
                 {(pStats?.pages.savedCorrections ?? 0) > 0 && (
-                  <span className="text-green-400">
-                    Corrections Saved: <span className="font-bold">{pStats!.pages.savedCorrections}</span>
-                  </span>
+                  <span className="text-green-400">Corrections Saved: <span className="font-bold">{pStats!.pages.savedCorrections}</span></span>
+                )}
+                {(pStats?.retry.pendingQueue ?? 0) > 0 && (
+                  <span className="text-amber-400">Rescan Queued: <span className="font-bold">{pStats!.retry.pendingQueue}</span></span>
+                )}
+                {(pStats?.retry.running ?? 0) > 0 && (
+                  <span className="text-violet-400">Rescanning: <span className="font-bold">{pStats!.retry.running}</span></span>
                 )}
               </div>
             </div>
@@ -267,25 +212,15 @@ function PipelineFunnel({ pStats }: { pStats: PipelineStatsData }) {
 // ─── Main Component ─────────────────────────────────────────────────────────
 
 export default function ArchivistsDesk() {
-  const [statusFilter, setStatusFilter] = useState<HitlStatus | "all">("all");
-  const [priorityFilter, setPriorityFilter] = useState<HitlPriority | "all">("all");
-
   const utils = trpc.useUtils();
 
-  const { data: items, isLoading: itemsLoading } = trpc.hitl.list.useQuery({
-    status: statusFilter !== "all" ? statusFilter : undefined,
-    priority: priorityFilter !== "all" ? priorityFilter : undefined,
-    limit: 200,
-  });
-
-  const { data: stats } = trpc.hitl.stats.useQuery();
   const { data: pStats } = trpc.pipeline.stats.useQuery(undefined, { refetchInterval: 15000 });
   const { data: jStats } = trpc.jobs.stats.useQuery(undefined, { refetchInterval: 15000 });
 
   const bboxRescanMutation = trpc.pipeline.enqueueBboxRescan.useMutation({
     onSuccess: (data) => {
       toast.success(`Enqueued ${data.enqueued} page${data.enqueued !== 1 ? "s" : ""} for region detection.`);
-      utils.hitl.stats.invalidate();
+      utils.pipeline.stats.invalidate();
     },
     onError: (err) => toast.error(`Rescan failed: ${err.message}`),
   });
@@ -295,7 +230,7 @@ export default function ArchivistsDesk() {
       {/* Header */}
       <div>
         <h1 className="text-4xl font-bold tracking-tight mb-2 flex items-center gap-3">
-          <ClipboardCheck className="w-10 h-10 text-primary" />
+          <Activity className="w-10 h-10 text-primary" />
           The Archivist's Desk
         </h1>
         <p className="text-lg text-muted-foreground max-w-3xl">
@@ -303,7 +238,7 @@ export default function ArchivistsDesk() {
         </p>
       </div>
 
-      {/* Pipeline Metrics Dashboard */}
+      {/* Metric Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
         {/* Jobs */}
         <Card className="bg-card/50 backdrop-blur-sm border-border/50">
@@ -359,19 +294,7 @@ export default function ArchivistsDesk() {
               </span>
             </div>
             <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 items-center">
-              <div className="flex items-center gap-1">
-                <span className="text-xs text-muted-foreground">Regions</span>
-                {(pStats?.pages.withRegions ?? 0) < (pStats?.pages.ocrComplete ?? 0) && (
-                  <button
-                    className="text-[10px] text-amber-400 hover:text-amber-300 underline underline-offset-2 disabled:opacity-50"
-                    disabled={bboxRescanMutation.isPending}
-                    onClick={() => bboxRescanMutation.mutate()}
-                    title="Re-run bbox detection on pages missing regions"
-                  >
-                    {bboxRescanMutation.isPending ? <Loader2 className="w-2.5 h-2.5 inline animate-spin" /> : "rescan"}
-                  </button>
-                )}
-              </div>
+              <span className="text-xs text-muted-foreground">Regions</span>
               <span className="text-sm font-bold text-green-400 text-right tabular-nums">{pStats?.pages.withRegions ?? 0}</span>
               <span className={`text-sm font-bold text-right tabular-nums ${(pStats?.pages.bboxFailed ?? 0) > 0 ? "text-red-400" : "text-muted-foreground/40"}`}>
                 {(pStats?.pages.bboxFailed ?? 0) > 0 ? pStats!.pages.bboxFailed : "—"}
@@ -462,130 +385,12 @@ export default function ArchivistsDesk() {
         </Card>
       </div>
 
-      {/* Stats Bar */}
-      {stats && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-          <StatCard label="Total" value={stats.total} />
-          <StatCard label="Queued" value={stats.queued} color="text-muted-foreground" />
-          <StatCard label="In Progress" value={stats.inProgress} color="text-blue-500" />
-          <StatCard label="Resolved" value={stats.resolved} color="text-green-500" />
-          <StatCard label="Critical" value={stats.byCritical} color="text-red-500" />
-          <StatCard label="High Priority" value={stats.byHigh} color="text-orange-500" />
-        </div>
-      )}
-
-      {/* Filters */}
-      <div className="flex items-center gap-3 flex-wrap">
-        <div className="flex items-center gap-2">
-          <Filter className="w-4 h-4 text-muted-foreground" />
-          <span className="text-sm text-muted-foreground">Filters:</span>
-        </div>
-        <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as any)}>
-          <SelectTrigger className="w-40 h-9">
-            <SelectValue placeholder="Status" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Statuses</SelectItem>
-            <SelectItem value="queued">Queued</SelectItem>
-            <SelectItem value="in_progress">In Progress</SelectItem>
-            <SelectItem value="resolved">Resolved</SelectItem>
-            <SelectItem value="skipped">Skipped</SelectItem>
-            <SelectItem value="escalated">Escalated</SelectItem>
-          </SelectContent>
-        </Select>
-        <Select value={priorityFilter} onValueChange={(v) => setPriorityFilter(v as any)}>
-          <SelectTrigger className="w-40 h-9">
-            <SelectValue placeholder="Priority" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Priorities</SelectItem>
-            <SelectItem value="critical">Critical</SelectItem>
-            <SelectItem value="high">High</SelectItem>
-            <SelectItem value="medium">Medium</SelectItem>
-            <SelectItem value="low">Low</SelectItem>
-          </SelectContent>
-        </Select>
-        <span className="text-xs text-muted-foreground ml-auto">
-          {items?.length ?? 0} items
-        </span>
-      </div>
-
-      {/* Main Content: Queue List + Pipeline Funnel */}
-      <div className="flex gap-4 h-[calc(100vh-380px)]">
-        {/* Queue List */}
-        <Card className="w-80 flex-shrink-0 bg-card/50 backdrop-blur-sm border-border/50 flex flex-col">
-          <CardHeader className="pb-2 pt-3 px-3 flex-shrink-0 flex-row items-center justify-between">
-            <span className="text-sm font-semibold">Review Queue</span>
-            <a
-              href="/inner-sanctum/trials-of-truth"
-              className="flex items-center gap-1 text-xs text-primary hover:text-primary/80 transition-colors"
-            >
-              Open Console
-              <ExternalLink className="w-3 h-3" />
-            </a>
-          </CardHeader>
-          <CardContent className="px-2 pb-2 flex-1 overflow-hidden">
-            <ScrollArea className="h-full">
-              {itemsLoading ? (
-                <div className="flex items-center justify-center py-8">
-                  <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
-                </div>
-              ) : !items || items.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground">
-                  <CheckCircle2 className="w-8 h-8 mx-auto mb-2 opacity-40" />
-                  <p className="text-sm">No items in the queue.</p>
-                  <p className="text-xs opacity-60 mt-1">
-                    {statusFilter !== "all" || priorityFilter !== "all"
-                      ? "Try adjusting your filters."
-                      : "Pages will appear here when flagged by the OCR pipeline."}
-                  </p>
-                </div>
-              ) : (
-                <div className="space-y-1">
-                  {items.map((item) => (
-                    <div
-                      key={item.id}
-                      className="w-full text-left p-2.5 rounded-lg border bg-card/50 border-border/30"
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0 flex-1">
-                          <p className="text-xs font-medium truncate">{item.documentTitle}</p>
-                          <p className="text-xs text-muted-foreground">
-                            Page {item.page?.pageNumber ?? "?"}
-                          </p>
-                          <p className="text-xs text-muted-foreground/70 truncate mt-0.5">
-                            {item.reason}
-                          </p>
-                        </div>
-                        <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                          <PriorityBadge priority={item.priority} />
-                          <HitlStatusBadge status={item.status} />
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </ScrollArea>
-          </CardContent>
-        </Card>
-
-        {/* Pipeline Funnel Visualization */}
-        <PipelineFunnel pStats={pStats as PipelineStatsData} />
-      </div>
+      {/* Pipeline Funnel — full width */}
+      <PipelineFunnel
+        pStats={pStats as PipelineStatsData}
+        onRescan={() => bboxRescanMutation.mutate()}
+        rescanPending={bboxRescanMutation.isPending}
+      />
     </div>
-  );
-}
-
-// ─── Stat Card ──────────────────────────────────────────────────────────────
-
-function StatCard({ label, value, color }: { label: string; value: number; color?: string }) {
-  return (
-    <Card className="bg-card/50 backdrop-blur-sm border-border/50">
-      <CardContent className="p-3 text-center">
-        <p className={`text-2xl font-bold ${color ?? "text-foreground"}`}>{value}</p>
-        <p className="text-xs text-muted-foreground">{label}</p>
-      </CardContent>
-    </Card>
   );
 }
