@@ -1445,12 +1445,13 @@ export async function getPipelineStats() {
     pages: { total: 0, withLayout: 0, withRegions: 0, ocrComplete: 0, highConf: 0, medConf: 0, lowConf: 0, noScore: 0, errorState: 0, savedCorrections: 0, processed: 0, layoutFailed: 0, bboxFailed: 0, ocrFailed: 0 },
     hitl:  { queued: 0, inProgress: 0, resolved: 0, skipped: 0, total: 0 },
     retry: { pendingQueue: 0, running: 0, failed: 0, succeeded: 0 },
+    docs:  { total: 0, layoutDone: 0, regionsDone: 0, ocrDone: 0 },
   };
   if (!db) return zero;
 
   const n = (v: unknown) => Number(v ?? 0);
 
-  const [pageRow, hitlRow, retryRow, ocrRow] = await Promise.all([
+  const [pageRow, hitlRow, retryRow, ocrRow, docsRow] = await Promise.all([
     db.select({
       total:            sql<number>`COUNT(*)`,
       withLayout:       sql<number>`COUNT(*) FILTER (WHERE ${documentPages.layoutType} IS NOT NULL)`,
@@ -1487,12 +1488,31 @@ export async function getPipelineStats() {
       errorState:       sql<number>`COUNT(*) FILTER (WHERE ${ocrResults.status} = 'failed')`,
       savedCorrections: sql<number>`COUNT(*) FILTER (WHERE ${ocrResults.correctedText} IS NOT NULL OR ${ocrResults.correctedStructuredData} IS NOT NULL)`,
     }).from(ocrResults),
+
+    db.execute(sql`
+      SELECT
+        COUNT(*)::int                                                                     AS total,
+        COUNT(*) FILTER (WHERE total_pages > 0 AND layout_pages  = total_pages)::int     AS layout_done,
+        COUNT(*) FILTER (WHERE total_pages > 0 AND regions_pages = total_pages)::int     AS regions_done,
+        COUNT(*) FILTER (WHERE total_pages > 0 AND ocr_pages     = total_pages)::int     AS ocr_done
+      FROM (
+        SELECT
+          document_id,
+          COUNT(*)                                             AS total_pages,
+          COUNT(*) FILTER (WHERE layout_type    IS NOT NULL)  AS layout_pages,
+          COUNT(*) FILTER (WHERE content_regions IS NOT NULL) AS regions_pages,
+          COUNT(*) FILTER (WHERE ocr_completed  = TRUE)       AS ocr_pages
+        FROM document_pages
+        GROUP BY document_id
+      ) sub
+    `),
   ]);
 
   const p = pageRow[0]!;
   const h = hitlRow[0]!;
   const r = retryRow[0]!;
   const o = ocrRow[0]!;
+  const d = (docsRow as unknown as Array<Record<string, unknown>>)[0] ?? {};
 
   return {
     pages: {
@@ -1523,6 +1543,12 @@ export async function getPipelineStats() {
       running:      n(r.running),
       failed:       n(r.failed),
       succeeded:    n(r.succeeded),
+    },
+    docs: {
+      total:       n(d.total),
+      layoutDone:  n(d.layout_done),
+      regionsDone: n(d.regions_done),
+      ocrDone:     n(d.ocr_done),
     },
   };
 }
