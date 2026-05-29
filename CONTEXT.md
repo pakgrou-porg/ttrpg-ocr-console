@@ -1,179 +1,204 @@
-# TTRPG OCR Console — Project Context
+# TTRPG OCR Console — Project Context Reference
 
-> **Read this file first.** Every model session working on this project should load this file before touching any other file. It is the cross-cutting vocabulary that prevents type mismatches, duplicate work, and incorrect assumptions.
+> **Read this file first.** Every model session working on this project should read CONTEXT.md before
+> touching any other file. It is the single source of truth for vocabulary, architecture, and
+> cross-cutting conventions. Update it whenever a table, router, page, env var, or known issue changes.
 >
-> **Maintenance rule:** Update this file whenever a new table is added, a router namespace is added or renamed, a new environment variable is introduced, a known issue is resolved, or the pipeline stage list changes.
+> **Current version: v0.2.21** (updated 2026-05-29)
 
 ---
 
-## 1. Domain Vocabulary
+## 1. Domain Vocabulary (UI Name → Technical Concept)
 
-The project uses deliberate thematic names for every UI section. Code, comments, and communication must use these names consistently.
+The application uses evocative fantasy names for every page and concept. Using the wrong name in code,
+comments, or communication causes confusion. This table is the canonical mapping.
 
-| UI Name | Technical Concept | Primary Route |
+| UI / Route Name | Technical Concept | Route |
 |---|---|---|
-| Enter the Arkanum | Document library browser (read-only) | `/enter-arkanum` |
-| Listen to Ramblings | Advanced search / RAG query interface | `/listen-ramblings` |
-| Oversee the Scribes | Job monitor (`ingestion_jobs`, `page_processing_attempts`) | `/oversee-scribes` |
-| Archivist's Desk | HITL review queue (`hitl_queue`) | `/archivists-desk` |
-| Tome of Knowledge | Game system registry (`game_systems`) | `/tome-knowledge` |
-| Incantations & Runes | System prompt template management (`prompts`) | `/incantations-runes` |
-| Arcane Mechanisms | Service config + health dashboard | `/arcane-mechanisms` |
-| Summoning Rituals | Document upload / ingest | `/summoning-rituals` |
-| The Artificers | LLM provider management (`llm_providers`) | `/the-artificers` |
-| The Assignments | Stage-to-provider mapping (`stage_inscriptions`) | `/the-assignments` |
-| The Vault Nexus | Supabase connection registry (`supabase_instances`) | `/the-vault-nexus` |
-| The Conclave | Admin panel (users, invitations, roles) | `/the-conclave` |
-| Personal Sanctum | User profile + prompt templates | `/personal-sanctum` |
-| Trials of Truth | Per-stage retry + fine-tuning export | `/trials-of-truth` |
-| The Chronicles | Prompt version history + diff view | `/the-chronicles` |
-| Divination & Omens | Telemetry / analytics | `/divination-omens` |
+| **Enter the Arkanum** | Document library browser — read-only shelf view | `/enter-arkanum` |
+| **Listen to Ramblings** | Advanced search / peruse OCR data | `/listen-ramblings` |
+| **Tome of Knowledge** | Game system registry (`game_systems` table) | `/tome-knowledge` |
+| **Divination Omens** | Analytics dashboard (charts, stats) | `/divination-omens` |
+| **Archivist's Desk** | HITL review queue + pipeline metrics dashboard | `/inner-sanctum/archivists-desk` |
+| **Oversee the Scribes** | Job monitor + page browser | `/inner-sanctum/oversee-scribes` |
+| **Arcane Mechanisms** | Service health + system config | `/inner-sanctum/arcane-mechanisms` |
+| **Summoning Rituals** | Document upload / ingest | `/inner-sanctum/summoning-rituals` |
+| **Incantations & Runes** | System prompt management + pipeline output schemas | `/inner-sanctum/incantations-runes` |
+| **Trials of Truth** | HITL retry / re-run pipeline stages | `/inner-sanctum/trials-of-truth` |
+| **The Scrivener's Lens** | OCR text quality inspector (native similarity, normalised text) | `/inner-sanctum/scriveners-lens` |
+| **The Artificers** | LLM provider management (`llm_providers`) | `/inner-sanctum/the-artificers` |
+| **The Assignments** | Stage-to-provider mapping (`stage_inscriptions`) | `/inner-sanctum/the-assignments` |
+| **The Vault Nexus** | Supabase connection registry (`supabase_instances`) | `/inner-sanctum/vault-nexus` |
+| **The Chronicles** | Fine-tuning / Unsloth export + synthetic data | `/inner-sanctum/the-chronicles` |
+| **The Conclave** | User management + invitations (admin only) | `/inner-sanctum/the-conclave` |
+| **Personal Sanctum** | User profile / settings | `/personal-sanctum` |
+
+**Naming rules:**
+- "Inscriptions" and "stage inscriptions" = the `stage_inscriptions` table (model-to-stage assignments).
+  The alias `modelAssignments` exists in schema.ts but `stageInscriptions` is canonical.
+- "Vault Nexus" = the Supabase instance registry, not the Supabase database itself.
+- "Scribes" = background pipeline workers / jobs, not human reviewers.
+- "Archivist" = human HITL reviewer.
+- "Reviewer" = a user role (`role = 'reviewer'`) with access to HITL pages but not admin pages.
 
 ---
 
-## 2. Database Schema
+## 2. Database Schema (PostgreSQL via Supabase)
+
+**Engine:** PostgreSQL 15 with `pgvector` extension enabled.
+**ORM:** Drizzle ORM (`drizzle-orm/postgres-js`).
+**Migration runner:** `node migrate.mjs` (runs on container startup; uses `drizzle-orm/postgres-js/migrator`).
+**Migration files:** `drizzle/0000_initial_postgres.sql` through `drizzle/0015_hitl_retry_before_snapshot.sql`.
 
 ### Tables
 
-| Table | Purpose | Key Fields |
+| Table | Key Fields | Notes |
 |---|---|---|
-| `users` | Auth, roles, owner bootstrap | `openId`, `role` (`admin`\|`user`), `email`, `name` |
-| `documents` | Top-level TTRPG document record | `filename`, `documentStatus`, `gameSystem`, `ownerUserId`, `visibility` |
-| `document_pages` | One row per PDF page | `pageNumber`, `rawPngUrl`, `preprocessedPngUrl`, `phash`, `wasPreprocessed`, `preprocessingApplied`, `layoutType`, `contentRegions` |
-| `ocr_results` | OCR output per page | `structuredData`, `rawText`, `markdownText`, `confidence`, `pass1Model`, `correctedText`, `correctedStructuredData` |
-| `page_processing_attempts` | Per-stage audit log | `stage`, `status`, `modelUsed`, `latencyMs`, `errorMessage`, `responseTokens` |
-| `hitl_queue` | Human review queue | `pageId`, `status`, `priority`, `reason`, `flagCategory`, `resolvedBy` |
-| `ingestion_jobs` | Top-level job tracker | `status`, `totalPages`, `processedPages`, `currentPhase`, `errorMessage` |
-| `llm_providers` | LLM provider credentials | `name`, `type`, `baseUrl`, `encryptedApiKey`, `modelId`, `isActive` |
-| `stage_inscriptions` | Stage → provider mapping | `stage`, `primaryProviderId`, `fallbackProviderId`, `systemPrompt`, `temperature`, `maxTokens`, `llmSettings` |
-| `supabase_instances` | Supabase connection registry | `connectionType`, `role`, `syncMode`, `encryptedServiceKey`, `bootstrapStatus` |
-| `system_config` | Key-value config store | `key`, `value`, `category` |
-| `prompts` | System prompt templates with versioning | `name`, `content`, `category`, `version`, `isActive` |
-| `llm_timing_metrics` | Per-call timing telemetry | `stage`, `providerId`, `latencyMs`, `inputTokens`, `outputTokens` |
-| `content_summaries` | Hierarchical RAG summaries | `documentId`, `level`, `status`, `embeddingStatus`, `vectorId` |
-| `game_systems` | TTRPG game system registry | `name`, `abbreviation`, `publisher` |
+| `users` | `id`, `openId`, `email`, `name`, `role`, `createdAt` | `role` ∈ `user \| reviewer \| admin` |
+| `user_profiles` | `userId`, `displayName`, `avatarUrl`, `bio`, `role` | Extended profile |
+| `user_permissions` | `userId`, `featureArea`, `canRead`, `canWrite` | Granular feature-area ACL |
+| `user_invitations` | `email`, `role`, `token`, `expiresAt`, `usedAt` | Invitation scroll system |
+| `system_prompts` | `name`, `content`, `category`, `isActive` | Named prompts for pipeline stages |
+| `prompt_versions` | `promptId`, `content`, `version`, `createdBy` | Version history for prompts |
+| `system_config` | `key`, `value`, `category`, `description` | Key-value store for runtime config |
+| `ingestion_jobs` | `id`, `documentId`, `status`, `startPage`, `endPage`, `blockIndex`, `totalBlocks`, `isPaused` | One row per page-block run; `isPaused` enables pause/resume |
+| `telemetry_events` | `eventType`, `payload`, `userId` | Append-only event log |
+| `llm_providers` | `id`, `name`, `displayName`, `providerType`, `baseUrl`, `encryptedApiKey`, `modelId`, `isActive`, `isLocal` | Credentials encrypted with `CREDENTIAL_ENCRYPTION_KEY` |
+| `stage_inscriptions` | `stage`, `primaryProviderId`, `secondaryProviderId`, `promptName`, `temperature`, `maxTokens` | Stage → provider mapping; aliased as `modelAssignments` |
+| `supabase_instances` | `id`, `name`, `connectionType`, `role`, `syncMode`, `bootstrapStatus`, `encryptedServiceKey` | Vault Nexus registry |
+| `game_systems` | `id`, `name`, `abbreviation`, `publisher`, `edition` | Tome of Knowledge |
+| `documents` | `id`, `title`, `gameSystemId`, `documentType`, `status`, `ownerUserId`, `visibility`, `totalPages` | `visibility` ∈ `private \| global` |
+| `document_pages` | `id`, `documentId`, `pageNumber`, `rawPngUrl`, `preprocessedPngUrl`, `thumbnailUrl`, `phash`, `wasPreprocessed`, `preprocessingApplied`, `layoutType`, `contentRegions` (JSONB), `continuityFlags` (JSONB), `structuralBreaks` (JSONB), `pageJsonOutput` (JSONB), `phaseStatus`, `isFlagged`, `ocrCompleted`, `ocrConfidence`, `printedPageLabel`, `nativeText`, `hasEmbeddedText` | `printedPageLabel` = label printed on page (e.g. "i", "42"); differs from sequential `pageNumber` |
+| `ocr_results` | `pageId`, `rawText`, `markdownText`, `normalisedText`, `nativeSimilarity`, `structuredData` (JSONB), `layoutMetadata` (JSONB), `confidence`, `status`, `pass1Model`–`pass4Model`, `correctedText`, `correctedStructuredData`, `auditLog` (JSONB) | `nativeSimilarity` = token F1 vs native PDF text (null if no embedded text layer) |
+| `page_processing_attempts` | `pageId`, `ocrResultId`, `passNumber`, `modelUsed`, `providerName`, `rawTextOutput`, `structuredOutput`, `score`, `wasAccepted`, `processingTimeMs` | One row per LLM pass attempt |
+| `hitl_queue` | `pageId`, `ocrResultId`, `reason`, `flagCategory`, `priority`, `status`, `assignedTo`, `resolvedBy` | `status` ∈ `queued \| in_progress \| resolved \| skipped \| escalated` |
+| `hitl_retry_attempts` | `hitlItemId`, `pageId`, `requestedStages`, `savedCorrectionFields`, `status`, `confidence`, `modelTrace`, `previousConfidence`, `confidenceDelta`, `regionsBefore`, `previousLayoutType` | Before-state snapshot for measuring human intervention quality |
+| `google_oauth_tokens` | `encryptedAccessToken`, `encryptedRefreshToken`, `expiresAt`, `scope` | Single system-wide Google Drive token; AES-256-GCM encrypted |
+| `llm_timing_metrics` | `jobId`, `pageId`, `stage`, `providerId`, `model`, `durationMs`, `tokensUsed`, `inputTokens`, `outputTokens`, `success` | Append-only LLM call log |
+| `provider_exchange_logs` | `providerId`, `stage`, `jobId`, `pageId`, `model`, `requestMessages`, `requestMeta`, `responseRaw`, `durationMs`, `tokensUsed`, `success`, `errorMessage` | Ring buffer — max `PROVIDER_EXCHANGE_LOG_LIMIT` (21) rows per provider |
+| `content_summaries` | `documentId`, `levelType`, `headingText`, `startPageId`, `endPageId`, `shortSummary`, `longSummary`, `keyTerms`, `keyEntities`, `parentId`, `summaryStatus`, `embeddingStatus` | Hierarchical RAG summaries; `levelType` ∈ `chapter \| section \| subsection \| page` |
 
-### Enums and Constants (defined in `drizzle/schema.ts`)
+### Key Enums / Constant Arrays (defined in `drizzle/schema.ts`)
 
-```ts
-DOCUMENT_TYPES    = ["book", "guide", "periodical", "magazine", "supplement", "adventure", "unknown"]
-DOCUMENT_STATUSES = ["pending", "processing", "completed", "failed", "archived"]
-LAYOUT_TYPES      = ["text", "image", "table", "mixed", "unknown"]
-HITL_PRIORITIES   = ["low", "medium", "high", "critical"]
-HITL_STATUSES     = ["queued", "in_progress", "resolved", "skipped", "escalated"]
-HITL_FLAG_CATEGORIES = ["low_confidence", "layout_error", "missing_text", "garbled_text", "wrong_structure", "manual_flag"]
-OCR_RESULT_STATUSES  = ["pending", "processing", "completed", "failed"]
-SUMMARY_LEVELS    = ["chapter", "section", "subsection", "page"]
-SUMMARY_STATUSES  = ["pending", "generating", "generated", "approved", "failed"]
-SUPABASE_CONNECTION_TYPES = ["supabase_local", "supabase_cloud", "postgres_docker"]
-SUPABASE_ROLES    = ["primary", "secondary"]
-SUPABASE_SYNC_MODES = ["primary_only", "mirror", "failover"]
+```
+PIPELINE_STAGES — 25 stages (see Section 4)
+STAGE_PHASES    — maps each stage to phase 1 / 2 / 3 / 0
+PROVIDER_TYPES  — "openai_compatible" | "anthropic" | "google" | "openrouter" | "local_lm_studio" | ...
+DOCUMENT_TYPES  — "book" | "guide" | "periodical" | "magazine" | "supplement" | "adventure" | "unknown"
+DOCUMENT_STATUSES — "pending" | "processing" | "completed" | "failed" | "paused"
+LAYOUT_TYPES    — "single_column" | "multi_column" | "mixed" | "image_only" | "table_heavy" | "form"
+CONTENT_REGION_TYPES — "body_text" | "heading" | "table" | "image" | "sidebar" | "footer" | "header"
+HITL_PRIORITIES — "low" | "medium" | "high" | "critical"
+HITL_STATUSES   — "queued" | "in_progress" | "resolved" | "skipped" | "escalated"
+SUMMARY_LEVELS  — "chapter" | "section" | "subsection" | "page"
+SUPABASE_CONNECTION_TYPES — "supabase_local" | "supabase_cloud" | "postgres_docker"
 ```
 
 ---
 
-## 3. Pipeline Architecture
+## 3. tRPC Router Map
 
-### Three-Phase Structure
+All procedures are under `/api/trpc`. Access levels: `publicProcedure`, `protectedProcedure` (any
+logged-in user), `reviewerProcedure` (reviewer or admin), `adminProcedure` (admin only).
 
-**Phase 1 — Layout & Classification** (local VLM, no API cost)
-
-```
-document_registration → document_intelligence → pdf_to_png →
-layout_analysis → layout_classification → bbox_detection →
-content_type_classify → child_image_extraction
-```
-
-**Phase 2 — OCR & Extraction** (cloud LLMs via OpenRouter)
-
-```
-ocr_extraction → content_break_detect → summarisation →
-quality_validation → pass_comparison → ocr_validation →
-tabular_extraction → json_assembly → quality_assessment
-```
-
-**Phase 3 — Storage & Enrichment**
-
-```
-artifact_storage → embedding_generation → database_load
-```
-
-**Phase 0 — Standalone** (not part of the main run sequence)
-
-```
-voice_of_arkanum    referee
-```
-
-### Runtime Rules
-
-- **Image routing:** Visual stages (Phase 1) receive the **original** PNG. Text stages (Phase 2) receive the **preprocessed** PNG when binarization is enabled (`pipeline-config.yaml: binarize.enabled: true`).
-- **Concurrency:** `PAGE_LLM_SEMAPHORE` limits simultaneous LLM page calls (default: `maxLlmConcurrency: 4`).
-- **HITL auto-queue:** Pages with `confidence < hitlConfidenceThreshold` (default: 80%) are automatically inserted into `hitl_queue`.
-- **Provider fallback:** If the primary provider for a stage fails, the runner falls back to the secondary provider defined in `stage_inscriptions.fallbackProviderId`.
-- **Preprocessing:** `preprocessPageImages()` in `runner.ts` applies grayscale + sharpen + threshold (Otsu by default) via `sharp`. Parameters are driven by `pipeline-config.yaml`.
-- **Workspace:** All intermediate files (PDFs, PNGs) live in `PIPELINE_WORKSPACE` (default: `/app/workspace`). **This directory must be volume-mounted in production** or all files are lost on container restart.
-- **Config file:** `pipeline-config.yaml` at the project root. Volume-mount to override without rebuilding. Re-read on server startup.
+| Namespace | Procedures |
+|---|---|
+| `auth` | `me`, `logout` |
+| `health` | `ping` (public), `database`, `all` (per-provider circuit state + agents/cloud orbs) |
+| `profile` | `get`, `upsert` |
+| `permissions` | `mine` |
+| `prompts` | `list`, `getByName`, `upsert`, `history`, `seedDefaults` |
+| `ramblings` | `generate` |
+| `config` | `list`, `byCategory`, `set`, `delete` |
+| `jobs` | `list`, `active`, `get`, `stats`, `create`, `delete`, `clear`, `purgePages`, `cancel`, `pause`, `resume`, `updateStatus` |
+| `telemetry` | `record`, `events`, `summary` |
+| `admin` | `listUsers`, `getUser`, `setRole`, `deleteUser`, `setPermission`, `removePermission`, `listInvitations`, `createInvitation`, `revokeInvitation`, `featureAreas`, `wipeProcessingData` |
+| `providers` | `list`, `get`, `create`, `update`, `delete`, `test`, `discoverModels`, `types` |
+| `assignments` | `list`, `byStage`, `upsert`, `update`, `delete`, `stages`, `topology` |
+| `connections` | `list`, `get`, `create`, `update`, `delete`, `setActive`, `test`, `setBootstrapStatus`, `types` |
+| `library` | `listDocuments`, `searchDocuments`, `getDocument`, `getPages`, `getPageWithOcr`, `createDocument`, `updateDocument`, `deleteDocument`, `getByJobId`, `browsePagesWithOcr`, `getPageDetail`, `listPages`, `exportUnsloth`, `addPage`, `upsertOcrResult`, `textQuality`, `exportFull`, `documentStatuses` |
+| `hitl` | `list`, `get`, `stats`, `flag`, `assign`, `resolve`, `skip`, `escalate`, `saveCorrection`, `retryPage`, `getRetryAttempts`, `clear`, `bulkResolve`, `nextUnreviewed`, `exportOcr`, `exportTrainingData` |
+| `pipeline` | `ingestPage`, `submitOcrResult`, `flagPage`, `documentStatus`, `stats`, `exchangeLogs`, `enqueueBboxRescan` |
+| `google` | `status`, `getAccessToken`, `disconnect` |
+| `metrics` | `byPage`, `jobSummary`, `pageSummary`, `providerSummary` |
+| `gameSystems` | `list`, `listAll`, `create`, `update`, `delete` |
+| `summaries` | `listByDocument`, `listByDocumentIds`, `update`, `approve`, `approveAll` |
 
 ---
 
-## 4. tRPC Router Map
+## 4. Pipeline Architecture
 
-All procedures are in `server/routers.ts`. Access level: **P** = protected (any logged-in user), **A** = admin only, **Pub** = public.
+### Stage List and Phases
 
-| Namespace | Access | Key Procedures |
-|---|---|---|
-| `auth` | Pub/P | `me`, `logout` |
-| `health` | P | `database`, `all` (pings DB + all active providers) |
-| `profile` | P | `get`, `update` |
-| `permissions` | P | `mine` |
-| `prompts` | P/A | `list`, `upsert` (A), `getVersions`, `revert` (A) |
-| `ramblings` | P | `generate` (RAG query via LLM) |
-| `config` | P | `list`, `set` |
-| `jobs` | P/A | `list`, `get`, `create` (A), `cancel` (A), `stats` |
-| `telemetry` | P/A | `summary`, `record` (A) |
-| `admin` | A | `listUsers`, `setRole`, `listInvitations`, `createInvitation`, `featureAreas` |
-| `providers` | P/A | `list`, `create` (A), `update` (A), `delete` (A), `test`, `getSecretHint` |
-| `assignments` | P/A | `topology`, `upsert` (A), `delete` (A) |
-| `connections` | P/A | `list`, `create` (A), `update` (A), `delete` (A), `test`, `bootstrap` (A) |
-| `library` | P | `listDocuments`, `getDocument`, `getPage`, `searchDocuments`, `updateDocument` |
-| `hitl` | P | `list`, `get`, `resolve`, `skip`, `escalate`, `flag`, `stats` |
-| `pipeline` | P/A | `ingestPage`, `submitOcrResult`, `flagPage`, `retryStages` (A), `getPageImage` |
-| `google` | P | `getAuthUrl`, `handleCallback`, `listFiles`, `importFile` |
-| `metrics` | P | `jobTimings`, `providerTimings`, `pageTimings` |
-| `gameSystems` | P/A | `list`, `create` (A), `update` (A), `delete` (A) |
-| `summaries` | P/A | `list`, `generate` (A), `approve` (A) |
+| Phase | Stages |
+|---|---|
+| **Phase 1** (ingestion / layout) | `document_registration`, `document_intelligence`, `pdf_to_png`, `pdf_text_extract`, `layout_analysis`, `layout_classification`, `bbox_detection`, `content_type_classify`, `child_image_extraction` |
+| **Phase 2** (OCR / extraction) | `ocr_extraction`, `content_break_detect`, `summarisation`, `quality_validation`, `pass_comparison`, `ocr_validation`, `tabular_extraction`, `content_break_id`, `summarization`, `json_assembly`, `quality_assessment` |
+| **Phase 3** (enrichment) | `artifact_storage`, `embedding_generation`, `database_load` |
+| **Phase 0** (special / standalone) | `voice_of_arkanum`, `referee` |
+
+### Key Pipeline Files
+
+| File | Purpose |
+|---|---|
+| `server/pipeline/runner.ts` | Main orchestrator — `startJob`, `pauseJob`, `resumeJob`, `cancelAllActiveJobs`, `recoverQueuedJobs`, `retryPageStages`, `exportDocumentAsUnsloth` |
+| `server/pipeline/invoke.ts` | LLM dispatch — `dispatchToProvider`, circuit breaker (trips after 3 consecutive failures, 5-min cooldown), `fetchWithRetry` |
+| `server/pipeline/config.ts` | Reads `pipeline-config.yaml` (or `PIPELINE_CONFIG_PATH` env var) at startup |
+| `server/_core/fetch-retry.ts` | Network resilience — exponential backoff for transient gateway resets |
+
+### Concurrency Model
+
+- **Document concurrency:** `maxConcurrentDocuments` (default 2) — controls how many documents are
+  processed simultaneously. Chained blocks for the same document never wait for a slot.
+- **LLM concurrency:** `maxLlmConcurrency` (default 4) — semaphore limiting simultaneous LLM calls
+  across all pages.
+- **Retry queue:** `retryTaskQueue` — HITL-triggered stage retries are serialised through a separate
+  queue to avoid starving the main pipeline.
+
+### Circuit Breaker
+
+Per-provider in-memory state. After `CIRCUIT_TRIP_THRESHOLD` (3) consecutive full-call failures, the
+provider circuit opens. It remains open for `CIRCUIT_COOLDOWN_MS` (5 minutes). A half-open probe is
+allowed after cooldown; success closes the circuit, failure re-trips it immediately. Circuit state is
+visible in `health.all` and in The Artificers page.
+
+### Image Preprocessing
+
+Controlled by `pipeline-config.yaml` (`binarize` section). When `enabled: true`, Sharp converts pages
+to grayscale, optionally sharpens, and applies Otsu auto-threshold binarization before LLM OCR stages.
+Original high-res PNG is preserved as `rawPngUrl`; binarized version is `preprocessedPngUrl`.
+**Visual stages (layout, bbox) use the original image; text stages (OCR) use the preprocessed image.**
+
+### Native PDF Text
+
+`pdf_text_extract` runs `pdftotext` on each page and stores the result in `document_pages.nativeText`.
+This is passed to LLM stages as a ground-truth hint. `nativeSimilarity` in `ocr_results` measures
+token-level F1 between OCR output and native text (null when no embedded text layer exists).
+The Scrivener's Lens page surfaces this for quality inspection.
 
 ---
 
 ## 5. Critical Shape Contracts
 
-These are the most common source of type mismatches. Verify before writing any UI code that consumes these procedures.
+These are the most common source of type mismatches. Verify before writing any UI code.
 
-### `hitl.list` — sidebar list shape
+### `hitl.list` — sidebar list item shape
 
 ```ts
 {
-  hitl_id: number;
-  hitl_status: HitlStatus;
-  hitl_reason: string;
-  document: { title, publisher, type, game_system, summary };
+  // All HitlQueueItem fields spread at top level (id, pageId, status, priority, reason, ...)
   page: {
-    number: number | null;   // ← NOTE: page.number, NOT pageNumber
+    number: number | null;   // ← NOTE: page.number, NOT item.pageNumber
     image_url: string | null;
     layout_type: string | null;
     ocr_confidence: number | null;
-    model: string | null;
-    extracted_at: Date | null;
   };
-  regions: ContentRegion[];
-  ocr_output: unknown;
-  raw_text: string | null;
-  human_corrections: { corrected_text, corrected_data } | null;
-  // plus all HitlQueueItem fields spread at top level
+  document: { title: string; ... };
+  ocr: OcrResult | null;
 }
 ```
 
-> **Common mistake:** `item.pageNumber` — this field does **not** exist. Use `item.page?.number`.
+> **Common mistake:** `item.pageNumber` — this field does **not** exist at the top level. Use `item.page?.number`.
 
 ### `hitl.get` — full detail shape
 
@@ -184,16 +209,7 @@ These are the most common source of type mismatches. Verify before writing any U
   document: Document | null;
   ocr: OcrResult | null;
   attempts: PageProcessingAttempt[];
-}
-```
-
-### `library.getPage` — page detail shape
-
-```ts
-{
-  page: DocumentPage;
-  ocr: OcrResult | null;
-  attempts: PageProcessingAttempt[];
+  retryAttempts: HitlRetryAttempt[];
 }
 ```
 
@@ -206,8 +222,21 @@ These are the most common source of type mismatches. Verify before writing any U
     phase: 1 | 2 | 3 | 0;
     inscription: StageInscription | null;
     primaryProvider: LlmProvider | null;
-    fallbackProvider: LlmProvider | null;
+    secondaryProvider: LlmProvider | null;  // ← "secondary", not "fallback"
   }>;
+}
+```
+
+### `document_pages.contentRegions` — JSONB array item shape
+
+```ts
+{
+  sequence: number;
+  regionType: string;        // ∈ CONTENT_REGION_TYPES
+  bbox: { x: number; y: number; w: number; h: number };
+  childImageUrl?: string;
+  contentTypeFlags?: string[];
+  isMixedBoundary?: boolean;
 }
 ```
 
@@ -215,113 +244,191 @@ These are the most common source of type mismatches. Verify before writing any U
 
 ## 6. Environment Variables
 
-| Variable | Required | Default | Purpose |
-|---|---|---|---|
-| `DATABASE_URL` | Yes | — | PostgreSQL connection string. Add `?sslmode=disable` for Docker internal networks. |
-| `JWT_SECRET` | Yes | — | Session cookie signing. Minimum 32 characters. |
-| `CREDENTIAL_ENCRYPTION_KEY` | Recommended | Falls back to `JWT_SECRET` | Separate AES key for encrypting provider API keys in DB. |
-| `VITE_APP_ID` | Yes | — | Manus OAuth application ID. |
-| `OAUTH_SERVER_URL` | Yes | `https://api.manus.im` | Manus OAuth backend URL. |
-| `VITE_OAUTH_PORTAL_URL` | Yes | `https://manus.im` | Manus login portal URL (injected at runtime via `window.__RUNTIME_CONFIG__`). |
-| `OWNER_OPEN_ID` | Yes | — | User auto-promoted to `admin` on first login. |
-| `OWNER_NAME` | Yes | — | Display name for the owner. |
-| `SUPABASE_URL` | Yes | — | Internal Kong gateway URL (e.g. `http://supabase-kong:8000`). |
-| `SUPABASE_ANON_KEY` | Yes | — | Supabase anon JWT. |
-| `SUPABASE_SERVICE_KEY` | Yes | — | Supabase service role JWT. |
-| `GOOGLE_CLIENT_ID` | Optional | — | Google Drive OAuth client ID. |
-| `GOOGLE_CLIENT_SECRET` | Optional | — | Google Drive OAuth client secret. |
-| `GOOGLE_API_KEY` | Optional | — | Google API key for Drive file picker. |
-| `APP_URL` | Optional | `http://localhost:3000` | Canonical public URL — must match Google OAuth redirect URI. |
-| `PIPELINE_WORKSPACE` | Optional | `/app/workspace` | Filesystem path for PDFs and PNGs. **Must be volume-mounted in production.** |
-| `PIPELINE_CONFIG_PATH` | Optional | `/app/pipeline-config.yaml` | Override path for `pipeline-config.yaml`. |
-| `BUILT_IN_FORGE_API_URL` | Optional | — | Manus built-in LLM API base URL. |
-| `BUILT_IN_FORGE_API_KEY` | Optional | — | Manus built-in LLM API key (server-side). |
-| `VITE_FRONTEND_FORGE_API_URL` | Optional | — | Manus built-in LLM API base URL (frontend). |
-| `VITE_FRONTEND_FORGE_API_KEY` | Optional | — | Manus built-in LLM API key (frontend). |
+### Required at Runtime
 
----
-
-## 7. Deployment Architecture
-
-```
-Host machine
-├── Supabase stack (supabase_net Docker network)
-│   ├── supabase-db        PostgreSQL 15 + pgvector  :5432
-│   ├── supabase-kong      Kong API gateway           :8000 (internal), :8100 (host)
-│   ├── supabase-auth      GoTrue auth service
-│   ├── supabase-rest      PostgREST
-│   └── supabase-storage   Storage API
-│
-└── Console stack (joins supabase_net as external network)
-    └── console            Express + tRPC + Vite      :3000 (host: HOST_PORT)
-        ├── node migrate.mjs      (runs on startup — applies Drizzle migrations)
-        └── node dist/index.js    (Express server)
-```
-
-**Migration runner:** `migrate.mjs` uses `drizzle-orm/postgres-js/migrator` — no `drizzle-kit` required at runtime. All migration SQL files are in `drizzle/migrations/`.
-
-**Image:** `ghcr.io/pakgrou-porg/ttrpg-ocr-console:{IMAGE_TAG}` — built by GitHub Actions on every version tag push.
-
----
-
-## 8. Key File Map
-
-```
-drizzle/schema.ts          ← All tables, types, enums, PIPELINE_STAGES, STAGE_PHASES
-server/db.ts               ← All query helpers (1,500+ lines — check here before writing new queries)
-server/routers.ts          ← All tRPC procedures (2,300+ lines — split by namespace)
-server/pipeline/runner.ts  ← Pipeline execution engine, stage functions, preprocessing
-server/pipeline/invoke.ts  ← LLM provider dispatch, fetchWithRetry, buildProviderCall
-server/pipeline/config.ts  ← pipeline-config.yaml loader (singleton, read at startup)
-server/_core/env.ts        ← All environment variable access (single source of truth)
-server/_core/crypto.ts     ← Credential encryption/decryption, storeSecretHint
-server/uploadIngestRoute.ts ← POST /api/upload/ingest (multer, auth, job creation)
-pipeline-config.yaml       ← Runtime pipeline tuning (DPI, concurrency, binarize params)
-portainer-stack.yml        ← Production Docker Compose for Portainer
-migrate.mjs                ← Standalone DB migration runner (used in Docker CMD)
-client/src/pages/          ← 19 page components (see Domain Vocabulary table for mapping)
-client/src/components/     ← Shared UI components (DashboardLayout, AIChatBox, Map, etc.)
-```
-
----
-
-## 9. Known Open Issues
-
-> Check this list before starting any work to avoid duplicating effort or re-introducing fixed bugs.
-
-| # | File(s) | Issue | Priority |
-|---|---|---|---|
-| 1 | `tsconfig.json` | Missing `"target": "ES2020"` — causes `Set`/`Map` iteration TS errors in `TrialsOfTruth.tsx`, `oauth.ts`, `routers.ts` | High |
-| 2 | `ArchivistsDesk.tsx:337` | `item.pageNumber` should be `item.page?.number` — field does not exist at top level | High |
-| 3 | `portainer-stack.yml` | Missing `volumes:` section for `PIPELINE_WORKSPACE` — workspace is ephemeral on container restart | High |
-| 4 | `uploadIngestRoute.ts:39` | `multer` `fileFilter` callback type error — pass `null` explicitly: `if (ok) cb(null, true); else cb(new Error(...), false)` | Medium |
-| 5 | `server/pipeline/runner.ts` | `Cannot find module 'sharp'` TS error — add `@types/sharp` to devDependencies | Medium |
-| 6 | `routers.ts` (`hitl.get`, `library.getPage`) | `markdownText` stored in `ocr_results` but not returned by these procedures — UI cannot display it | Medium |
-| 7 | `server/pipeline/runner.ts` | `preprocessPageImages()` is serial (`for...of` + `await`) — should use bounded `Promise.all` for performance | Medium |
-| 8 | `server/routers.ts` | `listDocuments` / `searchDocuments` ownership filter is a JS post-filter, not a SQL `WHERE` clause — incorrect when pagination is applied | Medium |
-| 9 | `server/routers.ts` | Email dispatch for invitations not implemented — invitations are created in DB but never sent | Low |
-| 10 | `uploadIngestRoute.ts` | `multer.memoryStorage()` for up to 200 MB uploads — should use `diskStorage()` to avoid heap pressure | Low |
-| 11 | No rate limit on `/api/upload/ingest` — unbounded concurrent uploads possible | Low |
-
----
-
-## 10. Test Suite
-
-Seven test files in `server/*.test.ts`. Run with `pnpm test`.
-
-| File | Coverage |
+| Variable | Purpose |
 |---|---|
-| `auth.logout.test.ts` | Session cookie clearing |
-| `admin.test.ts` | Role gates, invitation validation |
-| `features.test.ts` | Health, config, jobs, telemetry, prompts, assignments topology |
-| `library.test.ts` | Documents, pages, pipeline ingestion, OCR submission, HITL flagging |
-| `profile.prompts.test.ts` | Prompt upsert, versioning, category filtering |
-| `providers.test.ts` | Provider CRUD, secret hint shape |
-| `security.test.ts` | Auth gates across all major procedures |
+| `DATABASE_URL` | PostgreSQL connection string — must include `?sslmode=disable` for Docker bridge networks |
+| `JWT_SECRET` | Session cookie signing — minimum 32 characters |
+| `CREDENTIAL_ENCRYPTION_KEY` | AES-256-GCM key for encrypting LLM provider API keys and Supabase service keys — should differ from `JWT_SECRET` |
+| `VITE_APP_ID` | Manus OAuth application ID |
+| `OWNER_OPEN_ID` | Manus open-id of the deployer — auto-promoted to admin on first login |
+| `OWNER_NAME` | Display name for the owner |
+| `ANON_KEY` | Supabase anon JWT (from Supabase stack) |
+| `SERVICE_ROLE_KEY` | Supabase service role JWT (from Supabase stack) |
 
-**Missing test coverage (high value):**
-- `buildMarkdownText` unit test with fixture data
-- `fetchWithRetry` — retry on network error, HTTP 429, no retry on `AbortError`
-- `hitl.list` shape assertion — would catch the `item.pageNumber` bug
-- `POST /api/upload/ingest` — file type rejection
-- `pipeline.submitOcrResult` with `markdownText` field
+### Optional
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SUPABASE_URL` | — | Supabase Kong gateway URL (e.g. `http://supabase-kong:8000`) |
+| `SUPABASE_ANON_KEY` | — | Same as `ANON_KEY` — used by server-side Supabase client |
+| `SUPABASE_SERVICE_KEY` | — | Same as `SERVICE_ROLE_KEY` — used by server-side Supabase client |
+| `GOOGLE_CLIENT_ID` | — | Google OAuth — required for Google Drive integration |
+| `GOOGLE_CLIENT_SECRET` | — | Google OAuth — required for Google Drive integration |
+| `GOOGLE_API_KEY` | — | Google API key — required for Drive file picker |
+| `APP_URL` | `http://localhost:3000` | Canonical public URL — must match Google OAuth redirect URI |
+| `ADMIN_EMAIL` | — | Email auto-promoted to admin on every login (alternative to `OWNER_OPEN_ID`) |
+| `PIPELINE_WORKSPACE` | `/app/workspace` | Local directory for pipeline temp files — **must be volume-mounted in production** |
+| `PIPELINE_CONFIG_PATH` | `/app/pipeline-config.yaml` | Override path for pipeline config file |
+| `BUILT_IN_FORGE_API_URL` | — | Manus-hosted LLM API base URL (leave blank for self-hosted) |
+| `BUILT_IN_FORGE_API_KEY` | — | Manus-hosted LLM API key |
+| `VITE_FRONTEND_FORGE_API_URL` | — | Frontend access to Manus built-in APIs |
+| `VITE_FRONTEND_FORGE_API_KEY` | — | Frontend key for Manus built-in APIs |
+| `VITE_APP_TITLE` | `TTRPG OCR Console` | Browser tab title |
+| `VITE_APP_LOGO` | — | Logo URL |
+| `IMAGE_TAG` | `latest` | Docker image tag for Portainer stack |
+| `HOST_PORT` | `3000` | Host port mapping |
+| `OAUTH_SERVER_URL` | `https://api.manus.im` | Manus OAuth backend |
+| `VITE_OAUTH_PORTAL_URL` | `https://manus.im` | Manus login portal |
+
+> **Deployment gap:** `portainer-stack.yml` does not yet include `GOOGLE_CLIENT_ID`,
+> `GOOGLE_CLIENT_SECRET`, `GOOGLE_API_KEY`, `APP_URL`, `ADMIN_EMAIL`, or a `volumes:` mount for
+> `PIPELINE_WORKSPACE`. These must be added manually in Portainer or via a stack file update.
+
+---
+
+## 7. User Roles and Access Control
+
+| Role | Access |
+|---|---|
+| `user` | Read-only library, personal sanctum, Tome of Knowledge, Divination Omens |
+| `reviewer` | All `user` access + Archivist's Desk, Trials of Truth, Scrivener's Lens (HITL pages) |
+| `admin` | Full access including The Conclave, Arcane Mechanisms, Summoning Rituals, Artificers, Assignments, Vault Nexus, Chronicles |
+
+**Promotion:** Set `role = 'admin'` directly in the database, or set `OWNER_OPEN_ID` / `ADMIN_EMAIL`
+env vars for automatic promotion on login. The Conclave page (admin only) also provides a UI for role
+management.
+
+**Frontend gate components:**
+- `AdminGate` — wraps admin-only UI sections
+- `ReviewerGate` — wraps reviewer-or-admin UI sections
+
+---
+
+## 8. Key Architectural Conventions
+
+### Data Access Pattern
+
+- **Never filter ownership in JavaScript post-query.** Always push
+  `WHERE ownerUserId = ? OR visibility = 'global'` into the Drizzle SQL query.
+  (`listDocuments` and `searchDocuments` currently violate this — see Known Issues.)
+- All database helpers live in `server/db.ts`. Procedures in `server/routers.ts` call helpers, not raw SQL.
+- Timestamps are stored as UTC `timestamp` columns. Frontend converts to local timezone with
+  `new Date(ts).toLocaleString()`.
+
+### Credential Encryption
+
+- LLM provider API keys and Supabase service keys are encrypted at rest using AES-256-GCM.
+- Encryption/decryption is in `server/crypto.ts`. Key = `CREDENTIAL_ENCRYPTION_KEY` env var.
+- The `SecretHint` type uses fields `keyPrefix`, `keySuffix`, `keyLength`
+  (not `prefix`, `suffix`, `length` — a common mistake).
+
+### Runtime Config Injection
+
+- OAuth URLs and app metadata are injected at runtime via `window.__RUNTIME_CONFIG__`
+  (see `server/_core/static.ts`) rather than only at build time. This allows the same Docker image
+  to be deployed to different OAuth environments without rebuilding.
+
+### Pipeline Config
+
+- `pipeline-config.yaml` is read once at server startup by `server/pipeline/config.ts`.
+- A server restart is required for config changes to take effect.
+- The file should be volume-mounted into the container at `/app/pipeline-config.yaml`.
+
+### Migrations
+
+- `node migrate.mjs` runs automatically on container startup before the Express server starts.
+- Drizzle tracks applied migrations in the `__drizzle_migrations` table.
+- To add a migration: edit `drizzle/schema.ts`, run `pnpm db:push` locally (generates SQL + updates
+  journal), commit both the `.sql` file and the updated `drizzle/meta/_journal.json`.
+
+---
+
+## 9. Known Issues and Pending Work
+
+### TypeScript Errors (22 total as of v0.2.21)
+
+| File | Error | Fix |
+|---|---|---|
+| `tsconfig.json` | `target` is unset (defaults to ES3) — causes `Set`/`Map` iteration errors in 6+ locations across `routers.ts`, `runner.ts`, and `TrialsOfTruth.tsx` | Add `"target": "ES2020"` to `tsconfig.json` |
+| `BboxRegionEditor.tsx:349,356,490` | `Partial<Box>` not assignable to intersection type | Widen the `bbox` prop type or cast explicitly |
+| `DriveFilePicker.tsx:21` + `Map.tsx:85,144` | `google` global declaration conflict between `@types/google.maps` and `@types/google.picker` | Add `/// <reference types="@types/google.maps" />` to DriveFilePicker; remove duplicate declaration in Map.tsx |
+| `TrialsOfTruth.tsx:596` | `any[][]` not assignable to `[string, unknown][]` | Add explicit type annotation |
+| `runner.ts:2429` | Cannot find module `sharp` | Run `pnpm add sharp` and ensure `libvips` is in the Dockerfile (`apk add vips`) |
+| `routers.ts:2878–2879` | `doc` possibly `undefined` | Add null guard before accessing `doc.id` / `doc.title` |
+
+### Pending Features / Bugs
+
+| # | Item | Priority |
+|---|---|---|
+| 1 | `tsconfig.json` missing `"target": "ES2020"` — root cause of 8+ TS errors | High |
+| 2 | `listDocuments` / `searchDocuments` — ownership filter is JS post-filter, not SQL | High |
+| 3 | `portainer-stack.yml` missing `volumes:` for `PIPELINE_WORKSPACE` — workspace is ephemeral across container restarts | High |
+| 4 | `portainer-stack.yml` missing Google Drive env vars (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_API_KEY`, `APP_URL`) | Medium |
+| 5 | `multer.memoryStorage()` for uploads up to 200 MB — should use `diskStorage()` to avoid heap exhaustion | Medium |
+| 6 | No rate limit on `/api/upload/ingest` — unbounded with folder upload enabled | Medium |
+| 7 | Email dispatch for invitation scrolls not implemented (DB records created, never sent) | Medium |
+| 8 | `preprocessPageImages` is serial (`for...of` + `await`) — should use bounded `Promise.all` | Low |
+| 9 | Test: `listDocuments` scoped by ownership | Low |
+
+---
+
+## 10. Deployment Reference
+
+### Docker Image
+
+- Registry: `ghcr.io/pakgrou-porg/ttrpg-ocr-console`
+- Tags: semver (e.g. `0.2.21`) and `:latest`
+- Build: GitHub Actions on every push to `main` and on version tags
+
+### Container Startup Sequence
+
+1. `node migrate.mjs` — applies pending Drizzle SQL migrations against `DATABASE_URL`
+2. `node dist/index.js` — starts Express + tRPC server on `PORT` (default 3000)
+
+### Network Topology (Self-Hosted)
+
+- The console container joins the external Docker network `supabase_net`
+- Internal hostname `supabase-db:5432` → PostgreSQL 15
+- Internal hostname `supabase-kong:8000` → Supabase Kong API gateway (REST, Storage, Auth)
+- `DATABASE_URL` must include `?sslmode=disable` for the internal Docker bridge (no TLS cert)
+
+### Portainer Stack File
+
+`portainer-stack.yml` at project root. Required env vars to set in Portainer UI:
+`POSTGRES_PASSWORD`, `JWT_SECRET`, `CREDENTIAL_ENCRYPTION_KEY`, `VITE_APP_ID`,
+`OWNER_OPEN_ID`, `OWNER_NAME`, `ANON_KEY`, `SERVICE_ROLE_KEY`
+
+---
+
+## 11. File Structure Quick Reference
+
+```
+client/src/pages/          ← 20 page components (see Section 1 for mapping)
+client/src/components/
+  BboxRegionEditor.tsx     ← Interactive bbox region editor with keyboard shortcuts
+  ReviewerGate.tsx         ← Access gate for reviewer/admin roles
+  AdminGate.tsx            ← Access gate for admin role only
+  DashboardLayout.tsx      ← Sidebar layout used by all Inner Sanctum pages
+drizzle/
+  schema.ts                ← Single source of truth for all tables and types
+  0000_initial_postgres.sql … 0015_hitl_retry_before_snapshot.sql
+server/
+  routers.ts               ← All tRPC procedures (~3100 lines; split into namespaces)
+  db.ts                    ← Query helpers (called by routers, never raw SQL in routers)
+  crypto.ts                ← AES-256-GCM encrypt/decrypt for credentials
+  pipeline/
+    runner.ts              ← Pipeline orchestrator (~2500 lines)
+    invoke.ts              ← LLM dispatch + circuit breaker + fetchWithRetry
+    config.ts              ← pipeline-config.yaml loader
+  _core/
+    env.ts                 ← All env var access (use ENV.* not process.env.* directly)
+    static.ts              ← Runtime config injection (window.__RUNTIME_CONFIG__)
+    fetch-retry.ts         ← Exponential backoff fetch wrapper
+pipeline-config.yaml       ← Pipeline tuning knobs (DPI, thresholds, concurrency, binarize)
+portainer-stack.yml        ← Portainer deployment stack (self-hosted)
+migrate.mjs                ← Standalone migration runner (no drizzle-kit at runtime)
+CONTEXT.md                 ← This file
+todo.md                    ← Pending work items
+```
