@@ -431,6 +431,7 @@ export default function OverseeScribes() {
   const [browsingJobId, setBrowsingJobId]   = useState<number | null>(null);
   const [metricsJobId, setMetricsJobId]     = useState<number | null>(null);
   const [selectedJobIds, setSelectedJobIds] = useState<Set<number>>(new Set());
+  const [finishedLimit, setFinishedLimit]   = useState<number>(10);
 
   const deleteMut = trpc.jobs.delete.useMutation({
     onSuccess: () => { refetch(); toast.success("Job removed."); },
@@ -827,8 +828,34 @@ export default function OverseeScribes() {
                     <span className="text-[11px] font-semibold text-muted-foreground/50 uppercase tracking-widest">
                       Finished · {finishedJobs.length}
                     </span>
+                    <span className="text-[10px] text-muted-foreground/40 ml-2">showing last</span>
+                    {[10, 25, 50].map(n => (
+                      <button key={n} onClick={() => setFinishedLimit(n)}
+                        className={`text-[10px] px-1.5 py-0.5 rounded transition-colors ${
+                          finishedLimit === n
+                            ? "bg-primary/20 text-primary"
+                            : "text-muted-foreground/50 hover:text-muted-foreground"
+                        }`}>
+                        {n}
+                      </button>
+                    ))}
+                    {finishedJobs.length > 50 && (
+                      <button onClick={() => setFinishedLimit(finishedJobs.length)}
+                        className={`text-[10px] px-1.5 py-0.5 rounded transition-colors ${
+                          finishedLimit >= finishedJobs.length
+                            ? "bg-primary/20 text-primary"
+                            : "text-muted-foreground/50 hover:text-muted-foreground"
+                        }`}>
+                        all
+                      </button>
+                    )}
                   </div>
-                  {finishedJobs.map(renderJobRow)}
+                  {finishedJobs.slice(0, finishedLimit).map(renderJobRow)}
+                  {finishedJobs.length > finishedLimit && (
+                    <div className="px-4 py-2 text-center text-xs text-muted-foreground/50 border-t border-border/20">
+                      {finishedJobs.length - finishedLimit} more — increase limit above to see them
+                    </div>
+                  )}
                 </>
               )}
             </div>
