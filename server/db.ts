@@ -1404,6 +1404,52 @@ export async function getHitlRetryAttemptsByPage(pageId: number) {
     .limit(10);
 }
 
+/**
+ * Active retry attempts (pending_queue or running) joined with page and document info.
+ * Also includes attempts completed/failed within the last 5 minutes so operators
+ * can see results immediately after a batch retry.
+ */
+export async function getActiveRetryAttempts() {
+  const db = await getDb();
+  if (!db) return [];
+  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+  const rows = await db.execute(sql`
+    SELECT
+      r.id,
+      r.hitl_item_id,
+      r.page_id,
+      r.requested_stages,
+      r.status,
+      r.started_at,
+      r.completed_at,
+      r.confidence,
+      r.previous_confidence,
+      r.confidence_delta,
+      r.stages_failed,
+      r.duration_ms,
+      p.page_number,
+      p.printed_page_label,
+      d.id   AS document_id,
+      COALESCE(d.title, d.filename) AS document_title
+    FROM hitl_retry_attempts r
+    JOIN document_pages p ON r.page_id = p.id
+    JOIN documents d ON p.document_id = d.id
+    WHERE r.status IN ('pending_queue', 'running')
+       OR (r.status IN ('succeeded', 'failed') AND r.completed_at >= ${fiveMinutesAgo})
+    ORDER BY r.started_at ASC
+    LIMIT 500
+  `);
+  return rows as unknown as Array<{
+    id: number; hitl_item_id: number | null; page_id: number;
+    requested_stages: string[]; status: string;
+    started_at: string; completed_at: string | null;
+    confidence: number | null; previous_confidence: number | null; confidence_delta: number | null;
+    stages_failed: string[]; duration_ms: number | null;
+    page_number: number; printed_page_label: string | null;
+    document_id: number; document_title: string;
+  }>;
+}
+
 /** Latest retry attempt status per page — used to show Retry/Error pipeline status badges. */
 export async function getLatestRetryStatusByPageIds(pageIds: number[]): Promise<Map<number, string>> {
   const db = await getDb();

@@ -29,6 +29,7 @@ import {
   getLatestRetryStatusByPageIds, getPageIdsWithFallback, getLatestHitlReasonByPageIds,
   getAllGameSystems, createGameSystem, updateGameSystem, deleteGameSystem,
   getLlmMetricsByPage, getLlmMetricsJobSummary, getLlmMetricsPageSummary, getLlmProviderMetricsSummary, getStageArtificerMetrics,
+  getActiveRetryAttempts,
   getContentSummariesByDocument, updateContentSummary,
 } from "./db";
 import { encryptSecret, decryptSecret, storeSecretHint, renderMaskedSecret } from "./crypto";
@@ -2913,6 +2914,10 @@ export const appRouter = router({
 
     /** Per-stage, per-provider (Artificer) call counts, failure rates, and latency. */
     stageMetrics: protectedProcedure.query(() => getStageArtificerMetrics()),
+
+    /** Active and recently-completed (last 5 min) retry attempts with page/document context.
+     *  Used by Oversee the Scribes to show the retry queue alongside ingestion jobs. */
+    retryQueue: protectedProcedure.query(() => getActiveRetryAttempts()),
 
     /** Provider exchange logs — ring buffer of last 21 per provider. Optionally filter by providerId. */
     exchangeLogs: adminProcedure

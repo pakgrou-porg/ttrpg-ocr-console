@@ -408,7 +408,7 @@ function ArtificerPerformance({ rows }: { rows: StageMetricRow[] | undefined }) 
             return (
               <div key={stage}>
                 {/* Stage header */}
-                <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-4 px-4 py-2 bg-muted/10 items-center">
+                <div className="grid grid-cols-[1fr_52px_52px_68px_68px] gap-x-4 px-4 py-2 bg-muted/10 items-center">
                   <span className="text-xs font-semibold text-foreground/80 uppercase tracking-wide">{stageLabel}</span>
                   <span className="text-xs text-muted-foreground/50 text-right">Pass</span>
                   <span className="text-xs text-muted-foreground/50 text-right">Fail</span>
@@ -418,7 +418,7 @@ function ArtificerPerformance({ rows }: { rows: StageMetricRow[] | undefined }) 
 
                 {/* Stage totals row (shown only when multiple providers) */}
                 {providers.length > 1 && (
-                  <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-4 px-4 py-1 items-center border-b border-border/20">
+                  <div className="grid grid-cols-[1fr_52px_52px_68px_68px] gap-x-4 px-4 py-1 items-center border-b border-border/20">
                     <span className="text-[11px] text-muted-foreground italic pl-2">All providers</span>
                     <span className="text-xs font-bold text-green-400 text-right tabular-nums">{stagePassed.toLocaleString()}</span>
                     <span className={`text-xs font-bold text-right tabular-nums ${stageFailed > 0 ? "text-red-400" : "text-muted-foreground/40"}`}>
@@ -438,7 +438,7 @@ function ArtificerPerformance({ rows }: { rows: StageMetricRow[] | undefined }) 
                   return (
                     <div
                       key={row.provider_name}
-                      className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-4 px-4 py-1.5 items-center hover:bg-muted/10 transition-colors"
+                      className="grid grid-cols-[1fr_52px_52px_68px_68px] gap-x-4 px-4 py-1.5 items-center hover:bg-muted/10 transition-colors"
                     >
                       <div className="flex items-center gap-1.5 min-w-0 pl-4">
                         <span className="text-xs text-foreground/80 truncate">{row.provider_name}</span>
