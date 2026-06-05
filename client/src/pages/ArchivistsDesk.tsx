@@ -1,6 +1,7 @@
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Layers, Activity, RefreshCw, Loader2, Cpu } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Layers, Activity, RefreshCw, Loader2, Cpu, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 
 // ─── Pipeline Funnel ────────────────────────────────────────────────────────
@@ -209,6 +210,119 @@ function PipelineFunnel({ pStats, onRescan, rescanPending }: {
   );
 }
 
+// ─── HITL Category Panel ────────────────────────────────────────────────────
+
+type CategoryStat = { category: string; queued: number; total: number };
+
+/** Human-readable label, description, and default retry stages per flagCategory. */
+const CATEGORY_META: Record<string, {
+  label: string;
+  description: string;
+  color: string;
+  retryStages: ("layout_analysis" | "bbox_detection" | "ocr_extraction")[];
+}> = {
+  provider_exhausted: {
+    label: "Provider Exhausted",
+    description: "All configured LLM providers failed or were circuit-broken. No OCR output produced.",
+    color: "text-orange-400",
+    retryStages: ["layout_analysis", "bbox_detection", "ocr_extraction"],
+  },
+  stage_failure: {
+    label: "Stage Failure",
+    description: "One or more pipeline stages returned an error (malformed JSON, timeout, etc.).",
+    color: "text-red-400",
+    retryStages: ["ocr_extraction"],
+  },
+  low_confidence: {
+    label: "Low Confidence",
+    description: "OCR model returned a confidence score below the configured threshold.",
+    color: "text-amber-400",
+    retryStages: ["ocr_extraction"],
+  },
+  native_text_divergence: {
+    label: "Native Text Divergence",
+    description: "OCR output diverges significantly from the embedded PDF text layer.",
+    color: "text-yellow-400",
+    retryStages: ["ocr_extraction"],
+  },
+  manual_flag: {
+    label: "Manual Flag",
+    description: "Manually flagged for review.",
+    color: "text-blue-400",
+    retryStages: [],
+  },
+};
+
+function HitlCategoryPanel({ stats, onRetried }: {
+  stats: CategoryStat[] | undefined;
+  onRetried: () => void;
+}) {
+  const bulkRetry = trpc.hitl.bulkRetryByCategory.useMutation({
+    onSuccess: (r) => { toast.success(`Enqueued ${r.enqueued} page${r.enqueued !== 1 ? "s" : ""} for retry.`); onRetried(); },
+    onError: (e) => toast.error(`Retry failed: ${e.message}`),
+  });
+
+  const active = (stats ?? []).filter(s => s.queued > 0);
+  if (active.length === 0) return null;
+
+  return (
+    <Card className="bg-card/50 backdrop-blur-sm border-border/50">
+      <CardHeader className="pb-2 pt-3 px-4 border-b border-border/50">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 text-amber-400" />
+          HITL Failure Categories
+          <span className="text-xs text-muted-foreground font-normal ml-1">
+            — queued items by root cause
+          </span>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="p-0">
+        <div className="divide-y divide-border/30">
+          {active.map(stat => {
+            const meta = CATEGORY_META[stat.category];
+            const label = meta?.label ?? stat.category;
+            const color = meta?.color ?? "text-muted-foreground";
+            const stages = meta?.retryStages ?? [];
+            return (
+              <div key={stat.category} className="flex items-center gap-4 px-4 py-3">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-sm font-semibold ${color}`}>{label}</span>
+                    <span className="text-xs bg-muted/30 rounded px-1.5 py-0.5 tabular-nums">
+                      {stat.queued} queued
+                      {stat.total > stat.queued && (
+                        <span className="text-muted-foreground/60"> / {stat.total} total</span>
+                      )}
+                    </span>
+                  </div>
+                  {meta?.description && (
+                    <p className="text-xs text-muted-foreground/70 mt-0.5">{meta.description}</p>
+                  )}
+                </div>
+                {stages.length > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="flex-shrink-0 gap-1.5 text-xs"
+                    disabled={bulkRetry.isPending || stat.queued === 0}
+                    onClick={() => {
+                      if (!confirm(`Enqueue retry for all ${stat.queued} "${label}" page${stat.queued !== 1 ? "s" : ""}?\n\nStages: ${stages.join(", ")}`)) return;
+                      bulkRetry.mutate({ category: stat.category, stages });
+                    }}
+                  >
+                    {bulkRetry.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                    Retry All
+                  </Button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 // ─── Artificer Performance ──────────────────────────────────────────────────
 
 type StageMetricRow = {
@@ -365,6 +479,7 @@ export default function ArchivistsDesk() {
   const { data: pStats }        = trpc.pipeline.stats.useQuery(undefined, { refetchInterval: 15000 });
   const { data: jStats }        = trpc.jobs.stats.useQuery(undefined, { refetchInterval: 15000 });
   const { data: stageMetrics }  = trpc.pipeline.stageMetrics.useQuery(undefined, { refetchInterval: 30000 });
+  const { data: categoryStats, refetch: refetchCategoryStats } = trpc.hitl.categoryStats.useQuery(undefined, { refetchInterval: 30000 });
 
   const bboxRescanMutation = trpc.pipeline.enqueueBboxRescan.useMutation({
     onSuccess: (data) => {
@@ -539,6 +654,12 @@ export default function ArchivistsDesk() {
         pStats={pStats as PipelineStatsData}
         onRescan={() => bboxRescanMutation.mutate()}
         rescanPending={bboxRescanMutation.isPending}
+      />
+
+      {/* HITL failure categories with batch retry */}
+      <HitlCategoryPanel
+        stats={categoryStats as CategoryStat[] | undefined}
+        onRetried={() => { refetchCategoryStats(); }}
       />
 
       {/* Artificer Performance — full width */}

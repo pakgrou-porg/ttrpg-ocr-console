@@ -1307,12 +1307,14 @@ export async function updateOcrResult(id: number, updates: Partial<InsertOcrResu
 
 const priorityRank = sql`CASE ${hitlQueue.priority} WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 99 END`;
 
-export async function getAllHitlItems(options?: { status?: string; priority?: string; limit?: number; offset?: number; orderByPriority?: boolean }) {
+export async function getAllHitlItems(options?: { status?: string; priority?: string; flagCategory?: string; excludeCategory?: string; limit?: number; offset?: number; orderByPriority?: boolean }) {
   const db = await getDb();
   if (!db) return [];
   const conditions = [];
   if (options?.status) conditions.push(eq(hitlQueue.status, options.status as any));
   if (options?.priority) conditions.push(eq(hitlQueue.priority, options.priority as any));
+  if (options?.flagCategory) conditions.push(eq(hitlQueue.flagCategory, options.flagCategory as any));
+  if (options?.excludeCategory) conditions.push(ne(hitlQueue.flagCategory, options.excludeCategory as any));
 
   const order = options?.orderByPriority
     ? [asc(priorityRank), asc(hitlQueue.createdAt)]
@@ -1598,6 +1600,31 @@ export async function getHitlStats() {
     byMedium: all.filter(i => i.priority === "medium").length,
     byLow: all.filter(i => i.priority === "low").length,
   };
+}
+
+/** All queued HITL items with a specific flagCategory (used for bulk retry). */
+export async function getHitlItemsQueuedByCategory(category: string) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(hitlQueue).where(
+    and(eq(hitlQueue.flagCategory, category as any), eq(hitlQueue.status, "queued")),
+  );
+}
+
+/** Per-category counts of queued and total HITL items. */
+export async function getHitlCategoryStats() {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.execute(sql`
+    SELECT
+      COALESCE(flag_category, 'uncategorized')              AS category,
+      COUNT(*) FILTER (WHERE status = 'queued')::int        AS queued,
+      COUNT(*)::int                                         AS total
+    FROM hitl_queue
+    GROUP BY flag_category
+    ORDER BY queued DESC, total DESC
+  `);
+  return rows as unknown as Array<{ category: string; queued: number; total: number }>;
 }
 
 // ─── Page Processing Attempts ─────────────────────────────────────────────────
