@@ -598,6 +598,10 @@ export const HITL_FLAG_CATEGORIES = [
   "stage_failure",
   "native_text_divergence",
   "manual_flag",
+  // Infrastructure failure: all configured LLM providers were unreachable or
+  // circuit-broken. No OCR output was produced. Retry en masse when providers recover;
+  // these do NOT require human review of OCR quality.
+  "provider_exhausted",
 ] as const;
 export type HitlFlagCategory = (typeof HITL_FLAG_CATEGORIES)[number];
 

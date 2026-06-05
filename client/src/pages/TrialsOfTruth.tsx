@@ -1150,6 +1150,21 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
             <StatusBadge status={item.status} />
+            {item.flag_category && item.flag_category !== "manual_flag" && (
+              <span className={`text-[10px] rounded px-1.5 py-0.5 border flex-shrink-0 ${
+                item.flag_category === "provider_exhausted"
+                  ? "text-orange-400 bg-orange-400/10 border-orange-400/20"
+                  : item.flag_category === "low_confidence"
+                  ? "text-amber-400 bg-amber-400/10 border-amber-400/20"
+                  : item.flag_category === "native_text_divergence"
+                  ? "text-yellow-400 bg-yellow-400/10 border-yellow-400/20"
+                  : item.flag_category === "stage_failure"
+                  ? "text-red-400 bg-red-400/10 border-red-400/20"
+                  : "text-muted-foreground bg-muted/20 border-border/30"
+              }`}>
+                {item.flag_category.replace(/_/g, " ")}
+              </span>
+            )}
             {item.ocr?.confidence != null && (
               <span className="text-xs text-muted-foreground font-mono">conf: {item.ocr.confidence}%</span>
             )}
@@ -1392,12 +1407,17 @@ const PAGE_SIZE = 25;
 export default function TrialsOfTruth() {
   const { toast } = useToast();
   const [statusFilter, setStatusFilter] = useState<"queued" | "resolved" | "escalated" | "skipped">("queued");
+  // "review" = all categories except provider_exhausted (needs human judgment);
+  // "infrastructure" = only provider_exhausted (needs batch retry, not manual review)
+  const [categoryGroup, setCategoryGroup] = useState<"review" | "infrastructure">("review");
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [activeItemId, setActiveItemId] = useState<number | null>(null);
 
   const { data: items, isLoading, refetch } = trpc.hitl.list.useQuery({
     status: statusFilter,
+    excludeCategory: categoryGroup === "review" ? "provider_exhausted" : undefined,
+    flagCategory:    categoryGroup === "infrastructure" ? "provider_exhausted" : undefined,
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
   });
@@ -1518,6 +1538,22 @@ export default function TrialsOfTruth() {
 
       {/* Filter + bulk actions */}
       <div className="space-y-2">
+        {/* Category group toggle */}
+        <div className="flex items-center gap-2 pb-1">
+          {(["review", "infrastructure"] as const).map(g => (
+            <button key={g} onClick={() => { setCategoryGroup(g); setPage(0); setSelected(new Set()); }}
+              className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+                categoryGroup === g
+                  ? g === "infrastructure" ? "bg-orange-500/20 text-orange-300 border border-orange-500/30" : "bg-primary/20 text-primary border border-primary/30"
+                  : "bg-muted/20 text-muted-foreground hover:text-foreground"
+              }`}>
+              {g === "review" ? "Needs Review" : "⚡ Infrastructure Failures"}
+            </button>
+          ))}
+          <span className="text-xs text-muted-foreground/50">
+            {categoryGroup === "review" ? "Human-reviewable quality issues" : "Provider exhaustion — use Retry All from Archivist's Desk"}
+          </span>
+        </div>
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div className="flex gap-2 flex-wrap">
             {(["queued", "resolved", "escalated", "skipped"] as const).map(s => (

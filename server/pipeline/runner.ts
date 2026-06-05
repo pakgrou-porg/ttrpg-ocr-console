@@ -1901,22 +1901,32 @@ async function _runJob(jobId: number): Promise<number | null> {
       }
       if (lowConfidence) reasonParts.push(`low confidence: ${ocrConfidence}%`);
       if (poorNativeAlignment) reasonParts.push(`native text divergence: ${Math.round(nativeSimilarity! * 100)}% similarity`);
+      // Detect whether all stage failures are due to provider exhaustion (all
+      // configured LLM providers failed/circuit-broke).  These pages produced no
+      // OCR output and need infrastructure recovery, not human review — they get a
+      // dedicated flagCategory and are NOT auto-retried (retrying immediately with
+      // the same downed providers would just loop).
+      const isProviderExhaustion = stagesFailed.length > 0
+        && stagesFailed.every(s => stageErrors[s]?.includes("All configured providers failed"));
+      const resolvedCategory = isProviderExhaustion ? "provider_exhausted"
+        : stagesFailed.length > 0 ? "stage_failure"
+        : poorNativeAlignment ? "native_text_divergence"
+        : "low_confidence";
+
       const hitlItem = await createHitlItem({
         pageId,
         ocrResultId: ocrResultId ?? undefined,
         reason: reasonParts.join(" — "),
-        flagCategory: stagesFailed.length > 0 ? "stage_failure"
-          : poorNativeAlignment ? "native_text_divergence"
-          : "low_confidence",
+        flagCategory: resolvedCategory,
         priority: stagesFailed.includes("ocr_extraction")
           || (confidenceFromModel !== null && ocrConfidence < 50)
           || (poorNativeAlignment && nativeSimilarity! < 0.5) ? "high" : "medium",
       });
-      // Auto-retry pages that had OCR stage failures — this covers transient LLM
-      // errors (timeouts, malformed JSON, etc.) without operator intervention.
-      // Only the initial pipeline run triggers this; retryPageStages does not
-      // auto-re-enqueue on its own failure, preventing infinite loops.
-      if (stagesFailed.includes("ocr_extraction")) {
+      // Auto-retry pages that had OCR stage failures — covers transient LLM errors
+      // (timeouts, malformed JSON) without operator intervention.
+      // Provider exhaustion is excluded: retrying immediately while all providers
+      // are down just fails again; use bulk retry from the dashboard instead.
+      if (stagesFailed.includes("ocr_extraction") && !isProviderExhaustion) {
         enqueuePageRetry(
           pageId,
           stagesFailed.filter((s): s is RetryStage => s === "layout_analysis" || s === "bbox_detection" || s === "ocr_extraction"),

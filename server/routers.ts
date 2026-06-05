@@ -24,7 +24,7 @@ import {
   getPageById, getPageByPhash, createDocumentPage, updateDocumentPage,
   getPagesByIds, getDocumentsByIds, getOcrResultsByPageIds,
   getOcrResultByPageId, getOcrResultById, createOcrResult, updateOcrResult,
-  getHitlItemById, getHitlItemsByIds, getHitlItemsByPageId, getAllHitlItems, createHitlItem, updateHitlItem, getHitlStats,
+  getHitlItemById, getHitlItemsByIds, getHitlItemsByPageId, getAllHitlItems, createHitlItem, updateHitlItem, getHitlStats, getHitlCategoryStats, getHitlItemsQueuedByCategory,
   getHitlRetryAttemptsByPageId, getHitlRetryAttemptsByPageIds, getHitlRetryAttemptsByPage,
   getLatestRetryStatusByPageIds, getPageIdsWithFallback, getLatestHitlReasonByPageIds,
   getAllGameSystems, createGameSystem, updateGameSystem, deleteGameSystem,
@@ -2094,6 +2094,8 @@ export const appRouter = router({
       .input(z.object({
         status: z.enum(HITL_STATUSES).optional(),
         priority: z.enum(HITL_PRIORITIES).optional(),
+        flagCategory: z.string().max(64).optional(),
+        excludeCategory: z.string().max(64).optional(),
         limit: z.number().int().min(1).max(2000).optional(),
         offset: z.number().int().min(0).optional(),
       }).optional())
@@ -2101,6 +2103,8 @@ export const appRouter = router({
         const items = await getAllHitlItems({
           status: input?.status,
           priority: input?.priority,
+          flagCategory: input?.flagCategory,
+          excludeCategory: input?.excludeCategory,
           limit: input?.limit ?? 50,
           offset: input?.offset ?? 0,
         });
@@ -2428,6 +2432,25 @@ export const appRouter = router({
           resolvedAt: new Date(),
         })));
         return { success: true, count: input.ids.length };
+      }),
+
+    /** Counts of queued and total HITL items broken down by flagCategory. */
+    categoryStats: protectedProcedure.query(() => getHitlCategoryStats()),
+
+    /** Enqueue a pipeline retry for every queued HITL item of a given flagCategory.
+     *  Intended for mass recovery after infrastructure failures (e.g. provider_exhausted)
+     *  or to re-run quality-failed pages after a model improvement. */
+    bulkRetryByCategory: adminProcedure
+      .input(z.object({
+        category: z.string().max(64),
+        stages: z.array(z.enum(["layout_analysis", "bbox_detection", "ocr_extraction"])).min(1),
+      }))
+      .mutation(async ({ input }) => {
+        const items = await getHitlItemsQueuedByCategory(input.category);
+        for (const item of items) {
+          enqueuePageRetry(item.pageId, input.stages as RetryStage[], item.id, {});
+        }
+        return { success: true, enqueued: items.length };
       }),
 
     /** Get the next unreviewed item (oldest critical/high/medium/low queued or in_progress) */
