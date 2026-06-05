@@ -63,8 +63,9 @@ describe("health.database", () => {
 describe("health.all", () => {
   // health.all probes every active LLM provider — in CI that hits real network
   // endpoints and exceeds the 5 s test timeout.  Stub it out for this block only.
-  beforeEach(() => { vi.spyOn(db, "getAllLlmProviders").mockResolvedValue([]); });
-  afterEach(() => { vi.restoreAllMocks(); });
+  let providersSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => { providersSpy = vi.spyOn(db, "getAllLlmProviders").mockResolvedValue([]); });
+  afterEach(() => { providersSpy.mockRestore(); });
 
   it("returns status for all services for authenticated users", async () => {
     const caller = appRouter.createCaller(makeCtx());
