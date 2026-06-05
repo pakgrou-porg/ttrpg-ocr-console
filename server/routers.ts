@@ -28,7 +28,7 @@ import {
   getHitlRetryAttemptsByPageId, getHitlRetryAttemptsByPageIds, getHitlRetryAttemptsByPage,
   getLatestRetryStatusByPageIds, getPageIdsWithFallback, getLatestHitlReasonByPageIds,
   getAllGameSystems, createGameSystem, updateGameSystem, deleteGameSystem,
-  getLlmMetricsByPage, getLlmMetricsJobSummary, getLlmMetricsPageSummary, getLlmProviderMetricsSummary,
+  getLlmMetricsByPage, getLlmMetricsJobSummary, getLlmMetricsPageSummary, getLlmProviderMetricsSummary, getStageArtificerMetrics,
   getContentSummariesByDocument, updateContentSummary,
 } from "./db";
 import { encryptSecret, decryptSecret, storeSecretHint, renderMaskedSecret } from "./crypto";
@@ -2887,6 +2887,9 @@ export const appRouter = router({
 
     /** Aggregate pipeline health stats for the Oversee the Scribes dashboard. */
     stats: protectedProcedure.query(() => getPipelineStats()),
+
+    /** Per-stage, per-provider (Artificer) call counts, failure rates, and latency. */
+    stageMetrics: protectedProcedure.query(() => getStageArtificerMetrics()),
 
     /** Provider exchange logs — ring buffer of last 21 per provider. Optionally filter by providerId. */
     exchangeLogs: adminProcedure

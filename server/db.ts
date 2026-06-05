@@ -1906,3 +1906,36 @@ export async function getLlmProviderMetricsSummary(days = 7) {
     total_tokens: number; failure_count: number; fallback_count: number; success_rate: number;
   }>;
 }
+
+/**
+ * All-time metrics grouped by (stage, provider_name).
+ * Returns one row per (stage × provider) with pass/fail counts and latency.
+ */
+export async function getStageArtificerMetrics() {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.execute(sql`
+    SELECT
+      stage,
+      COALESCE(provider_name, '(unknown)')                        AS provider_name,
+      COUNT(*)::int                                               AS call_count,
+      COUNT(*) FILTER (WHERE success = false)::int                AS failure_count,
+      ROUND(AVG(duration_ms))::int                               AS avg_duration_ms,
+      MAX(duration_ms)::int                                      AS peak_duration_ms,
+      SUM(tokens_used)::bigint                                   AS total_tokens,
+      COUNT(*) FILTER (WHERE is_fallback = true)::int             AS fallback_count
+    FROM llm_timing_metrics
+    GROUP BY stage, provider_name
+    ORDER BY stage, call_count DESC
+  `);
+  return rows as unknown as Array<{
+    stage: string;
+    provider_name: string;
+    call_count: number;
+    failure_count: number;
+    avg_duration_ms: number;
+    peak_duration_ms: number;
+    total_tokens: number;
+    fallback_count: number;
+  }>;
+}

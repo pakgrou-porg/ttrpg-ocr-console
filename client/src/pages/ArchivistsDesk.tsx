@@ -1,6 +1,6 @@
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Layers, Activity, RefreshCw, Loader2 } from "lucide-react";
+import { Layers, Activity, RefreshCw, Loader2, Cpu } from "lucide-react";
 import { toast } from "sonner";
 
 // ─── Pipeline Funnel ────────────────────────────────────────────────────────
@@ -209,13 +209,162 @@ function PipelineFunnel({ pStats, onRescan, rescanPending }: {
   );
 }
 
+// ─── Artificer Performance ──────────────────────────────────────────────────
+
+type StageMetricRow = {
+  stage: string;
+  provider_name: string;
+  call_count: number;
+  failure_count: number;
+  avg_duration_ms: number;
+  peak_duration_ms: number;
+  total_tokens: number;
+  fallback_count: number;
+};
+
+const STAGE_LABELS: Record<string, string> = {
+  layout_analysis:      "Layout Analysis",
+  bbox_detection:       "Region Detection",
+  ocr_extraction:       "OCR Extraction",
+  tabular_extraction:   "Table Extraction",
+  document_intelligence:"Doc Intelligence",
+  content_break_detect: "Content Break Detect",
+  section_summary:      "Section Summary",
+  pdf_column_detect:    "Column Detection",
+};
+
+const STAGE_ORDER = [
+  "layout_analysis", "bbox_detection", "ocr_extraction",
+  "tabular_extraction", "document_intelligence", "content_break_detect",
+  "section_summary", "pdf_column_detect",
+];
+
+function fmt(ms: number) {
+  if (ms >= 10_000) return `${(ms / 1000).toFixed(1)}s`;
+  if (ms >= 1000)   return `${(ms / 1000).toFixed(2)}s`;
+  return `${ms}ms`;
+}
+
+function ArtificerPerformance({ rows }: { rows: StageMetricRow[] | undefined }) {
+  if (!rows || rows.length === 0) {
+    return (
+      <Card className="bg-card/50 backdrop-blur-sm border-border/50">
+        <CardHeader className="pb-2 pt-3 px-4 border-b border-border/50">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Cpu className="w-4 h-4 text-primary" />
+            Artificer Performance by Stage
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-6 text-center text-muted-foreground text-sm">
+          No LLM call metrics yet. Run an ingestion job to populate this view.
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // Group rows by stage, preserving STAGE_ORDER then any extras alphabetically
+  const byStage = new Map<string, StageMetricRow[]>();
+  for (const row of rows) {
+    const list = byStage.get(row.stage) ?? [];
+    list.push(row);
+    byStage.set(row.stage, list);
+  }
+  const stageKeys = [
+    ...STAGE_ORDER.filter(s => byStage.has(s)),
+    ...Array.from(byStage.keys()).filter(s => !STAGE_ORDER.includes(s)).sort(),
+  ];
+
+  return (
+    <Card className="bg-card/50 backdrop-blur-sm border-border/50">
+      <CardHeader className="pb-2 pt-3 px-4 border-b border-border/50">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Cpu className="w-4 h-4 text-primary" />
+          Artificer Performance by Stage
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="p-0">
+        <div className="divide-y divide-border/30">
+          {stageKeys.map(stage => {
+            const providers = byStage.get(stage)!;
+            const stageTotal   = providers.reduce((s, r) => s + r.call_count, 0);
+            const stageFailed  = providers.reduce((s, r) => s + r.failure_count, 0);
+            const stagePassed  = stageTotal - stageFailed;
+            const stageLabel   = STAGE_LABELS[stage] ?? stage;
+
+            return (
+              <div key={stage}>
+                {/* Stage header */}
+                <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-4 px-4 py-2 bg-muted/10 items-center">
+                  <span className="text-xs font-semibold text-foreground/80 uppercase tracking-wide">{stageLabel}</span>
+                  <span className="text-xs text-muted-foreground/50 text-right">Pass</span>
+                  <span className="text-xs text-muted-foreground/50 text-right">Fail</span>
+                  <span className="text-xs text-muted-foreground/50 text-right">Avg</span>
+                  <span className="text-xs text-muted-foreground/50 text-right">Peak</span>
+                </div>
+
+                {/* Stage totals row (shown only when multiple providers) */}
+                {providers.length > 1 && (
+                  <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-4 px-4 py-1 items-center border-b border-border/20">
+                    <span className="text-[11px] text-muted-foreground italic pl-2">All providers</span>
+                    <span className="text-xs font-bold text-green-400 text-right tabular-nums">{stagePassed.toLocaleString()}</span>
+                    <span className={`text-xs font-bold text-right tabular-nums ${stageFailed > 0 ? "text-red-400" : "text-muted-foreground/40"}`}>
+                      {stageFailed > 0 ? stageFailed.toLocaleString() : "—"}
+                    </span>
+                    <span className="text-xs text-muted-foreground/50 text-right">—</span>
+                    <span className="text-xs text-muted-foreground/50 text-right">—</span>
+                  </div>
+                )}
+
+                {/* Per-provider rows */}
+                {providers.map(row => {
+                  const passed = row.call_count - row.failure_count;
+                  const failRate = row.call_count > 0
+                    ? Math.round((row.failure_count / row.call_count) * 100)
+                    : 0;
+                  return (
+                    <div
+                      key={row.provider_name}
+                      className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-4 px-4 py-1.5 items-center hover:bg-muted/10 transition-colors"
+                    >
+                      <div className="flex items-center gap-1.5 min-w-0 pl-4">
+                        <span className="text-xs text-foreground/80 truncate">{row.provider_name}</span>
+                        {row.fallback_count > 0 && (
+                          <span className="text-[10px] text-amber-400/70 bg-amber-400/10 border border-amber-400/20 rounded px-1 flex-shrink-0">
+                            fallback
+                          </span>
+                        )}
+                        {failRate >= 20 && (
+                          <span className="text-[10px] text-red-400/70 bg-red-400/10 border border-red-400/20 rounded px-1 flex-shrink-0">
+                            {failRate}% fail
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-xs font-bold text-green-400 text-right tabular-nums">{passed.toLocaleString()}</span>
+                      <span className={`text-xs font-bold text-right tabular-nums ${row.failure_count > 0 ? "text-red-400" : "text-muted-foreground/40"}`}>
+                        {row.failure_count > 0 ? row.failure_count.toLocaleString() : "—"}
+                      </span>
+                      <span className="text-xs text-muted-foreground text-right tabular-nums">{fmt(row.avg_duration_ms)}</span>
+                      <span className="text-xs text-muted-foreground/70 text-right tabular-nums">{fmt(row.peak_duration_ms)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 // ─── Main Component ─────────────────────────────────────────────────────────
 
 export default function ArchivistsDesk() {
   const utils = trpc.useUtils();
 
-  const { data: pStats } = trpc.pipeline.stats.useQuery(undefined, { refetchInterval: 15000 });
-  const { data: jStats } = trpc.jobs.stats.useQuery(undefined, { refetchInterval: 15000 });
+  const { data: pStats }        = trpc.pipeline.stats.useQuery(undefined, { refetchInterval: 15000 });
+  const { data: jStats }        = trpc.jobs.stats.useQuery(undefined, { refetchInterval: 15000 });
+  const { data: stageMetrics }  = trpc.pipeline.stageMetrics.useQuery(undefined, { refetchInterval: 30000 });
 
   const bboxRescanMutation = trpc.pipeline.enqueueBboxRescan.useMutation({
     onSuccess: (data) => {
@@ -391,6 +540,9 @@ export default function ArchivistsDesk() {
         onRescan={() => bboxRescanMutation.mutate()}
         rescanPending={bboxRescanMutation.isPending}
       />
+
+      {/* Artificer Performance — full width */}
+      <ArtificerPerformance rows={stageMetrics as StageMetricRow[] | undefined} />
     </div>
   );
 }
