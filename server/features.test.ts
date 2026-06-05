@@ -13,6 +13,14 @@ vi.mock("./_core/llm", () => ({
   }),
 }));
 
+// health.all probes every active LLM provider — in CI that would hit real
+// network endpoints and exceed the 5 s test timeout.  Return empty so the
+// shape check completes instantly without network I/O.
+vi.mock("./db", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("./db")>();
+  return { ...mod, getAllLlmProviders: vi.fn().mockResolvedValue([]) };
+});
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function makeCtx(role: "admin" | "user" = "user"): TrpcContext {
