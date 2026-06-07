@@ -1,6 +1,7 @@
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Layers, Activity, RefreshCw, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Layers, Activity, RefreshCw, Loader2, Cpu, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 
 // ─── Pipeline Funnel ────────────────────────────────────────────────────────
@@ -209,13 +210,276 @@ function PipelineFunnel({ pStats, onRescan, rescanPending }: {
   );
 }
 
+// ─── HITL Category Panel ────────────────────────────────────────────────────
+
+type CategoryStat = { category: string; queued: number; total: number };
+
+/** Human-readable label, description, and default retry stages per flagCategory. */
+const CATEGORY_META: Record<string, {
+  label: string;
+  description: string;
+  color: string;
+  retryStages: ("layout_analysis" | "bbox_detection" | "ocr_extraction")[];
+}> = {
+  provider_exhausted: {
+    label: "Provider Exhausted",
+    description: "All configured LLM providers failed or were circuit-broken. No OCR output produced.",
+    color: "text-orange-400",
+    retryStages: ["layout_analysis", "bbox_detection", "ocr_extraction"],
+  },
+  stage_failure: {
+    label: "Stage Failure",
+    description: "One or more pipeline stages returned an error (malformed JSON, timeout, etc.).",
+    color: "text-red-400",
+    retryStages: ["ocr_extraction"],
+  },
+  low_confidence: {
+    label: "Low Confidence",
+    description: "OCR model returned a confidence score below the configured threshold.",
+    color: "text-amber-400",
+    retryStages: ["ocr_extraction"],
+  },
+  native_text_divergence: {
+    label: "Native Text Divergence",
+    description: "OCR output diverges significantly from the embedded PDF text layer.",
+    color: "text-yellow-400",
+    retryStages: ["ocr_extraction"],
+  },
+  manual_flag: {
+    label: "Manual Flag",
+    description: "Manually flagged for review.",
+    color: "text-blue-400",
+    retryStages: [],
+  },
+};
+
+function HitlCategoryPanel({ stats, onRetried }: {
+  stats: CategoryStat[] | undefined;
+  onRetried: () => void;
+}) {
+  const bulkRetry = trpc.hitl.bulkRetryByCategory.useMutation({
+    onSuccess: (r) => { toast.success(`Enqueued ${r.enqueued} page${r.enqueued !== 1 ? "s" : ""} for retry.`); onRetried(); },
+    onError: (e) => toast.error(`Retry failed: ${e.message}`),
+  });
+
+  const active = (stats ?? []).filter(s => s.queued > 0);
+  if (active.length === 0) return null;
+
+  return (
+    <Card className="bg-card/50 backdrop-blur-sm border-border/50">
+      <CardHeader className="pb-2 pt-3 px-4 border-b border-border/50">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 text-amber-400" />
+          HITL Failure Categories
+          <span className="text-xs text-muted-foreground font-normal ml-1">
+            — queued items by root cause
+          </span>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="p-0">
+        <div className="divide-y divide-border/30">
+          {active.map(stat => {
+            const meta = CATEGORY_META[stat.category];
+            const label = meta?.label ?? stat.category;
+            const color = meta?.color ?? "text-muted-foreground";
+            const stages = meta?.retryStages ?? [];
+            return (
+              <div key={stat.category} className="flex items-center gap-4 px-4 py-3">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-sm font-semibold ${color}`}>{label}</span>
+                    <span className="text-xs bg-muted/30 rounded px-1.5 py-0.5 tabular-nums">
+                      {stat.queued} queued
+                      {stat.total > stat.queued && (
+                        <span className="text-muted-foreground/60"> / {stat.total} total</span>
+                      )}
+                    </span>
+                  </div>
+                  {meta?.description && (
+                    <p className="text-xs text-muted-foreground/70 mt-0.5">{meta.description}</p>
+                  )}
+                </div>
+                {stages.length > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="flex-shrink-0 gap-1.5 text-xs"
+                    disabled={bulkRetry.isPending || stat.queued === 0}
+                    onClick={() => {
+                      if (!confirm(`Enqueue retry for all ${stat.queued} "${label}" page${stat.queued !== 1 ? "s" : ""}?\n\nStages: ${stages.join(", ")}`)) return;
+                      bulkRetry.mutate({ category: stat.category, stages });
+                    }}
+                  >
+                    {bulkRetry.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                    Retry All
+                  </Button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─── Artificer Performance ──────────────────────────────────────────────────
+
+type StageMetricRow = {
+  stage: string;
+  provider_name: string;
+  call_count: number;
+  failure_count: number;
+  avg_duration_ms: number;
+  peak_duration_ms: number;
+  total_tokens: number;
+  fallback_count: number;
+};
+
+const STAGE_LABELS: Record<string, string> = {
+  layout_analysis:      "Layout Analysis",
+  bbox_detection:       "Region Detection",
+  ocr_extraction:       "OCR Extraction",
+  tabular_extraction:   "Table Extraction",
+  document_intelligence:"Doc Intelligence",
+  content_break_detect: "Content Break Detect",
+  section_summary:      "Section Summary",
+  pdf_column_detect:    "Column Detection",
+};
+
+const STAGE_ORDER = [
+  "layout_analysis", "bbox_detection", "ocr_extraction",
+  "tabular_extraction", "document_intelligence", "content_break_detect",
+  "section_summary", "pdf_column_detect",
+];
+
+function fmt(ms: number) {
+  if (ms >= 10_000) return `${(ms / 1000).toFixed(1)}s`;
+  if (ms >= 1000)   return `${(ms / 1000).toFixed(2)}s`;
+  return `${ms}ms`;
+}
+
+function ArtificerPerformance({ rows }: { rows: StageMetricRow[] | undefined }) {
+  if (!rows || rows.length === 0) {
+    return (
+      <Card className="bg-card/50 backdrop-blur-sm border-border/50">
+        <CardHeader className="pb-2 pt-3 px-4 border-b border-border/50">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Cpu className="w-4 h-4 text-primary" />
+            Artificer Performance by Stage
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-6 text-center text-muted-foreground text-sm">
+          No LLM call metrics yet. Run an ingestion job to populate this view.
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // Group rows by stage, preserving STAGE_ORDER then any extras alphabetically
+  const byStage = new Map<string, StageMetricRow[]>();
+  for (const row of rows) {
+    const list = byStage.get(row.stage) ?? [];
+    list.push(row);
+    byStage.set(row.stage, list);
+  }
+  const stageKeys = [
+    ...STAGE_ORDER.filter(s => byStage.has(s)),
+    ...Array.from(byStage.keys()).filter(s => !STAGE_ORDER.includes(s)).sort(),
+  ];
+
+  return (
+    <Card className="bg-card/50 backdrop-blur-sm border-border/50">
+      <CardHeader className="pb-2 pt-3 px-4 border-b border-border/50">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Cpu className="w-4 h-4 text-primary" />
+          Artificer Performance by Stage
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="p-0">
+        <div className="divide-y divide-border/30">
+          {stageKeys.map(stage => {
+            const providers = byStage.get(stage)!;
+            const stageTotal   = providers.reduce((s, r) => s + r.call_count, 0);
+            const stageFailed  = providers.reduce((s, r) => s + r.failure_count, 0);
+            const stagePassed  = stageTotal - stageFailed;
+            const stageLabel   = STAGE_LABELS[stage] ?? stage;
+
+            return (
+              <div key={stage}>
+                {/* Stage header */}
+                <div className="grid grid-cols-[1fr_52px_52px_68px_68px] gap-x-4 px-4 py-2 bg-muted/10 items-center">
+                  <span className="text-xs font-semibold text-foreground/80 uppercase tracking-wide">{stageLabel}</span>
+                  <span className="text-xs text-muted-foreground/50 text-right">Pass</span>
+                  <span className="text-xs text-muted-foreground/50 text-right">Fail</span>
+                  <span className="text-xs text-muted-foreground/50 text-right">Avg</span>
+                  <span className="text-xs text-muted-foreground/50 text-right">Peak</span>
+                </div>
+
+                {/* Stage totals row (shown only when multiple providers) */}
+                {providers.length > 1 && (
+                  <div className="grid grid-cols-[1fr_52px_52px_68px_68px] gap-x-4 px-4 py-1 items-center border-b border-border/20">
+                    <span className="text-[11px] text-muted-foreground italic pl-2">All providers</span>
+                    <span className="text-xs font-bold text-green-400 text-right tabular-nums">{stagePassed.toLocaleString()}</span>
+                    <span className={`text-xs font-bold text-right tabular-nums ${stageFailed > 0 ? "text-red-400" : "text-muted-foreground/40"}`}>
+                      {stageFailed > 0 ? stageFailed.toLocaleString() : "—"}
+                    </span>
+                    <span className="text-xs text-muted-foreground/50 text-right">—</span>
+                    <span className="text-xs text-muted-foreground/50 text-right">—</span>
+                  </div>
+                )}
+
+                {/* Per-provider rows */}
+                {providers.map(row => {
+                  const passed = row.call_count - row.failure_count;
+                  const failRate = row.call_count > 0
+                    ? Math.round((row.failure_count / row.call_count) * 100)
+                    : 0;
+                  return (
+                    <div
+                      key={row.provider_name}
+                      className="grid grid-cols-[1fr_52px_52px_68px_68px] gap-x-4 px-4 py-1.5 items-center hover:bg-muted/10 transition-colors"
+                    >
+                      <div className="flex items-center gap-1.5 min-w-0 pl-4">
+                        <span className="text-xs text-foreground/80 truncate">{row.provider_name}</span>
+                        {row.fallback_count > 0 && (
+                          <span className="text-[10px] text-amber-400/70 bg-amber-400/10 border border-amber-400/20 rounded px-1 flex-shrink-0">
+                            fallback
+                          </span>
+                        )}
+                        {failRate >= 20 && (
+                          <span className="text-[10px] text-red-400/70 bg-red-400/10 border border-red-400/20 rounded px-1 flex-shrink-0">
+                            {failRate}% fail
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-xs font-bold text-green-400 text-right tabular-nums">{passed.toLocaleString()}</span>
+                      <span className={`text-xs font-bold text-right tabular-nums ${row.failure_count > 0 ? "text-red-400" : "text-muted-foreground/40"}`}>
+                        {row.failure_count > 0 ? row.failure_count.toLocaleString() : "—"}
+                      </span>
+                      <span className="text-xs text-muted-foreground text-right tabular-nums">{fmt(row.avg_duration_ms)}</span>
+                      <span className="text-xs text-muted-foreground/70 text-right tabular-nums">{fmt(row.peak_duration_ms)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 // ─── Main Component ─────────────────────────────────────────────────────────
 
 export default function ArchivistsDesk() {
   const utils = trpc.useUtils();
 
-  const { data: pStats } = trpc.pipeline.stats.useQuery(undefined, { refetchInterval: 15000 });
-  const { data: jStats } = trpc.jobs.stats.useQuery(undefined, { refetchInterval: 15000 });
+  const { data: pStats }        = trpc.pipeline.stats.useQuery(undefined, { refetchInterval: 15000 });
+  const { data: jStats }        = trpc.jobs.stats.useQuery(undefined, { refetchInterval: 15000 });
+  const { data: stageMetrics }  = trpc.pipeline.stageMetrics.useQuery(undefined, { refetchInterval: 30000 });
+  const { data: categoryStats, refetch: refetchCategoryStats } = trpc.hitl.categoryStats.useQuery(undefined, { refetchInterval: 30000 });
 
   const bboxRescanMutation = trpc.pipeline.enqueueBboxRescan.useMutation({
     onSuccess: (data) => {
@@ -391,6 +655,15 @@ export default function ArchivistsDesk() {
         onRescan={() => bboxRescanMutation.mutate()}
         rescanPending={bboxRescanMutation.isPending}
       />
+
+      {/* HITL failure categories with batch retry */}
+      <HitlCategoryPanel
+        stats={categoryStats as CategoryStat[] | undefined}
+        onRetried={() => { refetchCategoryStats(); }}
+      />
+
+      {/* Artificer Performance — full width */}
+      <ArtificerPerformance rows={stageMetrics as StageMetricRow[] | undefined} />
     </div>
   );
 }

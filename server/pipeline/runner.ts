@@ -65,6 +65,11 @@ CRITICAL layout type rules:
 - cover: the front or back cover image
 - Do NOT use "two_column" or any column count as a layout_type — "columns" is a separate numeric field`;
 
+const PROMPT_COLUMN_LAYOUT_CHECK = `You are determining whether PDF-extracted text comes from a single-column or multi-column page layout.
+You will be shown two text samples from the same page: one read row-by-row (mixing columns onto the same line) and one with each detected column read separately.
+Reply with ONLY a JSON object: {"layout":"single"} if the row-by-row sample reads as coherent prose, or {"layout":"multi"} if the column-separated version reads more coherently.
+Base your answer solely on grammatical flow and sentence continuity.`;
+
 const PROMPT_BBOX_DETECTION = `You are a document content-region detector for TTRPG publications.
 Identify distinct content regions in the page image and estimate each region's bounding box.
 ${STRICT_RULES}
@@ -1266,6 +1271,10 @@ async function _runJob(jobId: number): Promise<number | null> {
   // immediately after this block. Non-fatal: image-only PDFs produce no usable
   // text and simply leave every entry in nativePageTexts as null.
   const nativePageTexts: Array<string | null> = new Array(pageFiles.length).fill(null);
+  // Set by pdf_column_detect below; used by isMultiColumnLayout and layout_analysis context.
+  let detectedDocColumns = 1;
+  let columnGutterPositions: number[] = [];
+  let columnLayoutSampleText: string | null = null;   // layout-mode text for LLM validation
   if (/\.pdf$/i.test(sourceFile)) {
     await updateIngestionJobStatus(jobId, { currentStage: "pdf_text_extract" });
     try {
@@ -1280,6 +1289,30 @@ async function _runJob(jobId: number): Promise<number | null> {
       console.log(`[Pipeline] Job ${jobId}: native PDF text — ${embeddedCount}/${pageFiles.length} pages have embedded text`);
     } catch (err: any) {
       console.warn(`[Pipeline] Job ${jobId}: pdf_text_extract failed (non-fatal): ${err.message}`);
+    }
+
+    // ── Stage: pdf_column_detect (whitespace analysis) ───────────────────────
+    // Run pdftotext -layout on the first page with embedded text to detect
+    // column gutters via whitespace density.  LLM validation follows after
+    // pageIds are known (see block below).  Both steps are non-fatal.
+    const firstTextIdx = nativePageTexts.findIndex(t => t !== null);
+    if (firstTextIdx >= 0) {
+      try {
+        const layoutText = await extractLayoutModePdfTextPage(
+          sourceFile, firstPage + firstTextIdx,
+        );
+        if (hasUsableEmbeddedText(layoutText)) {
+          const { columnCount, gutterPositions } = detectColumnsFromLayoutText(layoutText);
+          if (columnCount > 1) {
+            detectedDocColumns = columnCount;
+            columnGutterPositions = gutterPositions;
+            columnLayoutSampleText = layoutText;
+            console.log(`[Pipeline] Job ${jobId}: pdf_column_detect — whitespace analysis suggests ${columnCount} columns`);
+          }
+        }
+      } catch (err: any) {
+        console.warn(`[Pipeline] Job ${jobId}: pdf_column_detect (whitespace) failed (non-fatal): ${err.message}`);
+      }
     }
   }
 
@@ -1305,6 +1338,49 @@ async function _runJob(jobId: number): Promise<number | null> {
     const nt = nativePageTexts[i];
     if (nt !== null) {
       await updateDocumentPage(pageIds[i], { nativeText: nt, hasEmbeddedText: true });
+    }
+  }
+
+  // ── Stage: pdf_column_detect (LLM validation) ────────────────────────────
+  // Whitespace analysis found a likely gutter — validate by asking the LLM
+  // whether the row-by-row or column-separated reading is more coherent.
+  // A "single" result resets detectedDocColumns to 1 (suppresses false positives).
+  if (columnLayoutSampleText !== null && columnGutterPositions.length > 0 && pageIds.length > 0) {
+    try {
+      await updateIngestionJobStatus(jobId, { currentStage: "pdf_column_detect" });
+      await PAGE_LLM_SEMAPHORE.acquire();
+      try {
+        const columnFlows = reconstructColumnFlows(columnLayoutSampleText, columnGutterPositions);
+        const flatSample = columnLayoutSampleText
+          .split("\n").filter(l => l.trim().length > 0).slice(0, 8).join(" ").trim().slice(0, 800);
+        const colSample = columnFlows
+          .map((f, idx) => `[Column ${idx + 1}]\n${f.split("\n").slice(0, 5).join("\n")}`)
+          .join("\n\n").slice(0, 800);
+        const validationContent: UserContentPart[] = [{
+          type: "text",
+          text: `Row-by-row reading:\n${flatSample}\n\nColumn-separated reading:\n${colSample}\n\nWhich reads as more coherent prose? Reply with ONLY a JSON object.`,
+        }];
+        const result = await invokeStage(
+          "pdf_column_detect",
+          validationContent,
+          undefined,
+          PROMPT_COLUMN_LAYOUT_CHECK,
+          { ...JSON_INVOKE_OPTS },
+          { pageId: pageIds[0], jobId },
+        );
+        const parsed = parseJsonResponse(result.content);
+        if (parsed.layout === "single") {
+          detectedDocColumns = 1;
+          columnGutterPositions = [];
+          console.log(`[Pipeline] Job ${jobId}: pdf_column_detect — LLM overrode to single-column`);
+        } else {
+          console.log(`[Pipeline] Job ${jobId}: pdf_column_detect — LLM confirmed ${detectedDocColumns}-column layout`);
+        }
+      } finally {
+        PAGE_LLM_SEMAPHORE.release();
+      }
+    } catch (err: any) {
+      console.warn(`[Pipeline] Job ${jobId}: pdf_column_detect LLM validation failed (non-fatal): ${err.message}`);
     }
   }
 
@@ -1449,8 +1525,12 @@ async function _runJob(jobId: number): Promise<number | null> {
     const layoutContent: UserContentPart[] = [imgPart, { type: "text", text: "Classify the layout type and structure of this page. Reply with ONLY a JSON object — start with { and end with }." }];
     const bboxContent: UserContentPart[] = [imgPart, { type: "text", text: "Identify all distinct content regions on this page. Reply with ONLY a JSON object — start with { and end with }." }];
 
+    const layoutColumnHint = detectedDocColumns >= 2
+      ? `Native PDF text whitespace analysis detected ${detectedDocColumns} columns on this page.`
+      : undefined;
+
     const [layoutSettled, bboxSettled] = await Promise.allSettled([
-      invokeStage("layout_analysis", layoutContent, undefined, PROMPT_LAYOUT_ANALYSIS,
+      invokeStage("layout_analysis", layoutContent, layoutColumnHint, PROMPT_LAYOUT_ANALYSIS,
         { ...JSON_INVOKE_OPTS, fewShotExamples: FEW_SHOT_LAYOUT, validateResult: assertLayoutInvokeResult }, { pageId, jobId })
         .then(async r => {
           const data = validateLayoutData(parseJsonResponse(r.content));
@@ -1802,7 +1882,8 @@ async function _runJob(jobId: number): Promise<number | null> {
     // but don't use it to trigger HITL (too many false positives).
     const isMultiColumnLayout = ["two_column", "three_column", "mixed"].includes(
       layoutData.layout_type as string,
-    );
+    ) || (layoutData.columns as number ?? 1) >= 2
+      || detectedDocColumns >= 2;
     const poorNativeAlignment = !isMultiColumnLayout
       && nativeSimilarity !== null
       && nativeSimilarity < NATIVE_SIMILARITY_THRESHOLD;
@@ -1820,22 +1901,32 @@ async function _runJob(jobId: number): Promise<number | null> {
       }
       if (lowConfidence) reasonParts.push(`low confidence: ${ocrConfidence}%`);
       if (poorNativeAlignment) reasonParts.push(`native text divergence: ${Math.round(nativeSimilarity! * 100)}% similarity`);
+      // Detect whether all stage failures are due to provider exhaustion (all
+      // configured LLM providers failed/circuit-broke).  These pages produced no
+      // OCR output and need infrastructure recovery, not human review — they get a
+      // dedicated flagCategory and are NOT auto-retried (retrying immediately with
+      // the same downed providers would just loop).
+      const isProviderExhaustion = stagesFailed.length > 0
+        && stagesFailed.every(s => stageErrors[s]?.includes("All configured providers failed"));
+      const resolvedCategory = isProviderExhaustion ? "provider_exhausted"
+        : stagesFailed.length > 0 ? "stage_failure"
+        : poorNativeAlignment ? "native_text_divergence"
+        : "low_confidence";
+
       const hitlItem = await createHitlItem({
         pageId,
         ocrResultId: ocrResultId ?? undefined,
         reason: reasonParts.join(" — "),
-        flagCategory: stagesFailed.length > 0 ? "stage_failure"
-          : poorNativeAlignment ? "native_text_divergence"
-          : "low_confidence",
+        flagCategory: resolvedCategory,
         priority: stagesFailed.includes("ocr_extraction")
           || (confidenceFromModel !== null && ocrConfidence < 50)
           || (poorNativeAlignment && nativeSimilarity! < 0.5) ? "high" : "medium",
       });
-      // Auto-retry pages that had OCR stage failures — this covers transient LLM
-      // errors (timeouts, malformed JSON, etc.) without operator intervention.
-      // Only the initial pipeline run triggers this; retryPageStages does not
-      // auto-re-enqueue on its own failure, preventing infinite loops.
-      if (stagesFailed.includes("ocr_extraction")) {
+      // Auto-retry pages that had OCR stage failures — covers transient LLM errors
+      // (timeouts, malformed JSON) without operator intervention.
+      // Provider exhaustion is excluded: retrying immediately while all providers
+      // are down just fails again; use bulk retry from the dashboard instead.
+      if (stagesFailed.includes("ocr_extraction") && !isProviderExhaustion) {
         enqueuePageRetry(
           pageId,
           stagesFailed.filter((s): s is RetryStage => s === "layout_analysis" || s === "bbox_detection" || s === "ocr_extraction"),
@@ -2302,6 +2393,106 @@ function normaliseText(text: string): string {
   t = t.replace(/[ \t]+$/gm, "");
   t = t.replace(/\n{3,}/g, "\n\n");
   return t.trim();
+}
+
+/**
+ * Run pdftotext in -layout mode for a single page and return the raw output.
+ * -layout preserves 2D spatial positions with padding spaces, placing both
+ * columns on the same visual line — useful for gap-based column detection.
+ */
+async function extractLayoutModePdfTextPage(pdfPath: string, pageNumber: number): Promise<string> {
+  const { stdout } = await execFileAsync(
+    "pdftotext",
+    ["-layout", "-f", String(pageNumber), "-l", String(pageNumber), pdfPath, "-"],
+    { timeout: 30_000 },
+  );
+  return stdout.split("\f")[0] ?? "";
+}
+
+/**
+ * Detect column layout from pdftotext -layout output by analyzing whitespace
+ * gap density across the first sampleRows non-trivial lines.
+ *
+ * Returns the detected column count (1–3) and gutter center positions.
+ * A "gutter" is a column-spanning run of whitespace that consistently appears
+ * across most sampled lines — the textual equivalent of a column separator.
+ */
+function detectColumnsFromLayoutText(
+  layoutText: string,
+  sampleRows = 10,
+): { columnCount: 1 | 2 | 3; gutterPositions: number[] } {
+  const lines = layoutText
+    .split("\n")
+    .filter(l => l.trim().length >= 20)
+    .slice(0, sampleRows);
+
+  if (lines.length < 3) return { columnCount: 1, gutterPositions: [] };
+
+  const maxWidth = Math.max(...lines.map(l => l.length));
+  if (maxWidth < 40) return { columnCount: 1, gutterPositions: [] };
+
+  // Per-position whitespace density: 1 = space or past end-of-line, 0 = text character
+  const density = new Array(maxWidth).fill(0);
+  for (const line of lines) {
+    for (let pos = 0; pos < maxWidth; pos++) {
+      if (pos >= line.length || line[pos] === " ") density[pos]++;
+    }
+  }
+  const normalized = density.map(v => v / lines.length);
+
+  // Find contiguous gutter regions: ≥ MIN_GUTTER_WIDTH positions all with
+  // density ≥ GUTTER_THRESHOLD, ignoring the leftmost and rightmost margins.
+  const GUTTER_THRESHOLD = 0.65;
+  const MIN_GUTTER_WIDTH = 4;
+  const MARGIN = Math.max(8, Math.floor(maxWidth * 0.08));
+
+  const gutters: Array<{ start: number; end: number }> = [];
+  let inGutter = false;
+  let gutterStart = 0;
+
+  for (let i = MARGIN; i < maxWidth - MARGIN; i++) {
+    if (!inGutter && normalized[i] >= GUTTER_THRESHOLD) {
+      inGutter = true;
+      gutterStart = i;
+    } else if (inGutter && normalized[i] < GUTTER_THRESHOLD) {
+      if (i - gutterStart >= MIN_GUTTER_WIDTH) {
+        gutters.push({ start: gutterStart, end: i });
+      }
+      inGutter = false;
+    }
+  }
+  if (inGutter && (maxWidth - MARGIN) - gutterStart >= MIN_GUTTER_WIDTH) {
+    gutters.push({ start: gutterStart, end: maxWidth - MARGIN });
+  }
+
+  const columnCount = Math.min(3, gutters.length + 1) as 1 | 2 | 3;
+  const gutterPositions = gutters.map(g => Math.floor((g.start + g.end) / 2));
+  return { columnCount, gutterPositions };
+}
+
+/**
+ * Given pdftotext -layout text and column gutter center positions, reconstruct
+ * the reading-order text for each column (left column top-to-bottom, then right).
+ */
+function reconstructColumnFlows(layoutText: string, gutterPositions: number[]): string[] {
+  if (gutterPositions.length === 0) return [layoutText];
+
+  const lines = layoutText.split("\n");
+  const splits: Array<number | typeof Infinity> = [0, ...gutterPositions, Infinity];
+  const columns: string[][] = splits.slice(0, -1).map(() => []);
+
+  for (const line of lines) {
+    for (let col = 0; col < columns.length; col++) {
+      const start = splits[col] as number;
+      const end = splits[col + 1];
+      const segment = end === Infinity ? line.slice(start) : line.slice(start, end as number);
+      columns[col].push(segment.trimEnd());
+    }
+  }
+
+  return columns.map(colLines =>
+    colLines.join("\n").replace(/\n{3,}/g, "\n\n").trim(),
+  );
 }
 
 /**

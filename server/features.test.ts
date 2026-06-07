@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
+import * as db from "./db";
 
 // Mock the LLM helper so tests don't require a real API key.
 // The mock returns a minimal response that satisfies the ramblings.generate
@@ -60,6 +61,12 @@ describe("health.database", () => {
 });
 
 describe("health.all", () => {
+  // health.all probes every active LLM provider — in CI that hits real network
+  // endpoints and exceeds the 5 s test timeout.  Stub it out for this block only.
+  let providersSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => { providersSpy = vi.spyOn(db, "getAllLlmProviders").mockResolvedValue([]); });
+  afterEach(() => { providersSpy.mockRestore(); });
+
   it("returns status for all services for authenticated users", async () => {
     const caller = appRouter.createCaller(makeCtx());
     const result = await caller.health.all();

@@ -1307,12 +1307,14 @@ export async function updateOcrResult(id: number, updates: Partial<InsertOcrResu
 
 const priorityRank = sql`CASE ${hitlQueue.priority} WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 99 END`;
 
-export async function getAllHitlItems(options?: { status?: string; priority?: string; limit?: number; offset?: number; orderByPriority?: boolean }) {
+export async function getAllHitlItems(options?: { status?: string; priority?: string; flagCategory?: string; excludeCategory?: string; limit?: number; offset?: number; orderByPriority?: boolean }) {
   const db = await getDb();
   if (!db) return [];
   const conditions = [];
   if (options?.status) conditions.push(eq(hitlQueue.status, options.status as any));
   if (options?.priority) conditions.push(eq(hitlQueue.priority, options.priority as any));
+  if (options?.flagCategory) conditions.push(eq(hitlQueue.flagCategory, options.flagCategory as any));
+  if (options?.excludeCategory) conditions.push(ne(hitlQueue.flagCategory, options.excludeCategory as any));
 
   const order = options?.orderByPriority
     ? [asc(priorityRank), asc(hitlQueue.createdAt)]
@@ -1400,6 +1402,52 @@ export async function getHitlRetryAttemptsByPage(pageId: number) {
     .where(eq(hitlRetryAttempts.pageId, pageId))
     .orderBy(desc(hitlRetryAttempts.startedAt))
     .limit(10);
+}
+
+/**
+ * Active retry attempts (pending_queue or running) joined with page and document info.
+ * Also includes attempts completed/failed within the last 5 minutes so operators
+ * can see results immediately after a batch retry.
+ */
+export async function getActiveRetryAttempts() {
+  const db = await getDb();
+  if (!db) return [];
+  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+  const rows = await db.execute(sql`
+    SELECT
+      r.id,
+      r.hitl_item_id,
+      r.page_id,
+      r.requested_stages,
+      r.status,
+      r.started_at,
+      r.completed_at,
+      r.confidence,
+      r.previous_confidence,
+      r.confidence_delta,
+      r.stages_failed,
+      r.duration_ms,
+      p.page_number,
+      p.printed_page_label,
+      d.id   AS document_id,
+      COALESCE(d.title, d.filename) AS document_title
+    FROM hitl_retry_attempts r
+    JOIN document_pages p ON r.page_id = p.id
+    JOIN documents d ON p.document_id = d.id
+    WHERE r.status IN ('pending_queue', 'running')
+       OR (r.status IN ('succeeded', 'failed') AND r.completed_at >= ${fiveMinutesAgo})
+    ORDER BY r.started_at ASC
+    LIMIT 500
+  `);
+  return rows as unknown as Array<{
+    id: number; hitl_item_id: number | null; page_id: number;
+    requested_stages: string[]; status: string;
+    started_at: string; completed_at: string | null;
+    confidence: number | null; previous_confidence: number | null; confidence_delta: number | null;
+    stages_failed: string[]; duration_ms: number | null;
+    page_number: number; printed_page_label: string | null;
+    document_id: number; document_title: string;
+  }>;
 }
 
 /** Latest retry attempt status per page — used to show Retry/Error pipeline status badges. */
@@ -1598,6 +1646,31 @@ export async function getHitlStats() {
     byMedium: all.filter(i => i.priority === "medium").length,
     byLow: all.filter(i => i.priority === "low").length,
   };
+}
+
+/** All queued HITL items with a specific flagCategory (used for bulk retry). */
+export async function getHitlItemsQueuedByCategory(category: string) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(hitlQueue).where(
+    and(eq(hitlQueue.flagCategory, category as any), eq(hitlQueue.status, "queued")),
+  );
+}
+
+/** Per-category counts of queued and total HITL items. */
+export async function getHitlCategoryStats() {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.execute(sql`
+    SELECT
+      COALESCE(flag_category, 'uncategorized')              AS category,
+      COUNT(*) FILTER (WHERE status = 'queued')::int        AS queued,
+      COUNT(*)::int                                         AS total
+    FROM hitl_queue
+    GROUP BY flag_category
+    ORDER BY queued DESC, total DESC
+  `);
+  return rows as unknown as Array<{ category: string; queued: number; total: number }>;
 }
 
 // ─── Page Processing Attempts ─────────────────────────────────────────────────
@@ -1904,5 +1977,38 @@ export async function getLlmProviderMetricsSummary(days = 7) {
     provider_id: number | null; provider_name: string | null;
     total_calls: number; avg_duration_ms: number; min_duration_ms: number; max_duration_ms: number;
     total_tokens: number; failure_count: number; fallback_count: number; success_rate: number;
+  }>;
+}
+
+/**
+ * All-time metrics grouped by (stage, provider_name).
+ * Returns one row per (stage × provider) with pass/fail counts and latency.
+ */
+export async function getStageArtificerMetrics() {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.execute(sql`
+    SELECT
+      stage,
+      COALESCE(provider_name, '(unknown)')                        AS provider_name,
+      COUNT(*)::int                                               AS call_count,
+      COUNT(*) FILTER (WHERE success = false)::int                AS failure_count,
+      ROUND(AVG(duration_ms))::int                               AS avg_duration_ms,
+      MAX(duration_ms)::int                                      AS peak_duration_ms,
+      SUM(tokens_used)::bigint                                   AS total_tokens,
+      COUNT(*) FILTER (WHERE is_fallback = true)::int             AS fallback_count
+    FROM llm_timing_metrics
+    GROUP BY stage, provider_name
+    ORDER BY stage, call_count DESC
+  `);
+  return rows as unknown as Array<{
+    stage: string;
+    provider_name: string;
+    call_count: number;
+    failure_count: number;
+    avg_duration_ms: number;
+    peak_duration_ms: number;
+    total_tokens: number;
+    fallback_count: number;
   }>;
 }
