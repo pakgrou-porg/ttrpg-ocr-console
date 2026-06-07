@@ -1839,7 +1839,7 @@ export const appRouter = router({
       .input(z.object({
         documentId: z.number().int(),
         offset: z.number().int().min(0).default(0),
-        limit: z.number().int().min(1).max(50).default(20),
+        limit: z.number().int().min(1).max(500).default(20),
       }))
       .query(async ({ ctx, input }) => {
         assertDocumentAccess(ctx, await getDocumentById(input.documentId));
