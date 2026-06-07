@@ -211,9 +211,8 @@ function HitlSection({
   };
 
   const handleFlag = async () => {
-    if (!reason.trim()) { toast.error("Please enter a reason."); return; }
     try {
-      const result = await flagMutation.mutateAsync({ pageId, reason: reason.trim(), priority });
+      const result = await flagMutation.mutateAsync({ pageId, reason: reason.trim() || "Failed human review", priority });
       if (result.alreadyQueued) toast.info("Page is already queued for HITL review.");
       else toast.success("Page flagged for HITL review.");
       if (selectedStages.size > 0) {
@@ -255,7 +254,7 @@ function HitlSection({
           </div>
           <div className="grid grid-cols-[1fr_auto] gap-2">
             <Textarea value={reason} onChange={e => setReason(e.target.value)}
-              placeholder="Describe the issue: wrong layout, missed regions, poor OCR quality…"
+              placeholder={'Reason (optional — defaults to "Failed human review")'}
               rows={2} className="text-xs resize-none" />
             <Select value={priority} onValueChange={v => setPriority(v as typeof priority)}>
               <SelectTrigger className="w-28 h-9 text-xs self-start"><SelectValue /></SelectTrigger>
@@ -275,7 +274,7 @@ function HitlSection({
               ))}
             </div>
           </div>
-          <Button size="sm" className="gap-1.5 text-xs" onClick={handleFlag} disabled={isBusy || !reason.trim()}>
+          <Button size="sm" className="gap-1.5 text-xs" onClick={handleFlag} disabled={isBusy}>
             {isBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Flag className="w-3.5 h-3.5" />}
             {selectedStages.size > 0 ? "Flag & Re-queue" : "Flag for Review"}
           </Button>

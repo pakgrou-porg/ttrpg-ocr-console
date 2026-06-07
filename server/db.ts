@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, ilike, lte, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import {
@@ -1315,7 +1315,12 @@ export async function getAllHitlItems(options?: { status?: string; priority?: st
   if (options?.status) conditions.push(eq(hitlQueue.status, options.status as any));
   if (options?.priority) conditions.push(eq(hitlQueue.priority, options.priority as any));
   if (options?.flagCategory) conditions.push(eq(hitlQueue.flagCategory, options.flagCategory as any));
-  if (options?.excludeCategory) conditions.push(ne(hitlQueue.flagCategory, options.excludeCategory as any));
+  // Use (IS NULL OR !=) rather than plain != so that rows with a NULL flagCategory
+  // are correctly included.  SQL's != returns NULL for NULL columns, silently
+  // dropping all manually-flagged items (which have no flagCategory set).
+  if (options?.excludeCategory) conditions.push(
+    or(isNull(hitlQueue.flagCategory), ne(hitlQueue.flagCategory, options.excludeCategory as any))!
+  );
 
   const order = options?.orderByPriority
     ? [asc(priorityRank), asc(hitlQueue.createdAt)]
