@@ -1,7 +1,7 @@
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Layers, Activity, RefreshCw, Loader2, Cpu, AlertTriangle } from "lucide-react";
+import { Layers, Activity, RefreshCw, Loader2, Cpu, AlertTriangle, BarChart2, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 
 // ─── Pipeline Funnel ────────────────────────────────────────────────────────
@@ -480,6 +480,12 @@ export default function ArchivistsDesk() {
   const { data: jStats }        = trpc.jobs.stats.useQuery(undefined, { refetchInterval: 15000 });
   const { data: stageMetrics }  = trpc.pipeline.stageMetrics.useQuery(undefined, { refetchInterval: 30000 });
   const { data: categoryStats, refetch: refetchCategoryStats } = trpc.hitl.categoryStats.useQuery(undefined, { refetchInterval: 30000 });
+  const { data: tokenStats, refetch: refetchTokenStats } = trpc.metrics.providerStatsSinceReset.useQuery(undefined, { refetchInterval: 60000 });
+  const { data: resetTimeData } = trpc.metrics.resetTime.useQuery();
+  const resetMetricsMutation = trpc.metrics.reset.useMutation({
+    onSuccess: () => { toast.success("Token stats reset."); refetchTokenStats(); },
+    onError: (err) => toast.error(`Reset failed: ${err.message}`),
+  });
 
   const bboxRescanMutation = trpc.pipeline.enqueueBboxRescan.useMutation({
     onSuccess: (data) => {
@@ -664,6 +670,65 @@ export default function ArchivistsDesk() {
 
       {/* Artificer Performance — full width */}
       <ArtificerPerformance rows={stageMetrics as StageMetricRow[] | undefined} />
+
+      {/* Token Usage by Provider */}
+      {tokenStats && tokenStats.some(s => s.total_calls > 0) && (
+        <Card className="bg-card/50 backdrop-blur-sm border-border/50">
+          <CardHeader className="pb-2 pt-3 px-4 border-b border-border/50">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <BarChart2 className="w-4 h-4 text-violet-400" />
+                Token Usage by Artificer
+                <span className="text-xs font-normal text-muted-foreground">
+                  {resetTimeData?.resetAt
+                    ? `since ${new Date(resetTimeData.resetAt).toLocaleDateString()}`
+                    : "(all-time)"}
+                </span>
+              </CardTitle>
+              <button
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                onClick={() => resetMetricsMutation.mutate()}
+                disabled={resetMetricsMutation.isPending}
+              >
+                {resetMetricsMutation.isPending
+                  ? <Loader2 className="h-3 w-3 animate-spin" />
+                  : <RotateCcw className="h-3 w-3" />}
+                Reset
+              </button>
+            </div>
+          </CardHeader>
+          <CardContent className="p-4">
+            {/* Column headers */}
+            <div className="grid grid-cols-[minmax(0,1fr)_5rem_5rem_5rem_4rem_4rem] gap-x-3 text-[10px] text-muted-foreground/60 uppercase tracking-wide pb-2 border-b border-border/30 mb-2">
+              <span>Provider</span>
+              <span className="text-right">Calls</span>
+              <span className="text-right">Tokens</span>
+              <span className="text-right">Avg ms</span>
+              <span className="text-right">Success</span>
+              <span className="text-right">Fallbacks</span>
+            </div>
+            <div className="space-y-1.5">
+              {tokenStats.filter(s => s.total_calls > 0).map(s => {
+                const fmtTokens = (n: number) => n >= 1_000_000 ? `${(n/1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n/1000).toFixed(0)}K` : String(n);
+                return (
+                  <div key={s.provider_id ?? s.provider_name} className="grid grid-cols-[minmax(0,1fr)_5rem_5rem_5rem_4rem_4rem] gap-x-3 items-center text-sm">
+                    <span className="truncate text-sm font-medium">{s.provider_name ?? "(unknown)"}</span>
+                    <span className="text-right tabular-nums">{s.total_calls.toLocaleString()}</span>
+                    <span className="text-right tabular-nums">{fmtTokens(s.total_tokens)}</span>
+                    <span className="text-right tabular-nums">{s.avg_duration_ms.toLocaleString()}</span>
+                    <span className={`text-right tabular-nums font-medium ${s.success_rate >= 90 ? "text-green-400" : s.success_rate >= 70 ? "text-amber-400" : "text-red-400"}`}>
+                      {s.success_rate.toFixed(0)}%
+                    </span>
+                    <span className={`text-right tabular-nums ${s.fallback_count > 0 ? "text-amber-400" : "text-muted-foreground"}`}>
+                      {s.fallback_count}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

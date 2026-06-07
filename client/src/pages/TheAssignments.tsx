@@ -218,6 +218,7 @@ interface InscriptionDialogProps {
     primaryProviderId?: number | null;
     secondaryProviderId?: number | null;
     fallbackProviderId?: number | null;
+    providerMode?: string | null;
     promptName?: string | null;
     temperature?: number | null;
     maxTokens?: number | null;
@@ -237,6 +238,9 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
   );
   const [fallbackProviderId, setFallbackProviderId] = useState<string>(
     inscription?.fallbackProviderId ? String(inscription.fallbackProviderId) : "none"
+  );
+  const [providerMode, setProviderMode] = useState<"failover" | "load_balance">(
+    (inscription?.providerMode as "failover" | "load_balance") ?? "failover"
   );
 
   // Incantation is auto-assigned from the stage name — no manual picker needed.
@@ -279,6 +283,7 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
       primaryProviderId: primaryProviderId && primaryProviderId !== "none" ? Number(primaryProviderId) : null,
       secondaryProviderId: secondaryProviderId && secondaryProviderId !== "none" ? Number(secondaryProviderId) : null,
       fallbackProviderId: fallbackProviderId && fallbackProviderId !== "none" ? Number(fallbackProviderId) : null,
+      providerMode,
       promptName: autoPromptName,
       promptVersion: isLatest ? null : Number(selectedVersion),
       temperature: temperature !== "" ? Number(temperature) : null,
@@ -379,6 +384,52 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
               Tried after the primary provider and before the cloud fallback. Use this for a second local model profile.
             </p>
           </div>
+
+          {/* Provider Mode — shown only when a secondary is selected */}
+          {secondaryProviderId && secondaryProviderId !== "none" && (
+            <div className="space-y-2">
+              <Label className="flex items-center gap-2">
+                <GitBranch className="h-4 w-4 text-amber-400" />
+                Dual-Provider Mode
+              </Label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setProviderMode("failover")}
+                  className={`flex flex-col items-start gap-1 rounded-lg border p-3 text-left transition-colors ${
+                    providerMode === "failover"
+                      ? "border-amber-500/60 bg-amber-950/30 text-amber-300"
+                      : "border-border/40 bg-muted/20 text-muted-foreground hover:bg-muted/40"
+                  }`}
+                >
+                  <span className="text-sm font-semibold flex items-center gap-1.5">
+                    <ChevronDown className="h-3.5 w-3.5 rotate-[-90deg]" />
+                    Failover
+                  </span>
+                  <span className="text-xs leading-snug">
+                    Secondary tried only when primary fails or returns invalid output.
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setProviderMode("load_balance")}
+                  className={`flex flex-col items-start gap-1 rounded-lg border p-3 text-left transition-colors ${
+                    providerMode === "load_balance"
+                      ? "border-violet-500/60 bg-violet-950/30 text-violet-300"
+                      : "border-border/40 bg-muted/20 text-muted-foreground hover:bg-muted/40"
+                  }`}
+                >
+                  <span className="text-sm font-semibold flex items-center gap-1.5">
+                    <Layers className="h-3.5 w-3.5" />
+                    Load Balance
+                  </span>
+                  <span className="text-xs leading-snug">
+                    Calls alternate between primary and secondary (round-robin), subject to concurrency limits.
+                  </span>
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Fallback Provider */}
           <div className="space-y-2">
@@ -564,9 +615,9 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
 export default function TheAssignments() {
   const [editingStage, setEditingStage] = useState<string | null>(null);
   const [expandedPhases, setExpandedPhases] = useState<Record<string, boolean>>({
-    "Phase 1 — Ingestion & Layout": true,
-    "Phase 2 — OCR Extraction": true,
-    "Phase 3 — Artifact Storage": true,
+    "Phase 1 — Ingestion & Layout": false,
+    "Phase 2 — OCR Extraction": false,
+    "Phase 3 — Artifact Storage": false,
   });
 
   const { data: inscriptions, isLoading, refetch } = trpc.assignments.list.useQuery();
@@ -661,6 +712,7 @@ export default function TheAssignments() {
             primaryProviderId: editingInscription.primaryProvider?.id ?? null,
             secondaryProviderId: editingInscription.secondaryProvider?.id ?? null,
             fallbackProviderId: editingInscription.fallbackProvider?.id ?? null,
+            providerMode: (editingInscription as any).providerMode ?? "failover",
             promptName: editingInscription.promptName ?? null,
             temperature: editingInscription.temperature,
             maxTokens: editingInscription.maxTokens,
@@ -768,11 +820,22 @@ export default function TheAssignments() {
                                 {/* Secondary Provider */}
                                 {inscription.secondaryProvider ? (
                                   <div className="flex items-center gap-2">
-                                    <Badge variant="outline" className="text-[10px] border-violet-500/50 text-violet-300 bg-violet-950/20 flex-shrink-0">Secondary</Badge>
+                                    <Badge variant="outline" className={`text-[10px] flex-shrink-0 ${
+                                      (inscription as any).providerMode === "load_balance"
+                                        ? "border-violet-500/50 text-violet-300 bg-violet-950/20"
+                                        : "border-violet-500/50 text-violet-300 bg-violet-950/20"
+                                    }`}>
+                                      {(inscription as any).providerMode === "load_balance" ? "Balanced" : "Secondary"}
+                                    </Badge>
                                     {providerIcon(inscription.secondaryProvider.providerType)}
                                     <span className="text-sm text-muted-foreground truncate">
                                       {providerLabel(inscription.secondaryProvider)}
                                     </span>
+                                    {(inscription as any).providerMode === "load_balance" && (
+                                      <Badge variant="outline" className="text-[10px] border-violet-400/40 text-violet-400/80 bg-violet-950/10 flex-shrink-0">
+                                        <Layers className="h-2.5 w-2.5 mr-0.5" />round-robin
+                                      </Badge>
+                                    )}
                                   </div>
                                 ) : (
                                   <div className="flex items-center gap-2 text-muted-foreground">

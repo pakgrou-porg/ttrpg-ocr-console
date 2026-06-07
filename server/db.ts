@@ -1948,11 +1948,10 @@ export async function resolveContentSummaryBoundaries(documentId: number, totalP
 }
 
 /** Per-provider summary over the last N days. */
-export async function getLlmProviderMetricsSummary(days = 7) {
+export async function getLlmProviderMetricsSummary(days = 7, sinceOverride?: Date) {
   const db = await getDb();
   if (!db) return [];
-  const since = new Date();
-  since.setDate(since.getDate() - days);
+  const since = sinceOverride ?? new Date(Date.now() - days * 86_400_000);
   const rows = await db.execute(sql`
     SELECT
       provider_id,

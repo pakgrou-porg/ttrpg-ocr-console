@@ -1323,6 +1323,8 @@ export const appRouter = router({
         primaryProviderId: z.number().int().nullable().optional(),
         secondaryProviderId: z.number().int().nullable().optional(),
         fallbackProviderId: z.number().int().nullable().optional(),
+        /** 'failover' = secondary only on primary failure; 'load_balance' = round-robin between primary+secondary */
+        providerMode: z.enum(["failover", "load_balance"]).default("failover").optional(),
         promptName: z.string().max(128).nullable().optional(),
         promptVersion: z.number().int().nullable().optional(),
         temperature: z.number().min(0).max(2).nullable().optional(),
@@ -1336,6 +1338,7 @@ export const appRouter = router({
           primaryProviderId: input.primaryProviderId ?? null,
           secondaryProviderId: input.secondaryProviderId ?? null,
           fallbackProviderId: input.fallbackProviderId ?? null,
+          providerMode: input.providerMode ?? "failover",
           promptName: input.promptName ?? null,
           promptVersion: input.promptVersion ?? null,
           temperature: input.temperature ?? null,
@@ -1353,6 +1356,7 @@ export const appRouter = router({
         primaryProviderId: z.number().int().nullable().optional(),
         secondaryProviderId: z.number().int().nullable().optional(),
         fallbackProviderId: z.number().int().nullable().optional(),
+        providerMode: z.enum(["failover", "load_balance"]).optional(),
         /** Name of the system_prompts record to use for this stage (from Incantations & Runes) */
         promptName: z.string().max(128).nullable().optional(),
         temperature: z.number().min(0).max(2).nullable().optional(),
@@ -2982,6 +2986,36 @@ export const appRouter = router({
     providerSummary: protectedProcedure
       .input(z.object({ days: z.number().int().min(1).max(90).default(7) }))
       .query(({ input }) => getLlmProviderMetricsSummary(input.days)),
+
+    /** Per-provider aggregates since the last reset (or all-time if never reset).
+     *  The reset timestamp is stored in systemConfig key "metrics_reset_at". */
+    providerStatsSinceReset: protectedProcedure.query(async () => {
+      const config = await getAllSystemConfig();
+      const resetEntry = config.find(c => c.key === "metrics_reset_at");
+      const since = resetEntry ? new Date(resetEntry.value) : new Date(0);
+      return getLlmProviderMetricsSummary(9999, since);
+    }),
+
+    /** Stage × provider aggregates (all-time). */
+    stageStats: protectedProcedure.query(() => getStageArtificerMetrics()),
+
+    /** Store the current timestamp as the metrics reset point. */
+    reset: adminProcedure.mutation(async ({ ctx }) => {
+      await upsertSystemConfig({
+        key: "metrics_reset_at",
+        value: new Date().toISOString(),
+        category: "metrics",
+        updatedBy: ctx.user.id,
+      });
+      return { success: true, resetAt: new Date().toISOString() };
+    }),
+
+    /** Return the stored reset timestamp (null if never reset). */
+    resetTime: protectedProcedure.query(async () => {
+      const config = await getAllSystemConfig();
+      const entry = config.find(c => c.key === "metrics_reset_at");
+      return { resetAt: entry?.value ?? null };
+    }),
   }),
 
   // ─── Game Systems ─────────────────────────────────────────────────────────────

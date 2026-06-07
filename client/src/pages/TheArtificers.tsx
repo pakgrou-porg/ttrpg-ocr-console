@@ -15,7 +15,7 @@ import { toast } from "sonner";
 import {
   Cpu, Plus, Trash2, TestTube, Key, Loader2, CheckCircle2, XCircle,
   Wifi, Search, ChevronDown, ChevronUp, Zap, Edit, Info, GitBranch, Star,
-  Eye, RefreshCw, AlertCircle,
+  Eye, RefreshCw, AlertCircle, BarChart2, RotateCcw,
 } from "lucide-react";
 import { PipelineVisualization } from "@/components/PipelineVisualization";
 
@@ -664,6 +664,12 @@ export default function TheArtificers() {
   const { data: providers, isLoading, refetch } = trpc.providers.list.useQuery();
   const { data: providerTypes } = trpc.providers.types.useQuery();
   const { data: topology, isLoading: isTopologyLoading, refetch: refetchTopology } = trpc.assignments.topology.useQuery();
+  const { data: tokenStats, refetch: refetchTokenStats } = trpc.metrics.providerStatsSinceReset.useQuery();
+  const { data: resetTimeData } = trpc.metrics.resetTime.useQuery();
+  const resetMetricsMutation = trpc.metrics.reset.useMutation({
+    onSuccess: () => { toast.success("Token stats reset."); refetchTokenStats(); },
+    onError: (e) => toast.error(e.message),
+  });
 
   const createMutation = trpc.providers.create.useMutation({
     onSuccess: () => { toast.success("Provider forged successfully."); refetch(); setIsCreateOpen(false); },
@@ -897,6 +903,26 @@ export default function TheArtificers() {
 
         {/* ── Artificers (Provider List) Tab ─────────────────────────── */}
         <TabsContent value="providers" className="space-y-4">
+          {/* Token stats reset row */}
+          {(tokenStats?.some(s => s.total_calls > 0)) && (
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span className="flex items-center gap-1.5">
+                <BarChart2 className="h-3.5 w-3.5 text-violet-400" />
+                Token usage
+                {resetTimeData?.resetAt
+                  ? <> since {new Date(resetTimeData.resetAt).toLocaleDateString()}</>
+                  : <> (all-time)</>}
+              </span>
+              <button
+                className="flex items-center gap-1 hover:text-foreground transition-colors"
+                onClick={() => resetMetricsMutation.mutate()}
+                disabled={resetMetricsMutation.isPending}
+              >
+                {resetMetricsMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
+                Reset counters
+              </button>
+            </div>
+          )}
           {isLoading ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-8 w-8 animate-spin text-purple-400" />
@@ -1125,6 +1151,25 @@ export default function TheArtificers() {
                           )}
                         </div>
                       )}
+
+                      {/* Token usage stats */}
+                      {(() => {
+                        const stats = tokenStats?.find(s => s.provider_id === provider.id);
+                        if (!stats || stats.total_calls === 0) return null;
+                        const fmtTokens = (n: number) => n >= 1_000_000 ? `${(n/1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n/1000).toFixed(0)}K` : String(n);
+                        return (
+                          <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-muted-foreground border-t border-border/30 pt-2 mt-1">
+                            <span className="flex items-center gap-1">
+                              <BarChart2 className="h-3 w-3 text-violet-400" />
+                              <span className="font-medium text-foreground">{stats.total_calls.toLocaleString()}</span> calls
+                            </span>
+                            <span><span className="font-medium text-foreground">{fmtTokens(stats.total_tokens)}</span> tokens</span>
+                            <span><span className={`font-medium ${stats.success_rate >= 90 ? "text-green-400" : stats.success_rate >= 70 ? "text-amber-400" : "text-red-400"}`}>{stats.success_rate.toFixed(0)}%</span> success</span>
+                            <span>avg <span className="font-medium text-foreground">{stats.avg_duration_ms.toLocaleString()}ms</span></span>
+                            {stats.fallback_count > 0 && <span className="text-amber-400">{stats.fallback_count} fallbacks</span>}
+                          </div>
+                        );
+                      })()}
 
                       {/* Test result details */}
                       {result && !isTestingThis && (

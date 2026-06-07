@@ -289,6 +289,9 @@ export const stageInscriptions = pgTable("stage_inscriptions", {
   temperature: real("temperature"),
   maxTokens: integer("max_tokens"),
   llmSettings: jsonb("llm_settings").$type<Record<string, unknown>>(),
+  // 'failover' = secondary tried only on primary failure (default)
+  // 'load_balance' = calls alternate between primary and secondary (round-robin)
+  providerMode: varchar("provider_mode", { length: 16 }).notNull().default("failover"),
   isActive: boolean("is_active").default(true).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
