@@ -35,7 +35,10 @@ services:
   #   1. node migrate.mjs  — applies any pending Drizzle SQL migrations
   #   2. node dist/index.js — starts the Express + tRPC server
   console:
-    image: ghcr.io/pakgrou-porg/ttrpg-ocr-console:${IMAGE_TAG:-latest}
+    # ⚠ IMAGE_TAG must NOT have a "v" prefix — CI strips it from git tags.
+    #   git tag v0.2.32  →  Docker image tag  0.2.32  (correct)
+    #                                          v0.2.32 (does NOT exist / will 500)
+    image: ghcr.io/pakgrou-porg/ttrpg-ocr-console:${IMAGE_TAG:-0.2.32}
     restart: unless-stopped
     ports:
       - "${HOST_PORT:-3000}:3000"
@@ -133,7 +136,7 @@ networks:
 #   SERVICE_ROLE_KEY          Supabase service role JWT (from Supabase stack env)
 #
 # OPTIONAL (defaults shown):
-#   IMAGE_TAG                 latest  (pin to semver e.g. "0.2.30" for stability)
+#   IMAGE_TAG                 0.2.32  ← NO "v" prefix (CI strips it; "v0.x.y" tag does not exist)
 #   HOST_PORT                 3000
 #   APP_URL                   http://localhost:3000  (set to public URL for Google OAuth)
 #   ADMIN_EMAIL               (email auto-promoted to admin on every login)
