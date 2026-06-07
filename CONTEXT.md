@@ -4,7 +4,7 @@
 > touching any other file. It is the single source of truth for vocabulary, architecture, and
 > cross-cutting conventions. Update it whenever a table, router, page, env var, or known issue changes.
 >
-> **Current version: v0.2.21** (updated 2026-05-29)
+> **Current version: v0.2.29** (updated 2026-06-07)
 
 ---
 
@@ -19,10 +19,10 @@ comments, or communication causes confusion. This table is the canonical mapping
 | **Listen to Ramblings** | Advanced search / peruse OCR data | `/listen-ramblings` |
 | **Tome of Knowledge** | Game system registry (`game_systems` table) | `/tome-knowledge` |
 | **Divination Omens** | Analytics dashboard (charts, stats) | `/divination-omens` |
-| **Archivist's Desk** | HITL review queue + pipeline metrics dashboard | `/inner-sanctum/archivists-desk` |
-| **Oversee the Scribes** | Job monitor + page browser | `/inner-sanctum/oversee-scribes` |
+| **Archivist's Desk** | HITL review queue + pipeline metrics dashboard (incl. HITL category panel + Artificer Performance) | `/inner-sanctum/archivists-desk` |
+| **Oversee the Scribes** | Job monitor + page browser + Retry Queue panel | `/inner-sanctum/oversee-scribes` |
 | **Arcane Mechanisms** | Service health + system config | `/inner-sanctum/arcane-mechanisms` |
-| **Summoning Rituals** | Document upload / ingest | `/inner-sanctum/summoning-rituals` |
+| **Summoning Rituals** | Document upload / ingest (single file + folder batch) | `/inner-sanctum/summoning-rituals` |
 | **Incantations & Runes** | System prompt management + pipeline output schemas | `/inner-sanctum/incantations-runes` |
 | **Trials of Truth** | HITL retry / re-run pipeline stages | `/inner-sanctum/trials-of-truth` |
 | **The Scrivener's Lens** | OCR text quality inspector (native similarity, normalised text) | `/inner-sanctum/scriveners-lens` |
@@ -48,7 +48,7 @@ comments, or communication causes confusion. This table is the canonical mapping
 **Engine:** PostgreSQL 15 with `pgvector` extension enabled.
 **ORM:** Drizzle ORM (`drizzle-orm/postgres-js`).
 **Migration runner:** `node migrate.mjs` (runs on container startup; uses `drizzle-orm/postgres-js/migrator`).
-**Migration files:** `drizzle/0000_initial_postgres.sql` through `drizzle/0015_hitl_retry_before_snapshot.sql`.
+**Migration files:** `drizzle/0000_initial_postgres.sql` through `drizzle/0016_shallow_leo.sql` (17 files total).
 
 ### Tables
 
@@ -61,7 +61,7 @@ comments, or communication causes confusion. This table is the canonical mapping
 | `system_prompts` | `name`, `content`, `category`, `isActive` | Named prompts for pipeline stages |
 | `prompt_versions` | `promptId`, `content`, `version`, `createdBy` | Version history for prompts |
 | `system_config` | `key`, `value`, `category`, `description` | Key-value store for runtime config |
-| `ingestion_jobs` | `id`, `documentId`, `status`, `startPage`, `endPage`, `blockIndex`, `totalBlocks`, `isPaused` | One row per page-block run; `isPaused` enables pause/resume |
+| `ingestion_jobs` | `id`, `documentId`, `status`, `startPage`, `endPage`, `blockIndex`, `totalBlocks`, `isPaused`, `storageProvider`, `driveFileId`, `pageOffset`, `blockSize` | `storageProvider` ∈ `local \| google_drive`; `isPaused` enables pause/resume |
 | `telemetry_events` | `eventType`, `payload`, `userId` | Append-only event log |
 | `llm_providers` | `id`, `name`, `displayName`, `providerType`, `baseUrl`, `encryptedApiKey`, `modelId`, `isActive`, `isLocal` | Credentials encrypted with `CREDENTIAL_ENCRYPTION_KEY` |
 | `stage_inscriptions` | `stage`, `primaryProviderId`, `secondaryProviderId`, `promptName`, `temperature`, `maxTokens` | Stage → provider mapping; aliased as `modelAssignments` |
@@ -71,11 +71,11 @@ comments, or communication causes confusion. This table is the canonical mapping
 | `document_pages` | `id`, `documentId`, `pageNumber`, `rawPngUrl`, `preprocessedPngUrl`, `thumbnailUrl`, `phash`, `wasPreprocessed`, `preprocessingApplied`, `layoutType`, `contentRegions` (JSONB), `continuityFlags` (JSONB), `structuralBreaks` (JSONB), `pageJsonOutput` (JSONB), `phaseStatus`, `isFlagged`, `ocrCompleted`, `ocrConfidence`, `printedPageLabel`, `nativeText`, `hasEmbeddedText` | `printedPageLabel` = label printed on page (e.g. "i", "42"); differs from sequential `pageNumber` |
 | `ocr_results` | `pageId`, `rawText`, `markdownText`, `normalisedText`, `nativeSimilarity`, `structuredData` (JSONB), `layoutMetadata` (JSONB), `confidence`, `status`, `pass1Model`–`pass4Model`, `correctedText`, `correctedStructuredData`, `auditLog` (JSONB) | `nativeSimilarity` = token F1 vs native PDF text (null if no embedded text layer) |
 | `page_processing_attempts` | `pageId`, `ocrResultId`, `passNumber`, `modelUsed`, `providerName`, `rawTextOutput`, `structuredOutput`, `score`, `wasAccepted`, `processingTimeMs` | One row per LLM pass attempt |
-| `hitl_queue` | `pageId`, `ocrResultId`, `reason`, `flagCategory`, `priority`, `status`, `assignedTo`, `resolvedBy` | `status` ∈ `queued \| in_progress \| resolved \| skipped \| escalated` |
-| `hitl_retry_attempts` | `hitlItemId`, `pageId`, `requestedStages`, `savedCorrectionFields`, `status`, `confidence`, `modelTrace`, `previousConfidence`, `confidenceDelta`, `regionsBefore`, `previousLayoutType` | Before-state snapshot for measuring human intervention quality |
+| `hitl_queue` | `pageId`, `ocrResultId`, `reason`, `flagCategory`, `priority`, `status`, `assignedTo`, `resolvedBy` | `status` ∈ `queued \| in_progress \| resolved \| skipped \| escalated`; `flagCategory` ∈ `HITL_FLAG_CATEGORIES` |
+| `hitl_retry_attempts` | `hitlItemId`, `pageId`, `requestedStages`, `savedCorrectionFields`, `status`, `confidence`, `modelTrace`, `previousConfidence`, `confidenceDelta`, `regionsBefore`, `previousLayoutType`, `previousRegionCount` | Before-state snapshot for measuring human intervention quality |
 | `google_oauth_tokens` | `encryptedAccessToken`, `encryptedRefreshToken`, `expiresAt`, `scope` | Single system-wide Google Drive token; AES-256-GCM encrypted |
-| `llm_timing_metrics` | `jobId`, `pageId`, `stage`, `providerId`, `model`, `durationMs`, `tokensUsed`, `inputTokens`, `outputTokens`, `success` | Append-only LLM call log |
-| `provider_exchange_logs` | `providerId`, `stage`, `jobId`, `pageId`, `model`, `requestMessages`, `requestMeta`, `responseRaw`, `durationMs`, `tokensUsed`, `success`, `errorMessage` | Ring buffer — max `PROVIDER_EXCHANGE_LOG_LIMIT` (21) rows per provider |
+| `llm_timing_metrics` | `jobId`, `pageId`, `stage`, `providerId`, `providerName`, `model`, `durationMs`, `tokensUsed`, `isFallback`, `success`, `errorMessage` | Append-only LLM call log |
+| `provider_exchange_logs` | `providerId`, `providerName`, `stage`, `jobId`, `pageId`, `model`, `requestMessages`, `requestMeta`, `responseRaw`, `durationMs`, `tokensUsed`, `success`, `errorMessage` | Ring buffer — max `PROVIDER_EXCHANGE_LOG_LIMIT` (21) rows per provider |
 | `content_summaries` | `documentId`, `levelType`, `headingText`, `startPageId`, `endPageId`, `shortSummary`, `longSummary`, `keyTerms`, `keyEntities`, `parentId`, `summaryStatus`, `embeddingStatus` | Hierarchical RAG summaries; `levelType` ∈ `chapter \| section \| subsection \| page` |
 
 ### Key Enums / Constant Arrays (defined in `drizzle/schema.ts`)
@@ -90,6 +90,7 @@ LAYOUT_TYPES    — "single_column" | "multi_column" | "mixed" | "image_only" | 
 CONTENT_REGION_TYPES — "body_text" | "heading" | "table" | "image" | "sidebar" | "footer" | "header"
 HITL_PRIORITIES — "low" | "medium" | "high" | "critical"
 HITL_STATUSES   — "queued" | "in_progress" | "resolved" | "skipped" | "escalated"
+HITL_FLAG_CATEGORIES — "provider_exhausted" | "stage_failure" | "low_confidence" | "native_text_divergence" | "manual_flag"
 SUMMARY_LEVELS  — "chapter" | "section" | "subsection" | "page"
 SUPABASE_CONNECTION_TYPES — "supabase_local" | "supabase_cloud" | "postgres_docker"
 ```
@@ -117,12 +118,13 @@ logged-in user), `reviewerProcedure` (reviewer or admin), `adminProcedure` (admi
 | `assignments` | `list`, `byStage`, `upsert`, `update`, `delete`, `stages`, `topology` |
 | `connections` | `list`, `get`, `create`, `update`, `delete`, `setActive`, `test`, `setBootstrapStatus`, `types` |
 | `library` | `listDocuments`, `searchDocuments`, `getDocument`, `getPages`, `getPageWithOcr`, `createDocument`, `updateDocument`, `deleteDocument`, `getByJobId`, `browsePagesWithOcr`, `getPageDetail`, `listPages`, `exportUnsloth`, `addPage`, `upsertOcrResult`, `textQuality`, `exportFull`, `documentStatuses` |
-| `hitl` | `list`, `get`, `stats`, `flag`, `assign`, `resolve`, `skip`, `escalate`, `saveCorrection`, `retryPage`, `getRetryAttempts`, `clear`, `bulkResolve`, `nextUnreviewed`, `exportOcr`, `exportTrainingData` |
-| `pipeline` | `ingestPage`, `submitOcrResult`, `flagPage`, `documentStatus`, `stats`, `exchangeLogs`, `enqueueBboxRescan` |
+| `hitl` | `list`, `get`, `stats`, `flag`, `assign`, `resolve`, `skip`, `escalate`, `saveCorrection`, `retryPage`, `getRetryAttempts`, `clear`, `bulkResolve`, `nextUnreviewed`, `exportOcr`, `exportTrainingData`, `categoryStats`, `bulkRetryByCategory` |
+| `pipeline` | `ingestPage`, `submitOcrResult`, `flagPage`, `documentStatus`, `stats`, `exchangeLogs`, `enqueueBboxRescan`, `stageMetrics`, `retryQueue` |
 | `google` | `status`, `getAccessToken`, `disconnect` |
 | `metrics` | `byPage`, `jobSummary`, `pageSummary`, `providerSummary` |
 | `gameSystems` | `list`, `listAll`, `create`, `update`, `delete` |
 | `summaries` | `listByDocument`, `listByDocumentIds`, `update`, `approve`, `approveAll` |
+| `system` | `notifyOwner` |
 
 ---
 
@@ -137,13 +139,17 @@ logged-in user), `reviewerProcedure` (reviewer or admin), `adminProcedure` (admi
 | **Phase 3** (enrichment) | `artifact_storage`, `embedding_generation`, `database_load` |
 | **Phase 0** (special / standalone) | `voice_of_arkanum`, `referee` |
 
+> **Note:** `pdf_column_detect` is an **internal sub-stage** within the runner (not in `PIPELINE_STAGES`)
+> that runs whitespace density analysis followed by optional LLM validation to detect 1/2/3-column
+> layouts. Results are stored in `document_pages.layoutType` and influence column-aware OCR extraction.
+
 ### Key Pipeline Files
 
 | File | Purpose |
 |---|---|
-| `server/pipeline/runner.ts` | Main orchestrator — `startJob`, `pauseJob`, `resumeJob`, `cancelAllActiveJobs`, `recoverQueuedJobs`, `retryPageStages`, `exportDocumentAsUnsloth` |
+| `server/pipeline/runner.ts` | Main orchestrator (~2739 lines) — `startJob`, `pauseJob`, `resumeJob`, `cancelAllActiveJobs`, `recoverQueuedJobs`, `retryPageStages`, `exportDocumentAsUnsloth`, `detectColumnsFromLayoutText`, `reconstructColumnFlows` |
 | `server/pipeline/invoke.ts` | LLM dispatch — `dispatchToProvider`, circuit breaker (trips after 3 consecutive failures, 5-min cooldown), `fetchWithRetry` |
-| `server/pipeline/config.ts` | Reads `pipeline-config.yaml` (or `PIPELINE_CONFIG_PATH` env var) at startup |
+| `server/pipeline/config.ts` | `pipeline-config.yaml` loader — read once at startup |
 | `server/_core/fetch-retry.ts` | Network resilience — exponential backoff for transient gateway resets |
 
 ### Concurrency Model
@@ -176,6 +182,13 @@ This is passed to LLM stages as a ground-truth hint. `nativeSimilarity` in `ocr_
 token-level F1 between OCR output and native text (null when no embedded text layer exists).
 The Scrivener's Lens page surfaces this for quality inspection.
 
+### Column Detection
+
+`detectColumnsFromLayoutText` analyses whitespace density across sampled lines to detect gutter
+positions and infer 1/2/3-column layout. `reconstructColumnFlows` then splits the pdftotext layout
+output into per-column text flows for correct reading-order OCR. This runs as part of `pdf_text_extract`
+and the result is stored in `document_pages.layoutType`.
+
 ---
 
 ## 5. Critical Shape Contracts
@@ -186,7 +199,7 @@ These are the most common source of type mismatches. Verify before writing any U
 
 ```ts
 {
-  // All HitlQueueItem fields spread at top level (id, pageId, status, priority, reason, ...)
+  // All HitlQueueItem fields spread at top level (id, pageId, status, priority, reason, flagCategory, ...)
   page: {
     number: number | null;   // ← NOTE: page.number, NOT item.pageNumber
     image_url: string | null;
@@ -211,6 +224,26 @@ These are the most common source of type mismatches. Verify before writing any U
   attempts: PageProcessingAttempt[];
   retryAttempts: HitlRetryAttempt[];
 }
+```
+
+### `hitl.categoryStats` — return shape
+
+```ts
+Array<{ category: string; queued: number; total: number }>
+```
+
+### `pipeline.stageMetrics` — return shape (Artificer Performance panel)
+
+```ts
+Array<{
+  stage: string;
+  provider_name: string;
+  call_count: number;
+  failure_count: number;
+  fallback_count: number;
+  avg_duration_ms: number;
+  peak_duration_ms: number;
+}>
 ```
 
 ### `assignments.topology` — stage topology shape
@@ -313,7 +346,7 @@ management.
 - **Never filter ownership in JavaScript post-query.** Always push
   `WHERE ownerUserId = ? OR visibility = 'global'` into the Drizzle SQL query.
   (`listDocuments` and `searchDocuments` currently violate this — see Known Issues.)
-- All database helpers live in `server/db.ts`. Procedures in `server/routers.ts` call helpers, not raw SQL.
+- All database helpers live in `server/db.ts` (~2014 lines). Procedures in `server/routers.ts` call helpers, not raw SQL.
 - Timestamps are stored as UTC `timestamp` columns. Frontend converts to local timezone with
   `new Date(ts).toLocaleString()`.
 
@@ -342,12 +375,26 @@ management.
 - Drizzle tracks applied migrations in the `__drizzle_migrations` table.
 - To add a migration: edit `drizzle/schema.ts`, run `pnpm db:push` locally (generates SQL + updates
   journal), commit both the `.sql` file and the updated `drizzle/meta/_journal.json`.
+- SSL mode is driven by the connection string: include `?sslmode=disable` for self-hosted Docker
+  bridge networks; omit for Supabase Cloud (TLS is required).
+
+### HITL Category System
+
+Five `flagCategory` values drive the Archivist's Desk category panel and bulk retry:
+
+| Category | Meaning | Default retry stages |
+|---|---|---|
+| `provider_exhausted` | All providers failed / circuit-broken | layout_analysis, bbox_detection, ocr_extraction |
+| `stage_failure` | Malformed JSON, timeout, or other stage error | ocr_extraction |
+| `low_confidence` | Confidence below configured threshold | ocr_extraction |
+| `native_text_divergence` | OCR diverges significantly from embedded PDF text | ocr_extraction |
+| `manual_flag` | Manually flagged by a reviewer | (none — manual selection) |
 
 ---
 
 ## 9. Known Issues and Pending Work
 
-### TypeScript Errors (22 total as of v0.2.21)
+### TypeScript Errors (22 total as of v0.2.29)
 
 | File | Error | Fix |
 |---|---|---|
@@ -355,7 +402,7 @@ management.
 | `BboxRegionEditor.tsx:349,356,490` | `Partial<Box>` not assignable to intersection type | Widen the `bbox` prop type or cast explicitly |
 | `DriveFilePicker.tsx:21` + `Map.tsx:85,144` | `google` global declaration conflict between `@types/google.maps` and `@types/google.picker` | Add `/// <reference types="@types/google.maps" />` to DriveFilePicker; remove duplicate declaration in Map.tsx |
 | `TrialsOfTruth.tsx:596` | `any[][]` not assignable to `[string, unknown][]` | Add explicit type annotation |
-| `runner.ts:2429` | Cannot find module `sharp` | Run `pnpm add sharp` and ensure `libvips` is in the Dockerfile (`apk add vips`) |
+| `runner.ts` | Cannot find module `sharp` | Run `pnpm add sharp` and ensure `libvips` is in the Dockerfile (`apk add vips-dev`) |
 | `routers.ts:2878–2879` | `doc` possibly `undefined` | Add null guard before accessing `doc.id` / `doc.title` |
 
 ### Pending Features / Bugs
@@ -371,6 +418,7 @@ management.
 | 7 | Email dispatch for invitation scrolls not implemented (DB records created, never sent) | Medium |
 | 8 | `preprocessPageImages` is serial (`for...of` + `await`) — should use bounded `Promise.all` | Low |
 | 9 | Test: `listDocuments` scoped by ownership | Low |
+| 10 | `markdownText` stored in `ocr_results` but not returned by `hitl.get` or `library.getPageDetail` — Archivist's Desk has no Markdown tab | Low |
 
 ---
 
@@ -379,7 +427,7 @@ management.
 ### Docker Image
 
 - Registry: `ghcr.io/pakgrou-porg/ttrpg-ocr-console`
-- Tags: semver (e.g. `0.2.21`) and `:latest`
+- Tags: semver (e.g. `0.2.29`) and `:latest`
 - Build: GitHub Actions on every push to `main` and on version tags
 
 ### Container Startup Sequence
@@ -405,21 +453,23 @@ management.
 ## 11. File Structure Quick Reference
 
 ```
-client/src/pages/          ← 20 page components (see Section 1 for mapping)
+client/src/pages/          ← 17 page components (see Section 1 for mapping)
 client/src/components/
-  BboxRegionEditor.tsx     ← Interactive bbox region editor with keyboard shortcuts
+  BboxRegionEditor.tsx     ← Interactive bbox region editor with keyboard shortcuts (N/A/F shortcuts)
+  BboxOverlay.tsx          ← Read-only bbox overlay for quality verification
   ReviewerGate.tsx         ← Access gate for reviewer/admin roles
   AdminGate.tsx            ← Access gate for admin role only
   DashboardLayout.tsx      ← Sidebar layout used by all Inner Sanctum pages
+  DriveFilePicker.tsx      ← Google Drive file picker (requires GOOGLE_API_KEY)
 drizzle/
-  schema.ts                ← Single source of truth for all tables and types
-  0000_initial_postgres.sql … 0015_hitl_retry_before_snapshot.sql
+  schema.ts                ← Single source of truth for all tables, enums, and types (~824 lines)
+  0000_initial_postgres.sql … 0016_shallow_leo.sql  ← 17 migration files
 server/
-  routers.ts               ← All tRPC procedures (~3100 lines; split into namespaces)
-  db.ts                    ← Query helpers (called by routers, never raw SQL in routers)
+  routers.ts               ← All tRPC procedures (~3073 lines; split into namespaces)
+  db.ts                    ← Query helpers (~2014 lines; called by routers, never raw SQL in routers)
   crypto.ts                ← AES-256-GCM encrypt/decrypt for credentials
   pipeline/
-    runner.ts              ← Pipeline orchestrator (~2500 lines)
+    runner.ts              ← Pipeline orchestrator (~2739 lines)
     invoke.ts              ← LLM dispatch + circuit breaker + fetchWithRetry
     config.ts              ← pipeline-config.yaml loader
   _core/
