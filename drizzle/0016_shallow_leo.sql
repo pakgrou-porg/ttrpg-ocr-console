@@ -1,4 +1,4 @@
-CREATE TABLE "content_summaries" (
+CREATE TABLE IF NOT EXISTS "content_summaries" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"document_id" integer NOT NULL,
 	"level_type" varchar(32) NOT NULL,
@@ -18,7 +18,7 @@ CREATE TABLE "content_summaries" (
 	"updated_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "game_systems" (
+CREATE TABLE IF NOT EXISTS "game_systems" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"name" varchar(128) NOT NULL,
 	"abbreviation" varchar(32),
@@ -28,7 +28,7 @@ CREATE TABLE "game_systems" (
 	"updated_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "google_oauth_tokens" (
+CREATE TABLE IF NOT EXISTS "google_oauth_tokens" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"encrypted_access_token" text,
 	"access_token_iv" varchar(64),
@@ -42,7 +42,7 @@ CREATE TABLE "google_oauth_tokens" (
 	"updated_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "hitl_retry_attempts" (
+CREATE TABLE IF NOT EXISTS "hitl_retry_attempts" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"hitl_item_id" integer,
 	"page_id" integer NOT NULL,
@@ -68,7 +68,7 @@ CREATE TABLE "hitl_retry_attempts" (
 	"previous_layout_type" varchar(64)
 );
 --> statement-breakpoint
-CREATE TABLE "llm_timing_metrics" (
+CREATE TABLE IF NOT EXISTS "llm_timing_metrics" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"job_id" integer,
 	"page_id" integer,
@@ -84,7 +84,7 @@ CREATE TABLE "llm_timing_metrics" (
 	"created_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "provider_exchange_logs" (
+CREATE TABLE IF NOT EXISTS "provider_exchange_logs" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"provider_id" integer NOT NULL,
 	"provider_name" varchar(128) NOT NULL,
@@ -102,34 +102,34 @@ CREATE TABLE "provider_exchange_logs" (
 	"created_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-ALTER TABLE "document_pages" ADD COLUMN "structural_breaks" jsonb;--> statement-breakpoint
-ALTER TABLE "document_pages" ADD COLUMN "printed_page_label" varchar(32);--> statement-breakpoint
-ALTER TABLE "document_pages" ADD COLUMN "native_text" text;--> statement-breakpoint
-ALTER TABLE "document_pages" ADD COLUMN "has_embedded_text" boolean DEFAULT false NOT NULL;--> statement-breakpoint
-ALTER TABLE "ingestion_jobs" ADD COLUMN "storage_provider" varchar(32) DEFAULT 'local' NOT NULL;--> statement-breakpoint
-ALTER TABLE "ingestion_jobs" ADD COLUMN "drive_file_id" varchar(512);--> statement-breakpoint
-ALTER TABLE "ingestion_jobs" ADD COLUMN "document_id" integer;--> statement-breakpoint
-ALTER TABLE "ingestion_jobs" ADD COLUMN "page_offset" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
-ALTER TABLE "ingestion_jobs" ADD COLUMN "block_size" integer DEFAULT 10 NOT NULL;--> statement-breakpoint
-ALTER TABLE "stage_inscriptions" ADD COLUMN "secondary_provider_id" integer;--> statement-breakpoint
-ALTER TABLE "ocr_results" ADD COLUMN "markdown_text" text;--> statement-breakpoint
-ALTER TABLE "ocr_results" ADD COLUMN "normalised_text" text;--> statement-breakpoint
-ALTER TABLE "ocr_results" ADD COLUMN "native_similarity" real;--> statement-breakpoint
-CREATE INDEX "content_summaries_document_id_idx" ON "content_summaries" USING btree ("document_id");--> statement-breakpoint
-CREATE INDEX "content_summaries_level_type_idx" ON "content_summaries" USING btree ("document_id","level_type");--> statement-breakpoint
-CREATE INDEX "content_summaries_start_page_idx" ON "content_summaries" USING btree ("start_page_id");--> statement-breakpoint
-CREATE INDEX "content_summaries_parent_idx" ON "content_summaries" USING btree ("parent_id");--> statement-breakpoint
-CREATE INDEX "content_summaries_status_idx" ON "content_summaries" USING btree ("summary_status");--> statement-breakpoint
-CREATE INDEX "hitl_retry_attempts_page_id_idx" ON "hitl_retry_attempts" USING btree ("page_id");--> statement-breakpoint
-CREATE INDEX "hitl_retry_attempts_hitl_item_id_idx" ON "hitl_retry_attempts" USING btree ("hitl_item_id");--> statement-breakpoint
-CREATE INDEX "hitl_retry_attempts_status_idx" ON "hitl_retry_attempts" USING btree ("status");--> statement-breakpoint
-CREATE INDEX "hitl_retry_attempts_started_at_idx" ON "hitl_retry_attempts" USING btree ("started_at");--> statement-breakpoint
-CREATE INDEX "llm_timing_job_id_idx" ON "llm_timing_metrics" USING btree ("job_id");--> statement-breakpoint
-CREATE INDEX "llm_timing_page_id_idx" ON "llm_timing_metrics" USING btree ("page_id");--> statement-breakpoint
-CREATE INDEX "llm_timing_provider_id_idx" ON "llm_timing_metrics" USING btree ("provider_id");--> statement-breakpoint
-CREATE INDEX "llm_timing_stage_idx" ON "llm_timing_metrics" USING btree ("stage");--> statement-breakpoint
-CREATE INDEX "llm_timing_created_at_idx" ON "llm_timing_metrics" USING btree ("created_at");--> statement-breakpoint
-CREATE INDEX "pex_provider_id_idx" ON "provider_exchange_logs" USING btree ("provider_id");--> statement-breakpoint
-CREATE INDEX "pex_stage_idx" ON "provider_exchange_logs" USING btree ("stage");--> statement-breakpoint
-CREATE INDEX "pex_created_at_idx" ON "provider_exchange_logs" USING btree ("created_at");--> statement-breakpoint
-CREATE INDEX "stage_inscriptions_secondary_idx" ON "stage_inscriptions" USING btree ("secondary_provider_id");
+ALTER TABLE "document_pages" ADD COLUMN IF NOT EXISTS "structural_breaks" jsonb;--> statement-breakpoint
+ALTER TABLE "document_pages" ADD COLUMN IF NOT EXISTS "printed_page_label" varchar(32);--> statement-breakpoint
+ALTER TABLE "document_pages" ADD COLUMN IF NOT EXISTS "native_text" text;--> statement-breakpoint
+ALTER TABLE "document_pages" ADD COLUMN IF NOT EXISTS "has_embedded_text" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+ALTER TABLE "ingestion_jobs" ADD COLUMN IF NOT EXISTS "storage_provider" varchar(32) DEFAULT 'local' NOT NULL;--> statement-breakpoint
+ALTER TABLE "ingestion_jobs" ADD COLUMN IF NOT EXISTS "drive_file_id" varchar(512);--> statement-breakpoint
+ALTER TABLE "ingestion_jobs" ADD COLUMN IF NOT EXISTS "document_id" integer;--> statement-breakpoint
+ALTER TABLE "ingestion_jobs" ADD COLUMN IF NOT EXISTS "page_offset" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "ingestion_jobs" ADD COLUMN IF NOT EXISTS "block_size" integer DEFAULT 10 NOT NULL;--> statement-breakpoint
+ALTER TABLE "stage_inscriptions" ADD COLUMN IF NOT EXISTS "secondary_provider_id" integer;--> statement-breakpoint
+ALTER TABLE "ocr_results" ADD COLUMN IF NOT EXISTS "markdown_text" text;--> statement-breakpoint
+ALTER TABLE "ocr_results" ADD COLUMN IF NOT EXISTS "normalised_text" text;--> statement-breakpoint
+ALTER TABLE "ocr_results" ADD COLUMN IF NOT EXISTS "native_similarity" real;--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "content_summaries_document_id_idx" ON "content_summaries" USING btree ("document_id");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "content_summaries_level_type_idx" ON "content_summaries" USING btree ("document_id","level_type");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "content_summaries_start_page_idx" ON "content_summaries" USING btree ("start_page_id");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "content_summaries_parent_idx" ON "content_summaries" USING btree ("parent_id");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "content_summaries_status_idx" ON "content_summaries" USING btree ("summary_status");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "hitl_retry_attempts_page_id_idx" ON "hitl_retry_attempts" USING btree ("page_id");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "hitl_retry_attempts_hitl_item_id_idx" ON "hitl_retry_attempts" USING btree ("hitl_item_id");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "hitl_retry_attempts_status_idx" ON "hitl_retry_attempts" USING btree ("status");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "hitl_retry_attempts_started_at_idx" ON "hitl_retry_attempts" USING btree ("started_at");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "llm_timing_job_id_idx" ON "llm_timing_metrics" USING btree ("job_id");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "llm_timing_page_id_idx" ON "llm_timing_metrics" USING btree ("page_id");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "llm_timing_provider_id_idx" ON "llm_timing_metrics" USING btree ("provider_id");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "llm_timing_stage_idx" ON "llm_timing_metrics" USING btree ("stage");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "llm_timing_created_at_idx" ON "llm_timing_metrics" USING btree ("created_at");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "pex_provider_id_idx" ON "provider_exchange_logs" USING btree ("provider_id");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "pex_stage_idx" ON "provider_exchange_logs" USING btree ("stage");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "pex_created_at_idx" ON "provider_exchange_logs" USING btree ("created_at");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "stage_inscriptions_secondary_idx" ON "stage_inscriptions" USING btree ("secondary_provider_id");

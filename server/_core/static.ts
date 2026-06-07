@@ -7,6 +7,10 @@ function buildRuntimeConfigScript(): string {
   const config = {
     GOOGLE_CLIENT_ID: ENV.googleClientId,
     GOOGLE_API_KEY: ENV.googleApiKey,
+    // VITE_APP_ID is normally baked into the frontend bundle at build time,
+    // but injecting it here as well lets it be overridden via the VITE_APP_ID
+    // runtime environment variable without rebuilding the image.
+    VITE_APP_ID: process.env.VITE_APP_ID ?? "",
   };
   return `<script>window.__RUNTIME_CONFIG__=${JSON.stringify(config)}</script>`;
 }
