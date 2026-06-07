@@ -1,8 +1,8 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
@@ -100,7 +100,7 @@ function LevelBadge({ level }: { level: string }) {
   );
 }
 
-// ── Region type pill ──────────────────────────────────────────────────────────
+// ── Region type pill + bbox overlay colours ───────────────────────────────────
 
 const REGION_COLORS: Record<string, string> = {
   heading:      "bg-purple-500/20 text-purple-300",
@@ -114,140 +114,76 @@ const REGION_COLORS: Record<string, string> = {
   stat_block:   "bg-amber-500/20 text-amber-300",
 };
 
+const REGION_BOX: Record<string, { border: string; bg: string; bgSel: string }> = {
+  heading:      { border:"rgba(168,85,247,.85)",  bg:"rgba(168,85,247,.08)",  bgSel:"rgba(168,85,247,.30)" },
+  paragraph:    { border:"rgba(59,130,246,.75)",  bg:"rgba(59,130,246,.06)",  bgSel:"rgba(59,130,246,.25)" },
+  table:        { border:"rgba(249,115,22,.85)",  bg:"rgba(249,115,22,.08)",  bgSel:"rgba(249,115,22,.28)" },
+  illustration: { border:"rgba(34,197,94,.85)",   bg:"rgba(34,197,94,.08)",   bgSel:"rgba(34,197,94,.28)" },
+  map:          { border:"rgba(20,184,166,.85)",  bg:"rgba(20,184,166,.08)",  bgSel:"rgba(20,184,166,.28)" },
+  caption:      { border:"rgba(14,165,233,.80)",  bg:"rgba(14,165,233,.07)",  bgSel:"rgba(14,165,233,.25)" },
+  list:         { border:"rgba(99,102,241,.85)",  bg:"rgba(99,102,241,.08)",  bgSel:"rgba(99,102,241,.28)" },
+  sidebar:      { border:"rgba(236,72,153,.85)",  bg:"rgba(236,72,153,.08)",  bgSel:"rgba(236,72,153,.28)" },
+  stat_block:   { border:"rgba(245,158,11,.85)",  bg:"rgba(245,158,11,.08)",  bgSel:"rgba(245,158,11,.28)" },
+};
+const REGION_BOX_DEFAULT = { border:"rgba(156,163,175,.65)", bg:"rgba(156,163,175,.06)", bgSel:"rgba(156,163,175,.22)" };
+
 function regionPillClass(type: string) {
   return REGION_COLORS[type] ?? "bg-muted text-muted-foreground";
 }
+function regionBoxColor(type: string) {
+  return REGION_BOX[type] ?? REGION_BOX_DEFAULT;
+}
 
-// ── Edit dialog ───────────────────────────────────────────────────────────────
+// ── Bbox overlay (reused by thumbnail grid + detail dialog) ───────────────────
 
-const SUMMARY_STATUSES = ["pending", "generating", "generated", "approved", "failed"] as const;
+function BboxOverlay({
+  regions,
+  selectedIdx,
+  onSelect,
+}: {
+  regions: any[];
+  selectedIdx: number | null;
+  onSelect?: (i: number | null) => void;
+}) {
+  return (
+    <>
+      {regions.map((r: any, i: number) => {
+        const { x = 0, y = 0, w = 0, h = 0 } = r.bbox ?? {};
+        if (w === 0 && h === 0) return null;
+        const c = regionBoxColor(r.type ?? r.regionType ?? "");
+        const isSel = i === selectedIdx;
+        return (
+          <div
+            key={i}
+            onClick={onSelect ? (e) => { e.stopPropagation(); onSelect(isSel ? null : i); } : undefined}
+            style={{
+              position: "absolute",
+              left: `${x}%`, top: `${y}%`,
+              width: `${w}%`, height: `${h}%`,
+              border: `${isSel ? 2 : 1}px solid ${c.border}`,
+              backgroundColor: isSel ? c.bgSel : c.bg,
+              boxSizing: "border-box",
+              cursor: onSelect ? "pointer" : "default",
+              pointerEvents: onSelect ? "auto" : "none",
+              transition: "background-color .12s",
+              zIndex: isSel ? 2 : 1,
+            }}
+            title={onSelect ? `${r.type ?? r.regionType}` : undefined}
+          />
+        );
+      })}
+    </>
+  );
+}
+
+// ── HITL re-queue section ────────────────────────────────────────────────────
+
 const HITL_PRIORITIES = ["low", "medium", "high", "critical"] as const;
 const RETRY_STAGES = [
   { value: "layout_analysis",  label: "Layout Analysis" },
   { value: "bbox_detection",   label: "BBox Detection" },
   { value: "ocr_extraction",   label: "OCR Extraction" },
 ] as const;
-
-function EditDialog({
-  node,
-  open,
-  onClose,
-}: {
-  node: SummaryRecord;
-  open: boolean;
-  onClose: () => void;
-}) {
-  const [shortSummary, setShortSummary] = useState(node.shortSummary ?? "");
-  const [longSummary, setLongSummary] = useState(node.longSummary ?? "");
-  const [keyTerms, setKeyTerms] = useState((node.keyTerms ?? []).join(", "));
-  const [keyEntities, setKeyEntities] = useState((node.keyEntities ?? []).join(", "));
-  const [status, setStatus] = useState(node.summaryStatus);
-
-  const utils = trpc.useUtils();
-  const update = trpc.summaries.update.useMutation({
-    onSuccess: () => {
-      toast.success("Summary updated.");
-      utils.summaries.listByDocumentIds.invalidate();
-      onClose();
-    },
-    onError: (err) => toast.error(err.message),
-  });
-
-  const handleSave = () => {
-    update.mutate({
-      id: node.id,
-      shortSummary: shortSummary || null,
-      longSummary: longSummary || null,
-      keyTerms: keyTerms.split(",").map(s => s.trim()).filter(Boolean),
-      keyEntities: keyEntities.split(",").map(s => s.trim()).filter(Boolean),
-      summaryStatus: status as (typeof SUMMARY_STATUSES)[number],
-    });
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <LevelBadge level={node.levelType} />
-            {node.headingText ?? `Page ${node.startPageNumber}`}
-          </DialogTitle>
-          <DialogDescription>
-            Pages {node.startPageNumber}–{node.endPageNumber ?? "?"}
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-4 py-2">
-          <div className="space-y-1.5">
-            <Label>Short Summary</Label>
-            <Textarea
-              value={shortSummary}
-              onChange={e => setShortSummary(e.target.value)}
-              rows={3}
-              placeholder="Brief 1–2 sentence summary used for embeddings…"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label>Long Summary</Label>
-            <Textarea
-              value={longSummary}
-              onChange={e => setLongSummary(e.target.value)}
-              rows={6}
-              placeholder="Detailed summary returned as context in search results…"
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <Label>
-                Key Terms{" "}
-                <span className="text-muted-foreground text-xs">(comma-separated)</span>
-              </Label>
-              <Input
-                value={keyTerms}
-                onChange={e => setKeyTerms(e.target.value)}
-                placeholder="fireball, arcane, spell…"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>
-                Key Entities{" "}
-                <span className="text-muted-foreground text-xs">(comma-separated)</span>
-              </Label>
-              <Input
-                value={keyEntities}
-                onChange={e => setKeyEntities(e.target.value)}
-                placeholder="Gandalf, Mordor, Mithril…"
-              />
-            </div>
-          </div>
-          <div className="space-y-1.5">
-            <Label>Status</Label>
-            <Select value={status} onValueChange={setStatus}>
-              <SelectTrigger className="w-48">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {SUMMARY_STATUSES.map(s => (
-                  <SelectItem key={s} value={s}>{s}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={handleSave} disabled={update.isPending}>
-            {update.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-            Save Changes
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ── HITL re-queue section (used inside PageDetailDialog) ──────────────────────
 
 function HitlSection({
   pageId,
@@ -263,18 +199,13 @@ function HitlSection({
   const [selectedStages, setSelectedStages] = useState<Set<string>>(new Set());
   const [open, setOpen] = useState(false);
 
-  const flagMutation = trpc.hitl.flag.useMutation({
-    onError: (err) => toast.error(err.message),
-  });
-  const retryMutation = trpc.hitl.retryPage.useMutation({
-    onError: (err) => toast.error(err.message),
-  });
+  const flagMutation = trpc.hitl.flag.useMutation({ onError: (err) => toast.error(err.message) });
+  const retryMutation = trpc.hitl.retryPage.useMutation({ onError: (err) => toast.error(err.message) });
 
   const toggleStage = (stage: string) => {
     setSelectedStages(prev => {
       const next = new Set(prev);
-      if (next.has(stage)) next.delete(stage);
-      else next.add(stage);
+      if (next.has(stage)) next.delete(stage); else next.add(stage);
       return next;
     });
   };
@@ -283,26 +214,18 @@ function HitlSection({
     if (!reason.trim()) { toast.error("Please enter a reason."); return; }
     try {
       const result = await flagMutation.mutateAsync({ pageId, reason: reason.trim(), priority });
-      if (result.alreadyQueued) {
-        toast.info("Page is already queued for HITL review.");
-      } else {
-        toast.success("Page flagged for HITL review.");
-      }
+      if (result.alreadyQueued) toast.info("Page is already queued for HITL review.");
+      else toast.success("Page flagged for HITL review.");
       if (selectedStages.size > 0) {
         await retryMutation.mutateAsync({
-          pageId,
-          hitlId: result.id,
+          pageId, hitlId: result.id,
           stages: Array.from(selectedStages) as ("layout_analysis" | "bbox_detection" | "ocr_extraction")[],
         });
-        toast.success(`Re-queued ${selectedStages.size} stage${selectedStages.size > 1 ? "s" : ""} for reprocessing.`);
+        toast.success(`Re-queued ${selectedStages.size} stage${selectedStages.size > 1 ? "s" : ""}.`);
       }
-      setReason("");
-      setSelectedStages(new Set());
-      setOpen(false);
+      setReason(""); setSelectedStages(new Set()); setOpen(false);
       onFlagged?.();
-    } catch {
-      // errors already toasted by individual mutations
-    }
+    } catch { /* already toasted */ }
   };
 
   const isBusy = flagMutation.isPending || retryMutation.isPending;
@@ -312,77 +235,47 @@ function HitlSection({
       {isAlreadyFlagged && !open ? (
         <div className="flex items-center justify-between">
           <span className="text-xs text-amber-400 flex items-center gap-1.5">
-            <Flag className="w-3.5 h-3.5" />
-            Already flagged for HITL review
+            <Flag className="w-3.5 h-3.5" />Already flagged for HITL review
           </span>
           <Button size="sm" variant="ghost" className="h-7 text-xs gap-1.5" onClick={() => setOpen(true)}>
             Re-queue stages
           </Button>
         </div>
       ) : !open ? (
-        <Button
-          size="sm"
-          variant="ghost"
-          className="h-7 text-xs gap-1.5 text-muted-foreground hover:text-amber-400"
-          onClick={() => setOpen(true)}
-        >
-          <Flag className="w-3.5 h-3.5" />
-          Flag for HITL review / re-queue
+        <Button size="sm" variant="ghost" className="h-7 text-xs gap-1.5 text-muted-foreground hover:text-amber-400" onClick={() => setOpen(true)}>
+          <Flag className="w-3.5 h-3.5" />Flag for HITL review / re-queue
         </Button>
       ) : (
         <div className="space-y-2.5">
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium flex items-center gap-1.5 text-amber-400">
-              <Flag className="w-3.5 h-3.5" />
-              Flag for HITL Review
+              <Flag className="w-3.5 h-3.5" />Flag for HITL Review
             </span>
-            <Button size="sm" variant="ghost" className="h-6 text-xs px-2" onClick={() => setOpen(false)}>
-              Cancel
-            </Button>
+            <Button size="sm" variant="ghost" className="h-6 text-xs px-2" onClick={() => setOpen(false)}>Cancel</Button>
           </div>
-
           <div className="grid grid-cols-[1fr_auto] gap-2">
-            <Textarea
-              value={reason}
-              onChange={e => setReason(e.target.value)}
+            <Textarea value={reason} onChange={e => setReason(e.target.value)}
               placeholder="Describe the issue: wrong layout, missed regions, poor OCR quality…"
-              rows={2}
-              className="text-xs resize-none"
-            />
+              rows={2} className="text-xs resize-none" />
             <Select value={priority} onValueChange={v => setPriority(v as typeof priority)}>
-              <SelectTrigger className="w-28 h-9 text-xs self-start">
-                <SelectValue />
-              </SelectTrigger>
+              <SelectTrigger className="w-28 h-9 text-xs self-start"><SelectValue /></SelectTrigger>
               <SelectContent>
-                {HITL_PRIORITIES.map(p => (
-                  <SelectItem key={p} value={p} className="text-xs">{p}</SelectItem>
-                ))}
+                {HITL_PRIORITIES.map(p => <SelectItem key={p} value={p} className="text-xs">{p}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
-
           <div className="space-y-1">
             <p className="text-[11px] text-muted-foreground">Re-trigger stages (optional):</p>
             <div className="flex items-center gap-4">
               {RETRY_STAGES.map(s => (
                 <label key={s.value} className="flex items-center gap-1.5 cursor-pointer">
-                  <Checkbox
-                    checked={selectedStages.has(s.value)}
-                    onCheckedChange={() => toggleStage(s.value)}
-                    className="w-3.5 h-3.5"
-                  />
+                  <Checkbox checked={selectedStages.has(s.value)} onCheckedChange={() => toggleStage(s.value)} className="w-3.5 h-3.5" />
                   <span className="text-xs text-muted-foreground">{s.label}</span>
                 </label>
               ))}
             </div>
           </div>
-
-          <Button
-            size="sm"
-            className="gap-1.5 text-xs"
-            onClick={handleFlag}
-            disabled={isBusy || !reason.trim()}
-          >
+          <Button size="sm" className="gap-1.5 text-xs" onClick={handleFlag} disabled={isBusy || !reason.trim()}>
             {isBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Flag className="w-3.5 h-3.5" />}
             {selectedStages.size > 0 ? "Flag & Re-queue" : "Flag for Review"}
           </Button>
@@ -396,16 +289,28 @@ function HitlSection({
 
 function PageDetailDialog({ pageId, open, onClose }: { pageId: number; open: boolean; onClose: () => void }) {
   const [detailTab, setDetailTab] = useState<"image" | "ocr" | "regions" | "json" | "history">("image");
+  const [selectedRegionIdx, setSelectedRegionIdx] = useState<number | null>(null);
+  const [showOverlays, setShowOverlays] = useState(true);
+
   const utils = trpc.useUtils();
   const { data, isLoading, refetch } = trpc.library.getPageDetail.useQuery(
     { pageId },
     { enabled: open && pageId > 0 },
   );
 
+  // Reset selected region when page changes
+  useEffect(() => { setSelectedRegionIdx(null); }, [pageId]);
+
   const ocr = data?.ocr as any;
   const sd = ocr?.structuredData as any;
   const regions = Array.isArray(data?.contentRegions) ? (data!.contentRegions as any[]) : [];
   const retryAttempts = data?.retryAttempts ?? [];
+
+  // Clicking a region in the list → jump to image tab and highlight it
+  const selectRegion = (i: number | null) => {
+    setSelectedRegionIdx(i);
+    if (i !== null) setDetailTab("image");
+  };
 
   const handleFlagged = () => {
     refetch();
@@ -416,9 +321,9 @@ function PageDetailDialog({ pageId, open, onClose }: { pageId: number; open: boo
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent className="max-w-5xl max-h-[90vh] overflow-hidden flex flex-col">
         <DialogHeader className="flex-shrink-0">
-          <DialogTitle className="flex items-center gap-2">
-            <FileImage className="w-4 h-4 text-primary" />
-            Page {data?.pageNumber ?? pageId}
+          <div className="flex items-center gap-2 flex-wrap">
+            <FileImage className="w-4 h-4 text-primary flex-shrink-0" />
+            <span className="font-semibold">Page {data?.pageNumber ?? pageId}</span>
             {data?.layoutType && (
               <span className="text-xs font-mono bg-muted px-1.5 py-0.5 rounded text-muted-foreground">
                 {data.layoutType}
@@ -434,9 +339,9 @@ function PageDetailDialog({ pageId, open, onClose }: { pageId: number; open: boo
                 {data.ocrConfidence}% confidence
               </span>
             )}
-          </DialogTitle>
+          </div>
           {(data as any)?.printedPageLabel && (data as any).printedPageLabel !== "[unnumbered]" && (
-            <DialogDescription>Printed label: {(data as any).printedPageLabel}</DialogDescription>
+            <div className="text-sm text-muted-foreground">Printed label: {(data as any).printedPageLabel}</div>
           )}
         </DialogHeader>
 
@@ -444,9 +349,13 @@ function PageDetailDialog({ pageId, open, onClose }: { pageId: number; open: boo
           <TabsList className="flex-shrink-0 w-full justify-start">
             <TabsTrigger value="image" className="gap-1.5"><Eye className="w-3.5 h-3.5" />Image</TabsTrigger>
             <TabsTrigger value="ocr" className="gap-1.5"><AlignLeft className="w-3.5 h-3.5" />OCR Text</TabsTrigger>
-            <TabsTrigger value="regions" className="gap-1.5"><Grid3x3 className="w-3.5 h-3.5" />Regions ({regions.length})</TabsTrigger>
+            <TabsTrigger value="regions" className="gap-1.5">
+              <Grid3x3 className="w-3.5 h-3.5" />Regions ({regions.length})
+            </TabsTrigger>
             <TabsTrigger value="json" className="gap-1.5"><Code2 className="w-3.5 h-3.5" />JSON</TabsTrigger>
-            <TabsTrigger value="history" className="gap-1.5"><History className="w-3.5 h-3.5" />History ({retryAttempts.length})</TabsTrigger>
+            <TabsTrigger value="history" className="gap-1.5">
+              <History className="w-3.5 h-3.5" />History ({retryAttempts.length})
+            </TabsTrigger>
           </TabsList>
 
           {isLoading ? (
@@ -455,14 +364,51 @@ function PageDetailDialog({ pageId, open, onClose }: { pageId: number; open: boo
             </div>
           ) : (
             <>
+              {/* ── Image tab — with region overlays ───────────────────── */}
               <TabsContent value="image" className="flex-1 overflow-auto mt-0 pt-3">
                 {data?.rawPngUrl ? (
-                  <img src={data.rawPngUrl} alt={`Page ${data.pageNumber}`} className="max-w-full rounded border border-border/40 mx-auto block" />
+                  <div className="space-y-2">
+                    {regions.length > 0 && (
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <button
+                          onClick={() => setShowOverlays(v => !v)}
+                          className={`flex items-center gap-1.5 text-xs px-2 py-1 rounded border transition-colors ${
+                            showOverlays
+                              ? "bg-primary/15 border-primary/40 text-primary"
+                              : "border-border/30 text-muted-foreground hover:border-border/60"
+                          }`}
+                        >
+                          <Grid3x3 className="w-3 h-3" />
+                          {showOverlays ? "Regions on" : "Regions off"}
+                        </button>
+                        {selectedRegionIdx !== null && (
+                          <span className="text-xs text-muted-foreground">
+                            Focused: <span className={`px-1.5 py-0.5 rounded font-mono text-[10px] ${regionPillClass(regions[selectedRegionIdx]?.type ?? "")}`}>
+                              {regions[selectedRegionIdx]?.type}
+                            </span>
+                            {" "}#{selectedRegionIdx + 1}
+                            <button className="ml-2 text-muted-foreground hover:text-foreground" onClick={() => setSelectedRegionIdx(null)}>✕</button>
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    <div className="relative w-full">
+                      <img
+                        src={data.rawPngUrl}
+                        alt={`Page ${data.pageNumber}`}
+                        className="w-full block rounded border border-border/40"
+                      />
+                      {showOverlays && (
+                        <BboxOverlay regions={regions} selectedIdx={selectedRegionIdx} onSelect={setSelectedRegionIdx} />
+                      )}
+                    </div>
+                  </div>
                 ) : (
                   <p className="text-center text-muted-foreground py-8">No image available.</p>
                 )}
               </TabsContent>
 
+              {/* ── OCR text tab ─────────────────────────────────────────── */}
               <TabsContent value="ocr" className="flex-1 overflow-auto mt-0 pt-3 space-y-3">
                 <div>
                   <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1.5">OCR Extracted Text</p>
@@ -488,33 +434,89 @@ function PageDetailDialog({ pageId, open, onClose }: { pageId: number; open: boo
                 )}
               </TabsContent>
 
-              <TabsContent value="regions" className="flex-1 overflow-auto mt-0 pt-3">
+              {/* ── Regions tab — mini-image with overlays + list ─────────── */}
+              <TabsContent value="regions" className="flex-1 overflow-hidden mt-0 pt-3">
                 {regions.length === 0 ? (
                   <p className="text-center text-muted-foreground py-8">No regions detected.</p>
                 ) : (
-                  <div className="space-y-1.5">
-                    {regions.map((r: any, i: number) => (
-                      <div key={i} className="flex items-start gap-2 text-xs p-2 rounded bg-muted/20 border border-border/20 hover:bg-muted/40">
-                        <span className="font-mono text-muted-foreground w-6 flex-shrink-0">{r.sequence ?? i + 1}</span>
-                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono flex-shrink-0 ${regionPillClass(r.type ?? r.regionType ?? "")}`}>
-                          {r.type ?? r.regionType}
-                        </span>
-                        <span className="font-mono text-muted-foreground flex-shrink-0 text-[10px]">
-                          ({Math.round(r.bbox?.x ?? 0)},{Math.round(r.bbox?.y ?? 0)}) {Math.round(r.bbox?.w ?? 0)}×{Math.round(r.bbox?.h ?? 0)}
-                        </span>
-                        <span className="flex-1 text-foreground/80 line-clamp-1 min-w-0">{r.text ?? r.content ?? ""}</span>
+                  <div className="flex gap-4 h-full min-h-0">
+                    {/* Mini page preview with bbox overlays */}
+                    {data?.rawPngUrl && (
+                      <div className="w-44 flex-shrink-0 self-start sticky top-0">
+                        <div className="relative w-full">
+                          <img
+                            src={data.rawPngUrl}
+                            alt=""
+                            className="w-full block rounded border border-border/30"
+                          />
+                          <BboxOverlay
+                            regions={regions}
+                            selectedIdx={selectedRegionIdx}
+                            onSelect={i => setSelectedRegionIdx(i)}
+                          />
+                        </div>
+                        {selectedRegionIdx !== null && (
+                          <div className="mt-1.5 p-1.5 rounded bg-muted/30 border border-border/20 text-[10px] space-y-0.5">
+                            <div className={`px-1.5 py-0.5 rounded font-mono inline-block ${regionPillClass(regions[selectedRegionIdx]?.type ?? "")}`}>
+                              {regions[selectedRegionIdx]?.type ?? "unknown"}
+                            </div>
+                            <div className="text-muted-foreground font-mono">
+                              ({Math.round(regions[selectedRegionIdx]?.bbox?.x ?? 0)},
+                              {Math.round(regions[selectedRegionIdx]?.bbox?.y ?? 0)})
+                              {" "}{Math.round(regions[selectedRegionIdx]?.bbox?.w ?? 0)}×
+                              {Math.round(regions[selectedRegionIdx]?.bbox?.h ?? 0)}
+                            </div>
+                            <div className="text-foreground/70 line-clamp-3">
+                              {regions[selectedRegionIdx]?.text ?? regions[selectedRegionIdx]?.content ?? ""}
+                            </div>
+                          </div>
+                        )}
                       </div>
-                    ))}
+                    )}
+
+                    {/* Regions list */}
+                    <div className="flex-1 overflow-y-auto space-y-1 pr-1">
+                      {regions.map((r: any, i: number) => (
+                        <div
+                          key={i}
+                          onClick={() => setSelectedRegionIdx(selectedRegionIdx === i ? null : i)}
+                          className={`flex items-start gap-2 text-xs p-2 rounded border cursor-pointer transition-colors ${
+                            i === selectedRegionIdx
+                              ? "bg-primary/10 border-primary/40 ring-1 ring-primary/20"
+                              : "bg-muted/20 border-border/20 hover:bg-muted/40"
+                          }`}
+                        >
+                          <span className="font-mono text-muted-foreground w-6 flex-shrink-0">{r.sequence ?? i + 1}</span>
+                          <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono flex-shrink-0 ${regionPillClass(r.type ?? r.regionType ?? "")}`}>
+                            {r.type ?? r.regionType}
+                          </span>
+                          <span className="font-mono text-muted-foreground flex-shrink-0 text-[10px]">
+                            ({Math.round(r.bbox?.x ?? 0)},{Math.round(r.bbox?.y ?? 0)}) {Math.round(r.bbox?.w ?? 0)}×{Math.round(r.bbox?.h ?? 0)}
+                          </span>
+                          <span className="flex-1 text-foreground/80 line-clamp-1 min-w-0">{r.text ?? r.content ?? ""}</span>
+                          {i === selectedRegionIdx && (
+                            <button
+                              className="flex-shrink-0 text-primary text-[10px] hover:underline"
+                              onClick={e => { e.stopPropagation(); setDetailTab("image"); }}
+                            >
+                              ↑ image
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
               </TabsContent>
 
+              {/* ── JSON tab ─────────────────────────────────────────────── */}
               <TabsContent value="json" className="flex-1 overflow-auto mt-0 pt-3">
                 <pre className="text-xs font-mono whitespace-pre-wrap break-words bg-muted/30 rounded p-3 border border-border/30 text-foreground/80">
                   {JSON.stringify(sd ?? ocr?.structuredData ?? null, null, 2)}
                 </pre>
               </TabsContent>
 
+              {/* ── History tab ──────────────────────────────────────────── */}
               <TabsContent value="history" className="flex-1 overflow-auto mt-0 pt-3">
                 {retryAttempts.length === 0 ? (
                   <p className="text-center text-muted-foreground py-8">No retry history.</p>
@@ -544,26 +546,79 @@ function PageDetailDialog({ pageId, open, onClose }: { pageId: number; open: boo
         </Tabs>
 
         {/* HITL re-queue footer */}
-        <HitlSection
-          pageId={pageId}
-          isAlreadyFlagged={(data as any)?.isFlagged}
-          onFlagged={handleFlagged}
-        />
+        <HitlSection pageId={pageId} isAlreadyFlagged={(data as any)?.isFlagged} onFlagged={handleFlagged} />
       </DialogContent>
     </Dialog>
   );
 }
 
-// ── Regions overview (bulk view across all pages) ─────────────────────────────
+// ── Page thumbnail with region overlays (used in RegionsOverview) ─────────────
 
-function tabulateRegions(regions: any[]): Record<string, number> {
-  const counts: Record<string, number> = {};
-  for (const r of regions) {
-    const t = (r.type ?? r.regionType ?? "unknown") as string;
-    counts[t] = (counts[t] ?? 0) + 1;
-  }
-  return counts;
+function PageThumbnailWithRegions({
+  page,
+  onClick,
+}: {
+  page: any;
+  onClick: () => void;
+}) {
+  const regions = Array.isArray(page.contentRegions) ? page.contentRegions as any[] : [];
+  const conf = page.ocrConfidence;
+  const confColor = conf == null ? "" : conf >= 80 ? "text-green-400" : conf >= 60 ? "text-amber-400" : "text-red-400";
+
+  return (
+    <button
+      onClick={onClick}
+      className="group relative block w-full rounded-lg border border-border/40 overflow-hidden hover:border-primary/50 hover:shadow-md transition-all bg-card text-left"
+    >
+      {/* Image + overlays */}
+      <div className="relative w-full aspect-[3/4] overflow-hidden">
+        {page.rawPngUrl ? (
+          <img
+            src={page.rawPngUrl}
+            alt={`Page ${page.pageNumber}`}
+            loading="lazy"
+            className="w-full h-full object-cover object-top"
+          />
+        ) : (
+          <div className="w-full h-full bg-muted/30 flex items-center justify-center">
+            <FileImage className="w-8 h-8 text-muted-foreground/30" />
+          </div>
+        )}
+        {/* Bbox overlays (non-interactive on thumbnails) */}
+        <BboxOverlay regions={regions} selectedIdx={null} />
+        {/* Hover tint */}
+        <div className="absolute inset-0 bg-primary/10 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
+          <Eye className="w-5 h-5 text-primary drop-shadow" />
+        </div>
+      </div>
+
+      {/* Footer */}
+      <div className="p-1.5">
+        <div className="flex items-center justify-between gap-1">
+          <span className="text-xs font-mono font-medium">p.{page.pageNumber}</span>
+          <div className="flex items-center gap-1">
+            {(page as any).isFlagged && <Flag className="w-2.5 h-2.5 text-amber-400" />}
+            {regions.length > 0 && (
+              <span className="text-[10px] font-mono text-muted-foreground">{regions.length}r</span>
+            )}
+            {conf != null && (
+              <span className={`text-[10px] font-mono ${confColor}`}>{conf}%</span>
+            )}
+          </div>
+        </div>
+        {regions.length === 0 ? (
+          <div className="text-[10px] text-amber-500/70 font-mono mt-0.5">no regions</div>
+        ) : (
+          <div className="mt-0.5">
+            <PipelineStatusBadge page={page} />
+          </div>
+        )}
+      </div>
+    </button>
+  );
 }
+
+// ── Regions overview — visual thumbnail grid with bbox overlays ───────────────
 
 function RegionsOverview({
   documentId,
@@ -572,32 +627,35 @@ function RegionsOverview({
   documentId: number;
   onPageClick: (id: number) => void;
 }) {
+  const [offset, setOffset] = useState(0);
+  const LIMIT = 40;
+
   const { data, isLoading } = trpc.library.listPages.useQuery(
-    { documentId, offset: 0, limit: 500 },
+    { documentId, offset, limit: LIMIT },
     { enabled: documentId > 0 },
   );
   const pages = data?.pages ?? [];
+  const total = data?.total ?? 0;
 
-  // Compute aggregate stats for the header
   const totalRegions = useMemo(
-    () => pages.reduce((sum, p: any) => sum + (Array.isArray(p.contentRegions) ? p.contentRegions.length : 0), 0),
+    () => pages.reduce((s: number, p: any) => s + (Array.isArray(p.contentRegions) ? p.contentRegions.length : 0), 0),
     [pages],
   );
-  const pagesNoRegions = pages.filter((p: any) => !Array.isArray(p.contentRegions) || p.contentRegions.length === 0).length;
+  const noRegionCount = pages.filter((p: any) => !Array.isArray(p.contentRegions) || p.contentRegions.length === 0).length;
   const avgConf = useMemo(() => {
-    const withConf = pages.filter((p: any) => p.ocrConfidence != null);
-    if (withConf.length === 0) return null;
-    return Math.round(withConf.reduce((s: number, p: any) => s + p.ocrConfidence, 0) / withConf.length);
+    const ws = pages.filter((p: any) => p.ocrConfidence != null);
+    if (!ws.length) return null;
+    return Math.round(ws.reduce((s: number, p: any) => s + p.ocrConfidence, 0) / ws.length);
   }, [pages]);
 
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-16 text-muted-foreground gap-2">
-        <Loader2 className="w-4 h-4 animate-spin" />Loading all pages…
+        <Loader2 className="w-4 h-4 animate-spin" />Loading pages…
       </div>
     );
   }
-  if (pages.length === 0) {
+  if (total === 0) {
     return (
       <div className="py-10 text-center text-muted-foreground">
         <FileImage className="w-8 h-8 mx-auto mb-2 opacity-30" />
@@ -607,90 +665,137 @@ function RegionsOverview({
   }
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       {/* Summary bar */}
-      <div className="flex items-center gap-4 text-xs text-muted-foreground pb-1 flex-wrap">
-        <span>{pages.length} pages</span>
-        <span>{totalRegions} total regions</span>
-        {pagesNoRegions > 0 && (
-          <span className="text-amber-400 font-medium">{pagesNoRegions} pages missing regions</span>
+      <div className="flex items-center gap-4 text-xs text-muted-foreground flex-wrap">
+        <span>{total} pages</span>
+        <span>{totalRegions} regions on this page</span>
+        {noRegionCount > 0 && (
+          <span className="text-amber-400 font-medium">{noRegionCount} missing regions</span>
         )}
-        {avgConf != null && <span>avg confidence {avgConf}%</span>}
-        <span className="ml-auto text-[11px]">Click any row to inspect page details.</span>
+        {avgConf != null && <span>avg {avgConf}% confidence</span>}
+        <span className="ml-auto opacity-60">Click any page to inspect details.</span>
       </div>
 
-      {/* Column headers */}
-      <div className="grid grid-cols-[3rem_5rem_1fr_5rem_4.5rem_auto] gap-x-3 px-3 py-1 text-[10px] font-mono text-muted-foreground uppercase tracking-wide border-b border-border/20">
-        <span>Page</span>
-        <span>Layout</span>
-        <span>Regions</span>
-        <span>Confidence</span>
-        <span>Status</span>
-        <span></span>
+      {/* Thumbnail grid */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2.5">
+        {pages.map((page: any) => (
+          <PageThumbnailWithRegions
+            key={page.id}
+            page={page}
+            onClick={() => onPageClick(page.id)}
+          />
+        ))}
       </div>
 
-      {/* Rows */}
-      <div className="space-y-0.5 max-h-[520px] overflow-y-auto pr-1">
-        {pages.map((page: any) => {
-          const regions = Array.isArray(page.contentRegions) ? page.contentRegions as any[] : [];
-          const typeCounts = tabulateRegions(regions);
-          const sortedTypes = Object.entries(typeCounts).sort((a, b) => b[1] - a[1]);
-          const conf = page.ocrConfidence;
-          const confColor = conf == null ? "" : conf >= 80 ? "text-green-400" : conf >= 60 ? "text-amber-400" : "text-red-400";
-
-          return (
-            <button
-              key={page.id}
-              onClick={() => onPageClick(page.id)}
-              className="w-full grid grid-cols-[3rem_5rem_1fr_5rem_4.5rem_auto] gap-x-3 px-3 py-1.5 rounded hover:bg-muted/40 text-left group transition-colors"
-            >
-              {/* Page # */}
-              <span className="text-xs font-mono text-muted-foreground self-center">
-                {page.pageNumber}
-              </span>
-
-              {/* Layout */}
-              <span className="text-[10px] font-mono text-muted-foreground self-center truncate">
-                {page.layoutType ?? <span className="opacity-40">—</span>}
-              </span>
-
-              {/* Region type pills */}
-              <div className="flex items-center gap-1 flex-wrap self-center min-w-0">
-                {regions.length === 0 ? (
-                  <span className="text-[10px] text-amber-500/70 font-mono">no regions</span>
-                ) : (
-                  sortedTypes.map(([type, count]) => (
-                    <span key={type} className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${regionPillClass(type)}`}>
-                      {count} {type}
-                    </span>
-                  ))
-                )}
-              </div>
-
-              {/* Confidence */}
-              <span className={`text-xs font-mono self-center ${confColor}`}>
-                {conf != null ? `${conf}%` : <span className="text-muted-foreground/40">—</span>}
-              </span>
-
-              {/* Pipeline status */}
-              <div className="self-center">
-                <PipelineStatusBadge page={page} />
-              </div>
-
-              {/* HITL badge + hover arrow */}
-              <div className="flex items-center gap-1.5 self-center justify-end">
-                {page.isFlagged && (
-                  <span className="text-[10px] bg-amber-500/20 text-amber-400 border border-amber-500/30 px-1 rounded flex items-center gap-0.5">
-                    <Flag className="w-2.5 h-2.5" />HITL
-                  </span>
-                )}
-                <ChevronRight className="w-3.5 h-3.5 text-muted-foreground/30 group-hover:text-primary transition-colors" />
-              </div>
-            </button>
-          );
-        })}
-      </div>
+      {/* Pagination */}
+      {total > LIMIT && (
+        <div className="flex items-center justify-between pt-1">
+          <span className="text-xs text-muted-foreground">
+            {total} total · showing {offset + 1}–{Math.min(offset + LIMIT, total)}
+          </span>
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" onClick={() => setOffset(Math.max(0, offset - LIMIT))} disabled={offset === 0} className="h-7 gap-1">
+              <ChevronLeft className="w-3.5 h-3.5" />Prev
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setOffset(offset + LIMIT)} disabled={offset + LIMIT >= total} className="h-7 gap-1">
+              Next<ChevronRight className="w-3.5 h-3.5" />
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
+  );
+}
+
+// ── Edit dialog ───────────────────────────────────────────────────────────────
+
+const SUMMARY_STATUSES = ["pending", "generating", "generated", "approved", "failed"] as const;
+
+function EditDialog({
+  node,
+  open,
+  onClose,
+}: {
+  node: SummaryRecord;
+  open: boolean;
+  onClose: () => void;
+}) {
+  const [shortSummary, setShortSummary] = useState(node.shortSummary ?? "");
+  const [longSummary, setLongSummary] = useState(node.longSummary ?? "");
+  const [keyTerms, setKeyTerms] = useState((node.keyTerms ?? []).join(", "));
+  const [keyEntities, setKeyEntities] = useState((node.keyEntities ?? []).join(", "));
+  const [status, setStatus] = useState(node.summaryStatus);
+
+  const utils = trpc.useUtils();
+  const update = trpc.summaries.update.useMutation({
+    onSuccess: () => {
+      toast.success("Summary updated.");
+      utils.summaries.listByDocumentIds.invalidate();
+      onClose();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <div className="flex items-center gap-2">
+            <LevelBadge level={node.levelType} />
+            <span className="font-semibold">{node.headingText ?? `Page ${node.startPageNumber}`}</span>
+          </div>
+          <div className="text-sm text-muted-foreground">Pages {node.startPageNumber}–{node.endPageNumber ?? "?"}</div>
+        </DialogHeader>
+
+        <div className="space-y-4 py-2">
+          <div className="space-y-1.5">
+            <Label>Short Summary</Label>
+            <Textarea value={shortSummary} onChange={e => setShortSummary(e.target.value)} rows={3}
+              placeholder="Brief 1–2 sentence summary used for embeddings…" />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Long Summary</Label>
+            <Textarea value={longSummary} onChange={e => setLongSummary(e.target.value)} rows={6}
+              placeholder="Detailed summary returned as context in search results…" />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <Label>Key Terms <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
+              <Input value={keyTerms} onChange={e => setKeyTerms(e.target.value)} placeholder="fireball, arcane, spell…" />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Key Entities <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
+              <Input value={keyEntities} onChange={e => setKeyEntities(e.target.value)} placeholder="Gandalf, Mordor, Mithril…" />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Status</Label>
+            <Select value={status} onValueChange={setStatus}>
+              <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {SUMMARY_STATUSES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={() => update.mutate({
+            id: node.id,
+            shortSummary: shortSummary || null,
+            longSummary: longSummary || null,
+            keyTerms: keyTerms.split(",").map(s => s.trim()).filter(Boolean),
+            keyEntities: keyEntities.split(",").map(s => s.trim()).filter(Boolean),
+            summaryStatus: status as (typeof SUMMARY_STATUSES)[number],
+          })} disabled={update.isPending}>
+            {update.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+            Save Changes
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -709,9 +814,7 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
       const blob = new Blob([data.jsonl], { type: "application/jsonl" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      a.href = url;
-      a.download = `document-${documentId}-unsloth.jsonl`;
-      a.click();
+      a.href = url; a.download = `document-${documentId}-unsloth.jsonl`; a.click();
       URL.revokeObjectURL(url);
       toast.success(`Exported ${data.lineCount} training examples.`);
     },
@@ -724,9 +827,7 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
       const blob = new Blob([json], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      a.href = url;
-      a.download = `document-${documentId}-full.json`;
-      a.click();
+      a.href = url; a.download = `document-${documentId}-full.json`; a.click();
       URL.revokeObjectURL(url);
       toast.success(`Exported ${data.pages.length} pages.`);
     },
@@ -743,13 +844,11 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
 
   return (
     <div className="space-y-3">
-      {/* Toolbar row */}
+      {/* Toolbar */}
       <div className="flex items-center gap-2 flex-wrap">
         {documentIds.length > 1 && (
           <Select value={String(documentId)} onValueChange={v => { setDocumentId(Number(v)); setOffset(0); }}>
-            <SelectTrigger className="w-48">
-              <SelectValue placeholder="Select batch…" />
-            </SelectTrigger>
+            <SelectTrigger className="w-48"><SelectValue placeholder="Select batch…" /></SelectTrigger>
             <SelectContent>
               {documentIds.map((id, i) => (
                 <SelectItem key={id} value={String(id)}>Batch {i + 1} (doc #{id})</SelectItem>
@@ -758,7 +857,7 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
           </Select>
         )}
 
-        {/* View mode toggle */}
+        {/* View toggle */}
         <div className="flex items-center rounded-md border border-border/40 overflow-hidden ml-auto">
           <button
             onClick={() => setViewMode("thumbnails")}
@@ -806,7 +905,7 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-medium">p.{page.pageNumber}</span>
                     <div className="flex items-center gap-1">
-                      {page.isFlagged && <Flag className="w-3 h-3 text-amber-400" />}
+                      {(page as any).isFlagged && <Flag className="w-3 h-3 text-amber-400" />}
                       {page.ocrConfidence != null && (
                         <span className={`text-[10px] font-mono ${page.ocrConfidence >= 80 ? "text-green-400" : page.ocrConfidence >= 60 ? "text-amber-400" : "text-red-400"}`}>
                           {page.ocrConfidence}%
@@ -840,23 +939,13 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
               <span className="text-xs text-muted-foreground">{total} pages total</span>
             )}
             <div className="flex gap-2 ml-auto">
-              <Button
-                size="sm"
-                variant="outline"
-                className="gap-1.5 text-xs"
-                onClick={() => exportMutation.mutate({ documentId })}
-                disabled={exportMutation.isPending || documentId === 0}
-              >
+              <Button size="sm" variant="outline" className="gap-1.5 text-xs"
+                onClick={() => exportMutation.mutate({ documentId })} disabled={exportMutation.isPending || documentId === 0}>
                 {exportMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
                 Export Unsloth JSONL
               </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                className="gap-1.5 text-xs"
-                onClick={() => exportFullMutation.mutate({ documentId })}
-                disabled={exportFullMutation.isPending || documentId === 0}
-              >
+              <Button size="sm" variant="outline" className="gap-1.5 text-xs"
+                onClick={() => exportFullMutation.mutate({ documentId })} disabled={exportFullMutation.isPending || documentId === 0}>
                 {exportFullMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Code2 className="w-3.5 h-3.5" />}
                 Export Full JSON
               </Button>
@@ -866,11 +955,7 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
       )}
 
       {selectedPageId != null && (
-        <PageDetailDialog
-          pageId={selectedPageId}
-          open={true}
-          onClose={() => setSelectedPageId(null)}
-        />
+        <PageDetailDialog pageId={selectedPageId} open={true} onClose={() => setSelectedPageId(null)} />
       )}
     </div>
   );
@@ -885,15 +970,29 @@ function SummaryNode({
   onEdit,
   onApprove,
   approving,
+  depth,
+  collapseLevel,
 }: {
   node: TreeNode;
   onEdit: (r: SummaryRecord) => void;
   onApprove: (id: number) => void;
   approving: number | null;
+  depth: number;
+  collapseLevel: number | null;
 }) {
-  const [open, setOpen] = useState(node.levelType !== "page");
+  // Local open state — default: non-page nodes start expanded
+  const [open, setOpen] = useState(
+    collapseLevel !== null ? depth < collapseLevel - 1 : node.levelType !== "page",
+  );
   const hasChildren = node.children.length > 0;
-  const indent = INDENT[node.levelType] ?? 0;
+  const indent = INDENT[node.levelType] ?? Math.min(depth * 20, 80);
+
+  // Sync with global collapse level when it changes
+  useEffect(() => {
+    if (collapseLevel !== null) {
+      setOpen(depth < collapseLevel - 1);
+    }
+  }, [collapseLevel, depth]);
 
   return (
     <div>
@@ -901,7 +1000,6 @@ function SummaryNode({
         className="flex items-start gap-2 py-2 px-3 rounded-md hover:bg-card/60 group"
         style={{ paddingLeft: `${indent + 12}px` }}
       >
-        {/* Expand toggle */}
         <button
           className="mt-0.5 flex-shrink-0 w-4 h-4 text-muted-foreground"
           onClick={() => setOpen(o => !o)}
@@ -909,20 +1007,15 @@ function SummaryNode({
           aria-label={open ? "Collapse" : "Expand"}
         >
           {hasChildren
-            ? open
-              ? <ChevronDown className="w-4 h-4" />
-              : <ChevronRight className="w-4 h-4" />
+            ? open ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />
             : <span className="block w-4" />}
         </button>
 
-        {/* Content */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <LevelBadge level={node.levelType} />
             <span className="text-sm font-medium truncate">
-              {node.headingText ?? (
-                <span className="text-muted-foreground italic">Page {node.startPageNumber}</span>
-              )}
+              {node.headingText ?? <span className="text-muted-foreground italic">Page {node.startPageNumber}</span>}
             </span>
             <span className="text-xs text-muted-foreground">
               pp.{node.startPageNumber}–{node.endPageNumber ?? "?"}
@@ -935,36 +1028,23 @@ function SummaryNode({
           {node.keyTerms && node.keyTerms.length > 0 && (
             <div className="flex flex-wrap gap-1 mt-1">
               {node.keyTerms.slice(0, 6).map(t => (
-                <span key={t} className="text-[10px] bg-primary/10 text-primary/70 px-1 rounded">
-                  {t}
-                </span>
+                <span key={t} className="text-[10px] bg-primary/10 text-primary/70 px-1 rounded">{t}</span>
               ))}
               {node.keyTerms.length > 6 && (
-                <span className="text-[10px] text-muted-foreground">
-                  +{node.keyTerms.length - 6} more
-                </span>
+                <span className="text-[10px] text-muted-foreground">+{node.keyTerms.length - 6} more</span>
               )}
             </div>
           )}
         </div>
 
-        {/* Actions */}
         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
           <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => onEdit(node)}>
             <Edit className="w-3.5 h-3.5" />
           </Button>
           {node.summaryStatus === "generated" && (
-            <Button
-              size="icon"
-              variant="ghost"
-              className="h-7 w-7 text-green-500 hover:text-green-400"
-              onClick={() => onApprove(node.id)}
-              disabled={approving === node.id}
-              aria-label="Approve"
-            >
-              {approving === node.id
-                ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                : <Check className="w-3.5 h-3.5" />}
+            <Button size="icon" variant="ghost" className="h-7 w-7 text-green-500 hover:text-green-400"
+              onClick={() => onApprove(node.id)} disabled={approving === node.id} aria-label="Approve">
+              {approving === node.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
             </Button>
           )}
         </div>
@@ -979,6 +1059,8 @@ function SummaryNode({
               onEdit={onEdit}
               onApprove={onApprove}
               approving={approving}
+              depth={depth + 1}
+              collapseLevel={collapseLevel}
             />
           ))}
         </div>
@@ -994,23 +1076,18 @@ export default function TheChronicles() {
   const [selectorOpen, setSelectorOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<SummaryRecord | null>(null);
   const [approving, setApproving] = useState<number | null>(null);
+  const [collapseLevel, setCollapseLevel] = useState<number | null>(null);
 
   const { data: docs = [] } = trpc.library.listDocuments.useQuery(undefined);
 
-  // Deduplicate docs by title/filename — one PDF may produce many batch rows.
-  // Exclude docs with totalPages=0: these have been purged (pages deleted) or
-  // were never fully ingested, so they won't have any summaries to review.
   const groupMap = useMemo(() => {
     const map = new Map<string, { label: string; ids: number[] }>();
     for (const d of docs) {
       if ((d.totalPages ?? 0) === 0) continue;
       const label = d.title ?? d.filename ?? `Document #${d.id}`;
       const existing = map.get(label);
-      if (existing) {
-        existing.ids.push(d.id);
-      } else {
-        map.set(label, { label, ids: [d.id] });
-      }
+      if (existing) { existing.ids.push(d.id); }
+      else { map.set(label, { label, ids: [d.id] }); }
     }
     return map;
   }, [docs]);
@@ -1030,10 +1107,7 @@ export default function TheChronicles() {
       utils.summaries.listByDocumentIds.invalidate();
       setApproving(null);
     },
-    onError: (err) => {
-      toast.error(err.message);
-      setApproving(null);
-    },
+    onError: (err) => { toast.error(err.message); setApproving(null); },
   });
 
   const approveAllMutation = trpc.summaries.approveAll.useMutation({
@@ -1041,7 +1115,7 @@ export default function TheChronicles() {
   });
 
   const handleApproveAll = async () => {
-    if (selectedDocIds.length === 0) return;
+    if (!selectedDocIds.length) return;
     let total = 0;
     for (const docId of selectedDocIds) {
       const result = await approveAllMutation.mutateAsync({ documentId: docId });
@@ -1055,18 +1129,18 @@ export default function TheChronicles() {
 
   const stats = useMemo(() => {
     const counts: Record<string, number> = {};
-    for (const s of rawSummaries) {
-      counts[s.summaryStatus] = (counts[s.summaryStatus] ?? 0) + 1;
-    }
+    for (const s of rawSummaries) counts[s.summaryStatus] = (counts[s.summaryStatus] ?? 0) + 1;
     return counts;
   }, [rawSummaries]);
 
   const generatedCount = stats["generated"] ?? 0;
 
-  const handleApprove = (id: number) => {
-    setApproving(id);
-    approveMutation.mutate({ id });
-  };
+  const COLLAPSE_LEVELS = [
+    { label: "L1", value: 1 as const, title: "Show top level only (chapters/appendices)" },
+    { label: "L2", value: 2 as const, title: "Expand to second level (sections)" },
+    { label: "L3", value: 3 as const, title: "Expand to third level (subsections)" },
+    { label: "All", value: null as null, title: "Expand all" },
+  ];
 
   return (
     <div className="space-y-6">
@@ -1083,8 +1157,7 @@ export default function TheChronicles() {
         </div>
         {selectedLabel !== null && (
           <Button variant="outline" size="sm" onClick={() => refetch()} className="gap-2">
-            <RefreshCw className="w-4 h-4" />
-            Refresh
+            <RefreshCw className="w-4 h-4" />Refresh
           </Button>
         )}
       </div>
@@ -1103,12 +1176,8 @@ export default function TheChronicles() {
         <CardContent>
           <Popover open={selectorOpen} onOpenChange={setSelectorOpen}>
             <PopoverTrigger asChild>
-              <Button
-                variant="outline"
-                role="combobox"
-                aria-expanded={selectorOpen}
-                className="w-full max-w-lg justify-between font-normal text-left h-auto min-h-9 py-2"
-              >
+              <Button variant="outline" role="combobox" aria-expanded={selectorOpen}
+                className="w-full max-w-lg justify-between font-normal text-left h-auto min-h-9 py-2">
                 <span className="truncate flex-1">
                   {selectedLabel
                     ? (groupMap.get(selectedLabel)?.ids.length ?? 0) > 1
@@ -1119,24 +1188,17 @@ export default function TheChronicles() {
                 <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
               </Button>
             </PopoverTrigger>
-            <PopoverContent
-              className="w-[var(--radix-popover-trigger-width)] max-w-lg p-0"
-              align="start"
-            >
+            <PopoverContent className="w-[var(--radix-popover-trigger-width)] max-w-lg p-0" align="start">
               <Command>
                 <CommandInput placeholder="Search documents…" />
                 <CommandList className="max-h-72">
                   <CommandEmpty>No documents found.</CommandEmpty>
                   <CommandGroup>
                     {Array.from(groupMap.entries()).map(([label, group]) => (
-                      <CommandItem
-                        key={label}
-                        value={label}
-                        onSelect={() => {
-                          setSelectedLabel(label === selectedLabel ? null : label);
-                          setSelectorOpen(false);
-                        }}
-                      >
+                      <CommandItem key={label} value={label} onSelect={() => {
+                        setSelectedLabel(label === selectedLabel ? null : label);
+                        setSelectorOpen(false);
+                      }}>
                         <Check className={`mr-2 h-4 w-4 flex-shrink-0 ${label === selectedLabel ? "opacity-100" : "opacity-0"}`} />
                         <span className="flex-1 truncate">
                           {group.ids.length > 1 ? `${label} (${group.ids.length} batches)` : label}
@@ -1151,7 +1213,7 @@ export default function TheChronicles() {
         </CardContent>
       </Card>
 
-      {/* Stats bar + approve-all */}
+      {/* Stats bar */}
       {selectedLabel !== null && rawSummaries.length > 0 && (
         <div className="flex items-center gap-4 flex-wrap">
           {Object.entries(stats).map(([status, count]) => (
@@ -1162,16 +1224,9 @@ export default function TheChronicles() {
           ))}
           {generatedCount > 0 && (
             <div className="ml-auto">
-              <Button
-                size="sm"
-                variant="outline"
-                className="gap-2 text-green-400 border-green-500/30 hover:bg-green-500/10"
-                onClick={handleApproveAll}
-                disabled={approveAllMutation.isPending}
-              >
-                {approveAllMutation.isPending
-                  ? <Loader2 className="w-4 h-4 animate-spin" />
-                  : <Check className="w-4 h-4" />}
+              <Button size="sm" variant="outline" className="gap-2 text-green-400 border-green-500/30 hover:bg-green-500/10"
+                onClick={handleApproveAll} disabled={approveAllMutation.isPending}>
+                {approveAllMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
                 Approve All Generated ({generatedCount})
               </Button>
             </div>
@@ -1179,7 +1234,7 @@ export default function TheChronicles() {
         </div>
       )}
 
-      {/* Content tabs — shown once a document is selected */}
+      {/* Content tabs */}
       {selectedLabel !== null && (
         <Tabs defaultValue="summaries">
           <TabsList>
@@ -1194,27 +1249,52 @@ export default function TheChronicles() {
           <TabsContent value="summaries">
             <Card>
               <CardHeader className="pb-3">
-                <CardTitle className="text-base flex items-center gap-2">
-                  <Layers className="w-4 h-4 text-primary" />
-                  {selectedLabel} — Hierarchy
-                </CardTitle>
-                {rawSummaries.length > 0 && (
-                  <CardDescription>{rawSummaries.length} summary records</CardDescription>
-                )}
+                <div className="flex items-start justify-between gap-4 flex-wrap">
+                  <div>
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <Layers className="w-4 h-4 text-primary" />
+                      {selectedLabel} — Hierarchy
+                    </CardTitle>
+                    {rawSummaries.length > 0 && (
+                      <CardDescription>{rawSummaries.length} summary records</CardDescription>
+                    )}
+                  </div>
+
+                  {/* Collapse level selector */}
+                  {tree.length > 0 && (
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <span className="text-xs text-muted-foreground">Collapse to:</span>
+                      <div className="flex rounded-md border border-border/40 overflow-hidden">
+                        {COLLAPSE_LEVELS.map((opt, i) => (
+                          <button
+                            key={opt.label}
+                            onClick={() => setCollapseLevel(opt.value)}
+                            title={opt.title}
+                            className={`px-2.5 py-1.5 text-xs transition-colors ${i > 0 ? "border-l border-border/40" : ""} ${
+                              collapseLevel === opt.value
+                                ? "bg-primary/20 text-primary"
+                                : "text-muted-foreground hover:bg-muted/40"
+                            }`}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </CardHeader>
+
               <CardContent className="p-0">
                 {isLoading ? (
                   <div className="flex items-center justify-center py-16 text-muted-foreground gap-2">
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                    Loading summaries…
+                    <Loader2 className="w-5 h-5 animate-spin" />Loading summaries…
                   </div>
                 ) : tree.length === 0 ? (
                   <div className="py-16 text-center text-muted-foreground">
                     <ScrollText className="w-8 h-8 mx-auto mb-3 opacity-30" />
                     <p className="text-sm">No summaries yet for this document.</p>
-                    <p className="text-xs mt-1">
-                      Run the pipeline to generate content break detection and summaries.
-                    </p>
+                    <p className="text-xs mt-1">Run the pipeline to generate content break detection and summaries.</p>
                   </div>
                 ) : (
                   <div className="py-2">
@@ -1223,8 +1303,10 @@ export default function TheChronicles() {
                         key={node.id}
                         node={node}
                         onEdit={setEditTarget}
-                        onApprove={handleApprove}
+                        onApprove={(id) => { setApproving(id); approveMutation.mutate({ id }); }}
                         approving={approving}
+                        depth={0}
+                        collapseLevel={collapseLevel}
                       />
                     ))}
                   </div>
@@ -1249,13 +1331,8 @@ export default function TheChronicles() {
         </Tabs>
       )}
 
-      {/* Edit dialog */}
       {editTarget !== null && (
-        <EditDialog
-          node={editTarget}
-          open={true}
-          onClose={() => setEditTarget(null)}
-        />
+        <EditDialog node={editTarget} open={true} onClose={() => setEditTarget(null)} />
       )}
     </div>
   );
