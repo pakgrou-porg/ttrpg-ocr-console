@@ -31,9 +31,12 @@ import {
   getLlmMetricsByPage, getLlmMetricsJobSummary, getLlmMetricsPageSummary, getLlmProviderMetricsSummary, getStageArtificerMetrics,
   getActiveRetryAttempts,
   getContentSummariesByDocument, updateContentSummary,
+  getContentBlocksByDocumentPaginated, getContentBlocksCount,
+  deleteContentBlocksByDocumentId,
 } from "./db";
 import { encryptSecret, decryptSecret, storeSecretHint, renderMaskedSecret } from "./crypto";
 import { startJob, retryPageStages, RetryStage, enqueuePageRetry, exportDocumentAsUnsloth, cancelAllActiveJobs, pauseJob, resumeJob } from "./pipeline/runner";
+import { assembleDocumentContent } from "./pipeline/contentAssembly";
 import { getAllCircuitBreakerStates } from "./pipeline/invoke";
 import { ENV } from "./_core/env";
 import { FEATURE_AREAS, PROVIDER_TYPES, PIPELINE_STAGES, SUPABASE_CONNECTION_TYPES, SUPABASE_ROLES, SUPABASE_SYNC_MODES, DOCUMENT_STATUSES, OCR_RESULT_STATUSES, HITL_PRIORITIES, HITL_STATUSES, type LlmProvider } from "../drizzle/schema";
@@ -3100,6 +3103,49 @@ export const appRouter = router({
         const generated = all.filter(s => s.summaryStatus === "generated");
         await Promise.all(generated.map(s => updateContentSummary(s.id, { summaryStatus: "approved" })));
         return { count: generated.length };
+      }),
+  }),
+
+  contentBlocks: router({
+    /** Paginated list of assembled content blocks for a document. */
+    listByDocument: protectedProcedure
+      .input(z.object({
+        documentId: z.number().int(),
+        offset: z.number().int().min(0).default(0),
+        limit: z.number().int().min(1).max(200).default(100),
+        /** Filter to a single block type (heading/paragraph/table/rule_term/etc.) */
+        blockType: z.string().optional(),
+      }))
+      .query(async ({ ctx, input }) => {
+        assertDocumentAccess(ctx, await getDocumentById(input.documentId));
+        const [blocks, total] = await Promise.all([
+          getContentBlocksByDocumentPaginated(input.documentId, input.offset, input.limit),
+          getContentBlocksCount(input.documentId),
+        ]);
+        const filtered = input.blockType
+          ? blocks.filter(b => b.blockType === input.blockType)
+          : blocks;
+        return { blocks: filtered, total };
+      }),
+
+    /** Re-run content assembly for a document (admin only). */
+    rerun: adminProcedure
+      .input(z.object({ documentId: z.number().int() }))
+      .mutation(async ({ ctx, input }) => {
+        assertDocumentAccess(ctx, await getDocumentById(input.documentId));
+        // Use job ID 0 for manual re-runs — assembleDocumentContent only uses it for logging
+        await assembleDocumentContent(input.documentId, 0);
+        const total = await getContentBlocksCount(input.documentId);
+        return { success: true, total };
+      }),
+
+    /** Delete all content blocks for a document (admin only). */
+    clear: adminProcedure
+      .input(z.object({ documentId: z.number().int() }))
+      .mutation(async ({ ctx, input }) => {
+        assertDocumentAccess(ctx, await getDocumentById(input.documentId));
+        await deleteContentBlocksByDocumentId(input.documentId);
+        return { success: true };
       }),
   }),
 });

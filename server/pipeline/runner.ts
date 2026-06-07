@@ -24,6 +24,7 @@ import {
 } from "../db";
 import { invokeStage, parseJsonResponse, UserContentPart, InvokeOptions } from "./invoke";
 import { downloadDriveFile, getDriveFileName, deleteLocalFile } from "./drive";
+import { assembleDocumentContent } from "./contentAssembly";
 
 const execFileAsync = promisify(execFile);
 
@@ -1979,6 +1980,11 @@ async function _runJob(jobId: number): Promise<number | null> {
   if (!hasMore) {
     await resolveContentSummaryBoundaries(documentId, totalDocPages).catch(err =>
       console.warn(`[Pipeline] Job ${jobId}: resolveContentSummaryBoundaries failed: ${err.message}`)
+    );
+    // Assemble cross-page content flow from per-page OCR content_blocks.
+    // Runs after boundaries are resolved so section context is available.
+    await assembleDocumentContent(documentId, jobId).catch(err =>
+      console.warn(`[Pipeline] Job ${jobId}: content_assembly failed: ${err.message}`)
     );
     // Generate short/long summaries for every chapter, section, and subsection.
     // Runs after boundaries are resolved so endPageNumber is available for range queries.

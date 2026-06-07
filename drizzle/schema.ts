@@ -238,6 +238,7 @@ export const PIPELINE_STAGES = [
   "content_break_id",
   "summarization",
   "json_assembly",
+  "content_assembly",
   "quality_assessment",
   "artifact_storage",
   "embedding_generation",
@@ -268,6 +269,7 @@ export const STAGE_PHASES: Record<PipelineStage, 1 | 2 | 3 | 0> = {
   content_break_id: 2,
   summarization: 2,
   json_assembly: 2,
+  content_assembly: 2,
   quality_assessment: 2,
   artifact_storage: 3,
   embedding_generation: 3,
@@ -825,3 +827,49 @@ export const contentSummaries = pgTable("content_summaries", {
 
 export type ContentSummary = typeof contentSummaries.$inferSelect;
 export type InsertContentSummary = typeof contentSummaries.$inferInsert;
+
+// ─── Document Content Blocks ──────────────────────────────────────────────────
+//
+// Assembled content flow: each row represents one semantically complete unit
+// extracted from OCR output across one or more physical pages.
+//
+// Running headers, page numbers, footers and decorative content are stripped.
+// Paragraphs that span a page break are merged into a single block using the
+// page-level continuityFlags signals produced by content_break_detect.
+
+export const documentContentBlocks = pgTable("document_content_blocks", {
+  id: serial("id").primaryKey(),
+  documentId: integer("document_id").notNull(),
+  /** 1-based reading-order position within the document. */
+  sequence: integer("sequence").notNull(),
+  /** Semantic type: heading | paragraph | table | rule_term | stat_block | list | sidebar | callout | illustration | map | caption | quote */
+  blockType: varchar("block_type", { length: 32 }).notNull(),
+  /** Assembled text content. Null for purely visual blocks (illustration, map). */
+  content: text("content"),
+  /** For table/stat_block blocks: { caption, headers[], rows[][] } */
+  tableData: jsonb("table_data").$type<{ caption: string | null; headers: string[]; rows: unknown[][] } | null>(),
+  /** First page where this block appears (FK to document_pages.id). */
+  startPageId: integer("start_page_id"),
+  /** Last page where this block appears. Equal to startPageId unless isCrossPage. */
+  endPageId: integer("end_page_id"),
+  /** Printed page number of the first page. */
+  startPageNumber: integer("start_page_number").notNull(),
+  /** Printed page number of the last page. */
+  endPageNumber: integer("end_page_number").notNull(),
+  /** Array of { pageId, pageNumber, blockIdx } pointing to source OCR content_blocks. */
+  sourceRegions: jsonb("source_regions").$type<Array<{ pageId: number; pageNumber: number; blockIdx: number }>>().default([]).notNull(),
+  /** True when this block was merged from content_blocks on two or more pages. */
+  isCrossPage: boolean("is_cross_page").default(false).notNull(),
+  /** Assembly review status: assembled | reviewed | flagged */
+  status: varchar("status", { length: 16 }).default("assembled").notNull(),
+  /** Block-specific metadata: { level?: number, term?: string, list_type?: string } */
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  documentSequenceIdx: index("dcb_document_sequence_idx").on(t.documentId, t.sequence),
+  documentBlockTypeIdx: index("dcb_document_block_type_idx").on(t.documentId, t.blockType),
+}));
+
+export type DocumentContentBlock = typeof documentContentBlocks.$inferSelect;
+export type InsertDocumentContentBlock = typeof documentContentBlocks.$inferInsert;

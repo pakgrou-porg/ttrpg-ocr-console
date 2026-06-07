@@ -24,6 +24,7 @@ import {
   llmTimingMetrics, InsertLlmTimingMetric,
   contentSummaries, InsertContentSummary,
   providerExchangeLogs, InsertProviderExchangeLog, PROVIDER_EXCHANGE_LOG_LIMIT,
+  documentContentBlocks, InsertDocumentContentBlock,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
@@ -2010,4 +2011,66 @@ export async function getStageArtificerMetrics() {
     total_tokens: number;
     fallback_count: number;
   }>;
+}
+
+// ─── Document Content Blocks ──────────────────────────────────────────────────
+
+/**
+ * Bulk-insert assembled content blocks for a document.
+ * Chunks into batches of 200 to stay within postgres parameter limits.
+ */
+export async function createDocumentContentBlocks(blocks: InsertDocumentContentBlock[]): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  if (blocks.length === 0) return;
+  const CHUNK = 200;
+  for (let i = 0; i < blocks.length; i += CHUNK) {
+    await db.insert(documentContentBlocks).values(blocks.slice(i, i + CHUNK));
+  }
+}
+
+export async function getContentBlocksByDocument(documentId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(documentContentBlocks)
+    .where(eq(documentContentBlocks.documentId, documentId))
+    .orderBy(asc(documentContentBlocks.sequence));
+}
+
+export async function getContentBlocksByDocumentPaginated(
+  documentId: number,
+  offset: number,
+  limit: number,
+) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(documentContentBlocks)
+    .where(eq(documentContentBlocks.documentId, documentId))
+    .orderBy(asc(documentContentBlocks.sequence))
+    .offset(offset)
+    .limit(limit);
+}
+
+export async function getContentBlocksCount(documentId: number): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const { count: countFn } = await import("drizzle-orm");
+  const [row] = await db.select({ count: countFn() })
+    .from(documentContentBlocks)
+    .where(eq(documentContentBlocks.documentId, documentId));
+  return Number(row?.count ?? 0);
+}
+
+export async function deleteContentBlocksByDocumentId(documentId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(documentContentBlocks).where(eq(documentContentBlocks.documentId, documentId));
+}
+
+export async function updateContentBlock(id: number, updates: Partial<InsertDocumentContentBlock>): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(documentContentBlocks)
+    .set({ ...updates, updatedAt: new Date() })
+    .where(eq(documentContentBlocks.id, id));
 }

@@ -1069,6 +1069,265 @@ function SummaryNode({
   );
 }
 
+// ── Content Flow ──────────────────────────────────────────────────────────────
+
+const BLOCK_STYLES: Record<string, { bar: string; badge: string; text: string; label: string }> = {
+  heading:     { bar: "border-l-2 border-purple-500/60 bg-purple-500/8",  badge: "bg-purple-500/20 text-purple-300",  text: "text-foreground",         label: "H"       },
+  paragraph:   { bar: "",                                                   badge: "bg-muted/40 text-muted-foreground", text: "text-foreground/90",       label: "¶"       },
+  table:       { bar: "border-l-2 border-orange-500/60 bg-orange-500/8",   badge: "bg-orange-500/20 text-orange-300",  text: "text-foreground",         label: "Table"   },
+  rule_term:   { bar: "border-l-2 border-blue-500/60 bg-blue-500/8",       badge: "bg-blue-500/20 text-blue-300",      text: "text-foreground",         label: "Rule"    },
+  stat_block:  { bar: "border-l-2 border-emerald-500/60 bg-emerald-500/8", badge: "bg-emerald-500/20 text-emerald-300",text: "text-foreground",         label: "Stat"    },
+  list:        { bar: "border-l-2 border-sky-500/60 bg-sky-500/8",         badge: "bg-sky-500/20 text-sky-300",        text: "text-foreground",         label: "List"    },
+  sidebar:     { bar: "border-l-2 border-amber-500/60 bg-amber-500/8",     badge: "bg-amber-500/20 text-amber-300",    text: "text-foreground",         label: "Aside"   },
+  callout:     { bar: "border-l-2 border-amber-400/60 bg-amber-400/8",     badge: "bg-amber-400/20 text-amber-200",    text: "text-foreground",         label: "Callout" },
+  illustration:{ bar: "border border-dashed border-pink-500/40 bg-pink-500/5", badge: "bg-pink-500/20 text-pink-300", text: "text-muted-foreground italic", label: "Illus." },
+  map:         { bar: "border border-dashed border-pink-400/40 bg-pink-400/5", badge: "bg-pink-400/20 text-pink-200", text: "text-muted-foreground italic", label: "Map"    },
+  caption:     { bar: "bg-muted/20",                                        badge: "bg-muted/40 text-muted-foreground", text: "text-muted-foreground italic", label: "Caption" },
+  quote:       { bar: "border-l-4 border-muted bg-muted/10",                badge: "bg-muted/40 text-muted-foreground", text: "text-foreground/70 italic",    label: "Quote"   },
+};
+
+function getBlockStyle(blockType: string) {
+  return BLOCK_STYLES[blockType] ?? { bar: "bg-muted/10", badge: "bg-muted/30 text-muted-foreground", text: "text-foreground", label: blockType };
+}
+
+type ContentBlock = {
+  id: number;
+  sequence: number;
+  blockType: string;
+  content: string | null;
+  tableData: { caption: string | null; headers: string[]; rows: unknown[][] } | null;
+  startPageNumber: number;
+  endPageNumber: number;
+  isCrossPage: boolean;
+  status: string;
+  metadata: Record<string, unknown> | null;
+};
+
+function ContentBlockCard({ block }: { block: ContentBlock }) {
+  const [expanded, setExpanded] = useState(false);
+  const s = getBlockStyle(block.blockType);
+  const isHeading = block.blockType === "heading";
+  const isTable   = block.blockType === "table" || block.blockType === "stat_block";
+  const level     = typeof (block.metadata as any)?.level === "number" ? (block.metadata as any).level : null;
+  const isCross   = block.isCrossPage;
+  const pageLabel = block.startPageNumber === block.endPageNumber
+    ? `p.${block.startPageNumber}`
+    : `pp.${block.startPageNumber}–${block.endPageNumber}`;
+
+  const PREVIEW_CHARS = 300;
+  const longContent = (block.content?.length ?? 0) > PREVIEW_CHARS;
+  const displayText = longContent && !expanded
+    ? block.content!.slice(0, PREVIEW_CHARS) + "…"
+    : block.content ?? "";
+
+  return (
+    <div className={`rounded-md px-3 py-2 space-y-1 ${s.bar}`}>
+      {/* Meta row */}
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+          <span className={`text-[10px] font-mono font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded ${s.badge}`}>
+            {isHeading && level ? `H${level}` : s.label}
+          </span>
+          {isCross && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-500/15 text-yellow-400 font-mono">↕ cross-page</span>
+          )}
+          {isHeading && block.content && (
+            <span className={`font-semibold truncate ${level === 1 ? "text-sm" : "text-xs"}`}>
+              {block.content}
+            </span>
+          )}
+        </div>
+        <span className="text-[10px] text-muted-foreground flex-shrink-0 font-mono">{pageLabel}</span>
+      </div>
+
+      {/* Text content (non-heading) */}
+      {!isHeading && displayText && (
+        <div className={`text-xs leading-relaxed whitespace-pre-wrap break-words ${s.text}`}>
+          {displayText}
+          {longContent && (
+            <button
+              onClick={() => setExpanded(e => !e)}
+              className="ml-1 text-primary underline underline-offset-2 not-italic"
+            >
+              {expanded ? "show less" : "show more"}
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Table data */}
+      {isTable && block.tableData && (
+        <div className="overflow-x-auto mt-1">
+          {block.tableData.caption && (
+            <p className="text-[11px] text-muted-foreground mb-1 italic">{block.tableData.caption}</p>
+          )}
+          <table className="text-[11px] w-full border-collapse">
+            {block.tableData.headers.length > 0 && (
+              <thead>
+                <tr>
+                  {block.tableData.headers.map((h, hi) => (
+                    <th key={hi} className="border border-border/30 px-2 py-0.5 text-left font-semibold bg-muted/30">
+                      {String(h ?? "")}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+            )}
+            <tbody>
+              {(block.tableData.rows as unknown[][]).slice(0, expanded ? 9999 : 8).map((row, ri) => (
+                <tr key={ri} className="even:bg-muted/10">
+                  {(Array.isArray(row) ? row : []).map((cell, ci) => (
+                    <td key={ci} className="border border-border/30 px-2 py-0.5 whitespace-pre-wrap">
+                      {String(cell ?? "")}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!expanded && block.tableData.rows.length > 8 && (
+            <button onClick={() => setExpanded(true)} className="text-[11px] text-primary mt-1 underline underline-offset-2">
+              Show all {block.tableData.rows.length} rows…
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const FLOW_FILTERS = [
+  { label: "All",        value: "" },
+  { label: "Headings",   value: "heading" },
+  { label: "Paragraphs", value: "paragraph" },
+  { label: "Tables",     value: "table" },
+  { label: "Rules",      value: "rule_term" },
+  { label: "Stats",      value: "stat_block" },
+  { label: "Lists",      value: "list" },
+];
+
+const FLOW_PAGE = 100;
+
+function ContentFlowPanel({ documentId }: { documentId: number }) {
+  const [offset, setOffset]       = useState(0);
+  const [filterType, setFilterType] = useState("");
+  const utils = trpc.useUtils();
+
+  const rerunMutation = trpc.contentBlocks.rerun.useMutation({
+    onSuccess: (r) => {
+      toast.success(`Content flow rebuilt: ${r.total} blocks.`);
+      utils.contentBlocks.listByDocument.invalidate({ documentId });
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const { data, isLoading, refetch } = trpc.contentBlocks.listByDocument.useQuery(
+    { documentId, offset, limit: FLOW_PAGE, blockType: filterType || undefined },
+    { enabled: documentId > 0 },
+  );
+
+  const blocks = (data?.blocks ?? []) as ContentBlock[];
+  const total  = data?.total ?? 0;
+
+  // Reset offset when filter or document changes
+  useEffect(() => setOffset(0), [filterType, documentId]);
+
+  const hasPrev = offset > 0;
+  const hasNext = offset + FLOW_PAGE < total;
+
+  return (
+    <div className="space-y-3">
+      {/* Toolbar */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex rounded-md border border-border/40 overflow-hidden">
+          {FLOW_FILTERS.map((f, i) => (
+            <button
+              key={f.value}
+              onClick={() => setFilterType(f.value)}
+              className={`px-2.5 py-1 text-xs transition-colors ${i > 0 ? "border-l border-border/40" : ""} ${
+                filterType === f.value
+                  ? "bg-primary/20 text-primary"
+                  : "text-muted-foreground hover:bg-muted/40"
+              }`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+        <span className="text-xs text-muted-foreground ml-auto">
+          {total} block{total !== 1 ? "s" : ""}
+        </span>
+        <Button
+          variant="outline"
+          size="sm"
+          className="gap-1.5 h-7 text-xs"
+          onClick={() => rerunMutation.mutate({ documentId })}
+          disabled={rerunMutation.isPending}
+        >
+          {rerunMutation.isPending
+            ? <Loader2 className="w-3 h-3 animate-spin" />
+            : <RefreshCw className="w-3 h-3" />}
+          Re-assemble
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7"
+          onClick={() => refetch()}
+          title="Refresh"
+        >
+          <RefreshCw className="w-3 h-3" />
+        </Button>
+      </div>
+
+      {/* Block list */}
+      {isLoading ? (
+        <div className="flex items-center justify-center py-16 text-muted-foreground gap-2">
+          <Loader2 className="w-5 h-5 animate-spin" />
+          Loading content flow…
+        </div>
+      ) : blocks.length === 0 ? (
+        <div className="py-16 text-center text-muted-foreground">
+          <AlignLeft className="w-8 h-8 mx-auto mb-3 opacity-30" />
+          <p className="text-sm">No content blocks assembled yet.</p>
+          <p className="text-xs mt-1 opacity-70">
+            Finish the pipeline (or click Re-assemble) to build the content flow.
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-1.5">
+          {blocks.map(b => <ContentBlockCard key={b.id} block={b} />)}
+        </div>
+      )}
+
+      {/* Pagination */}
+      {total > FLOW_PAGE && (
+        <div className="flex items-center justify-between pt-1">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!hasPrev}
+            onClick={() => setOffset(o => Math.max(0, o - FLOW_PAGE))}
+          >
+            <ChevronLeft className="w-3.5 h-3.5 mr-1" />Prev
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            {offset + 1}–{Math.min(offset + FLOW_PAGE, total)} of {total}
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!hasNext}
+            onClick={() => setOffset(o => o + FLOW_PAGE)}
+          >
+            Next<ChevronRight className="w-3.5 h-3.5 ml-1" />
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function TheChronicles() {
@@ -1241,6 +1500,9 @@ export default function TheChronicles() {
             <TabsTrigger value="summaries" className="gap-1.5">
               <Layers className="w-3.5 h-3.5" />Summaries
             </TabsTrigger>
+            <TabsTrigger value="flow" className="gap-1.5">
+              <AlignLeft className="w-3.5 h-3.5" />Content Flow
+            </TabsTrigger>
             <TabsTrigger value="pages" className="gap-1.5">
               <FileImage className="w-3.5 h-3.5" />Pages
             </TabsTrigger>
@@ -1311,6 +1573,23 @@ export default function TheChronicles() {
                     ))}
                   </div>
                 )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="flow">
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <AlignLeft className="w-4 h-4 text-primary" />
+                  {selectedLabel} — Content Flow
+                </CardTitle>
+                <CardDescription>
+                  Reading-order content: paragraphs merged across page breaks, headers/footers/page numbers stripped.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ContentFlowPanel documentId={selectedDocIds[0] ?? 0} />
               </CardContent>
             </Card>
           </TabsContent>
