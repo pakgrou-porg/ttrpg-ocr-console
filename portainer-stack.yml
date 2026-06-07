@@ -41,6 +41,12 @@ services:
       - "${HOST_PORT:-3000}:3000"
     networks:
       - supabase_net
+    # Allows the container to reach host-machine services (e.g. local LLM servers)
+    # using the hostname "host.docker.internal". Required on Linux Docker.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ${PIPELINE_WORKSPACE_HOST:-/opt/ttrpg-workspace}:/app/workspace
     environment:
       NODE_ENV: production
       PORT: "3000"
@@ -65,12 +71,24 @@ services:
       # to admin on first login. Set once; safe to leave in place afterwards.
       OWNER_OPEN_ID: ${OWNER_OPEN_ID}
       OWNER_NAME: ${OWNER_NAME}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
 
       # ── Supabase REST / Storage / Auth (via Kong gateway) ───────────────────
       # Uses the internal Docker network hostname "supabase-kong".
       SUPABASE_URL: http://supabase-kong:8000
       SUPABASE_ANON_KEY: ${ANON_KEY}
       SUPABASE_SERVICE_KEY: ${SERVICE_ROLE_KEY}
+
+      # ── Google Drive integration (optional) ─────────────────────────────────
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+
+      # ── Public app URL (required for Google OAuth redirect URI) ─────────────
+      APP_URL: ${APP_URL:-http://localhost:3000}
+
+      # ── Pipeline workspace (mounted volume path inside container) ───────────
+      PIPELINE_WORKSPACE: /app/workspace
 
       # ── Manus built-in AI APIs (optional — leave blank for self-hosted) ─────
       BUILT_IN_FORGE_API_URL: ${BUILT_IN_FORGE_API_URL:-}
@@ -115,8 +133,14 @@ networks:
 #   SERVICE_ROLE_KEY          Supabase service role JWT (from Supabase stack env)
 #
 # OPTIONAL (defaults shown):
-#   IMAGE_TAG                 latest  (pin to semver e.g. "0.1.13" for stability)
+#   IMAGE_TAG                 latest  (pin to semver e.g. "0.2.30" for stability)
 #   HOST_PORT                 3000
+#   APP_URL                   http://localhost:3000  (set to public URL for Google OAuth)
+#   ADMIN_EMAIL               (email auto-promoted to admin on every login)
+#   PIPELINE_WORKSPACE_HOST   /opt/ttrpg-workspace  (host path mounted as /app/workspace)
+#   GOOGLE_CLIENT_ID          (required for Google Drive integration)
+#   GOOGLE_CLIENT_SECRET      (required for Google Drive integration)
+#   GOOGLE_API_KEY            (required for Drive file picker)
 #   OAUTH_SERVER_URL          https://api.manus.im
 #   VITE_OAUTH_PORTAL_URL     https://manus.im
 #   VITE_APP_TITLE            TTRPG OCR Console
@@ -124,4 +148,9 @@ networks:
 #   BUILT_IN_FORGE_API_KEY    (leave blank if not using Manus-hosted LLM APIs)
 #   VITE_FRONTEND_FORGE_API_URL
 #   VITE_FRONTEND_FORGE_API_KEY
+#
+# LOCAL LLM SERVERS (e.g. LM Studio on the host machine):
+#   Use "host.docker.internal" as the Base URL when registering an Artificer.
+#   The extra_hosts entry above maps this hostname to the Docker host gateway
+#   so the container can reach services running directly on the Linux host.
 # =============================================================================

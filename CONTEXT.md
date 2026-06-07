@@ -411,8 +411,8 @@ Five `flagCategory` values drive the Archivist's Desk category panel and bulk re
 |---|---|---|
 | 1 | `tsconfig.json` missing `"target": "ES2020"` — root cause of 8+ TS errors | High |
 | 2 | `listDocuments` / `searchDocuments` — ownership filter is JS post-filter, not SQL | High |
-| 3 | `portainer-stack.yml` missing `volumes:` for `PIPELINE_WORKSPACE` — workspace is ephemeral across container restarts | High |
-| 4 | `portainer-stack.yml` missing Google Drive env vars (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_API_KEY`, `APP_URL`) | Medium |
+| 3 | ~~`portainer-stack.yml` missing `volumes:` for `PIPELINE_WORKSPACE`~~ — fixed in v0.2.30; set `PIPELINE_WORKSPACE_HOST` in Portainer env | ~~High~~ Done |
+| 4 | ~~`portainer-stack.yml` missing Google Drive env vars~~ — fixed in v0.2.30 | ~~Medium~~ Done |
 | 5 | `multer.memoryStorage()` for uploads up to 200 MB — should use `diskStorage()` to avoid heap exhaustion | Medium |
 | 6 | No rate limit on `/api/upload/ingest` — unbounded with folder upload enabled | Medium |
 | 7 | Email dispatch for invitation scrolls not implemented (DB records created, never sent) | Medium |
@@ -441,6 +441,9 @@ Five `flagCategory` values drive the Archivist's Desk category panel and bulk re
 - Internal hostname `supabase-db:5432` → PostgreSQL 15
 - Internal hostname `supabase-kong:8000` → Supabase Kong API gateway (REST, Storage, Auth)
 - `DATABASE_URL` must include `?sslmode=disable` for the internal Docker bridge (no TLS cert)
+- `extra_hosts: ["host.docker.internal:host-gateway"]` is set so the container can reach
+  services running directly on the Linux host (e.g. local LLM servers). Use
+  `host.docker.internal:<port>` as the Base URL when registering a local Artificer.
 
 ### Portainer Stack File
 
