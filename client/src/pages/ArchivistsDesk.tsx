@@ -540,31 +540,31 @@ export default function ArchivistsDesk() {
             </CardTitle>
           </CardHeader>
           <CardContent className="px-3 pb-3 space-y-1.5">
-            <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 text-[10px] text-muted-foreground/60 uppercase tracking-wide pb-0.5 border-b border-border/30">
+            <div className="grid grid-cols-[minmax(0,1fr)_3rem_3rem] text-[10px] text-muted-foreground/60 uppercase tracking-wide pb-0.5 border-b border-border/30">
               <span>Stage</span>
               <span className="text-green-500 text-right">✓ Pass</span>
               <span className="text-red-400 text-right">✗ Fail</span>
             </div>
-            <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 items-center">
+            <div className="grid grid-cols-[minmax(0,1fr)_3rem_3rem] items-center">
               <span className="text-xs text-muted-foreground">Ingested</span>
               <span className="text-sm font-bold text-right tabular-nums">{pStats?.pages.total ?? 0}</span>
               <span className="text-sm text-right text-muted-foreground/40 tabular-nums">—</span>
             </div>
-            <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 items-center">
+            <div className="grid grid-cols-[minmax(0,1fr)_3rem_3rem] items-center">
               <span className="text-xs text-muted-foreground">Layout</span>
               <span className="text-sm font-bold text-green-400 text-right tabular-nums">{pStats?.pages.withLayout ?? 0}</span>
               <span className={`text-sm font-bold text-right tabular-nums ${(pStats?.pages.layoutFailed ?? 0) > 0 ? "text-red-400" : "text-muted-foreground/40"}`}>
                 {(pStats?.pages.layoutFailed ?? 0) > 0 ? pStats!.pages.layoutFailed : "—"}
               </span>
             </div>
-            <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 items-center">
+            <div className="grid grid-cols-[minmax(0,1fr)_3rem_3rem] items-center">
               <span className="text-xs text-muted-foreground">Regions</span>
               <span className="text-sm font-bold text-green-400 text-right tabular-nums">{pStats?.pages.withRegions ?? 0}</span>
               <span className={`text-sm font-bold text-right tabular-nums ${(pStats?.pages.bboxFailed ?? 0) > 0 ? "text-red-400" : "text-muted-foreground/40"}`}>
                 {(pStats?.pages.bboxFailed ?? 0) > 0 ? pStats!.pages.bboxFailed : "—"}
               </span>
             </div>
-            <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 items-center">
+            <div className="grid grid-cols-[minmax(0,1fr)_3rem_3rem] items-center">
               <span className="text-xs text-muted-foreground">OCR</span>
               <span className="text-sm font-bold text-green-400 text-right tabular-nums">{pStats?.pages.ocrComplete ?? 0}</span>
               <span className={`text-sm font-bold text-right tabular-nums ${(pStats?.pages.ocrFailed ?? 0) > 0 ? "text-red-400" : "text-muted-foreground/40"}`}>
@@ -572,7 +572,7 @@ export default function ArchivistsDesk() {
               </span>
             </div>
             {((pStats?.pages.total ?? 0) - (pStats?.pages.processed ?? 0)) > 0 && (
-              <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 items-center pt-0.5 border-t border-border/30">
+              <div className="grid grid-cols-[minmax(0,1fr)_3rem_3rem] items-center pt-0.5 border-t border-border/30">
                 <span className="text-xs text-muted-foreground/60">Pending</span>
                 <span className="text-sm text-amber-400 text-right tabular-nums col-span-2">
                   {(pStats?.pages.total ?? 0) - (pStats?.pages.processed ?? 0)}
