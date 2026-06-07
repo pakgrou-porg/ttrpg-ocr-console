@@ -717,7 +717,7 @@ export async function getIngestionJobStats() {
   const all = await db.select().from(ingestionJobs);
   return {
     total: all.length,
-    active: all.filter(j => !["completed", "failed", "queued"].includes(j.status)).length,
+    active: all.filter(j => !["completed", "failed", "queued", "review", "hitl_review", "paused"].includes(j.status)).length,
     completed: all.filter(j => j.status === "completed").length,
     failed: all.filter(j => j.status === "failed").length,
     queued: all.filter(j => j.status === "queued").length,
