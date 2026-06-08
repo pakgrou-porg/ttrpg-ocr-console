@@ -216,7 +216,7 @@ export function BboxRegionEditor({
 }) {
   const baseDrafts = useMemo(() => prepareDrafts(regions), [regions]);
   const [selectedId, setSelectedId] = useState<string | null>(baseDrafts[0]?.id ?? null);
-  const [drawType, setDrawType] = useState<string>("paragraph");
+  const [drawType, setDrawType] = useState<string>("heading");
   const [interaction, setInteraction] = useState<null | {
     mode: "draw" | "move" | "resize";
     id?: string;

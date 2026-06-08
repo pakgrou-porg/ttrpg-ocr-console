@@ -314,6 +314,7 @@ function PageDetailDialog({ pageId, open, onClose }: { pageId: number; open: boo
   const handleFlagged = () => {
     refetch();
     utils.library.listPages.invalidate();
+    onClose();
   };
 
   return (
