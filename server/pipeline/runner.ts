@@ -1651,9 +1651,15 @@ async function _runJob(jobId: number): Promise<number | null> {
       // (indicates the model returned a non-standard schema — garbage-in would
       // produce misleadingly low F1 scores and trigger spurious HITL flags).
       const rawIsUsable = currentRawText.length > 0 && !currentRawText.startsWith("{");
-      nativeSimilarity = (nt !== null && rawIsUsable) ? nativeTextSimilarity(nt, currentRawText) : null;
-      if (nativeSimilarity !== null) {
-        console.log(`[Pipeline] Job ${jobId} p${pageNum} native similarity: ${Math.round(nativeSimilarity * 100)}%`);
+      if (nt !== null && rawIsUsable) {
+        const { similarity, sizeRatio } = nativeTextSimilarity(nt, currentRawText);
+        nativeSimilarity = similarity;
+        console.log(
+          `[Pipeline] Job ${jobId} p${pageNum} native similarity: ` +
+          `${Math.round(similarity * 100)}% (size ratio: ${Math.round(sizeRatio * 100)}%)`
+        );
+      } else {
+        nativeSimilarity = null;
       }
       const ocrResult = await createOcrResult({
         pageId,
@@ -2563,19 +2569,56 @@ function normaliseNativeText(s: string): string {
  * on word boundaries, deduplicates each side, and measures precision/recall.
  * Returns 0 when either input produces no tokens.
  */
-function nativeTextSimilarity(native: string, ocr: string): number {
+/**
+ * Compute a blended similarity score between the native PDF text layer and the
+ * OCR output for a single page.
+ *
+ * Two signals are combined:
+ *
+ *  1. Token-level F1 on unique vocabulary (set-based precision × recall).
+ *     Measures whether the right words were captured regardless of order.
+ *
+ *  2. Payload-size ratio (min/max of raw token counts, 0–1).
+ *     Guards against cases where the set-based F1 looks fine but one side is
+ *     dramatically larger — e.g. OCR that repeats the same vocabulary at 5×
+ *     the length (hallucinated boilerplate) or OCR that captured only a
+ *     fraction of the page.
+ *
+ * The size factor is blended as √(sizeRatio), which means:
+ *   • Identical sizes      (ratio = 1.00) → ×1.00  (no penalty)
+ *   • One side 2× larger   (ratio = 0.50) → ×0.71
+ *   • One side 4× larger   (ratio = 0.25) → ×0.50
+ *   • One side 10× larger  (ratio = 0.10) → ×0.32
+ *
+ * Returns { similarity, sizeRatio } so the caller can log them separately.
+ */
+function nativeTextSimilarity(
+  native: string,
+  ocr:    string,
+): { similarity: number; sizeRatio: number } {
   const tokenize = (s: string): string[] =>
     normaliseNativeText(s).toLowerCase().match(/\b[a-z0-9']+\b/g) ?? [];
   const tokNative = tokenize(native);
   const tokOcr    = tokenize(ocr);
-  if (tokNative.length === 0 || tokOcr.length === 0) return 0;
+  if (tokNative.length === 0 || tokOcr.length === 0) return { similarity: 0, sizeRatio: 0 };
+
+  // Set-based F1 on unique vocabulary
   const uniqNative = Array.from(new Set(tokNative));
   const setOcr     = new Set(tokOcr);
   const intersection = uniqNative.filter(t => setOcr.has(t)).length;
   const precision = intersection / setOcr.size;
   const recall    = intersection / uniqNative.length;
-  if (precision + recall === 0) return 0;
-  return Math.round((2 * precision * recall / (precision + recall)) * 100) / 100;
+  const f1 = precision + recall === 0
+    ? 0
+    : 2 * precision * recall / (precision + recall);
+
+  // Size ratio (raw token counts — not deduplicated)
+  const sizeRatio = Math.min(tokNative.length, tokOcr.length) /
+                    Math.max(tokNative.length, tokOcr.length);
+
+  // Blended score: penalise when payload sizes diverge significantly
+  const similarity = Math.round(f1 * Math.sqrt(sizeRatio) * 100) / 100;
+  return { similarity, sizeRatio: Math.round(sizeRatio * 100) / 100 };
 }
 
 async function countPdfPages(pdfPath: string): Promise<number> {
