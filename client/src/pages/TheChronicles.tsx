@@ -189,104 +189,102 @@ function HitlSection({
   pageId,
   isAlreadyFlagged,
   onFlagged,
+  onFlagAndNext,
 }: {
   pageId: number;
   isAlreadyFlagged?: boolean | null;
+  /** Called after flagging when no "next" action — closes the dialog. */
   onFlagged?: () => void;
+  /** Called after flagging with the "Review & Next" action — navigates to the next page. */
+  onFlagAndNext?: () => void;
 }) {
-  const [reason, setReason] = useState("");
-  const [priority, setPriority] = useState<"low" | "medium" | "high" | "critical">("medium");
-  const [selectedStages, setSelectedStages] = useState<Set<string>>(new Set());
-  const [open, setOpen] = useState(false);
-
-  const flagMutation = trpc.hitl.flag.useMutation({ onError: (err) => toast.error(err.message) });
+  const flagMutation  = trpc.hitl.flag.useMutation({ onError: (err) => toast.error(err.message) });
   const retryMutation = trpc.hitl.retryPage.useMutation({ onError: (err) => toast.error(err.message) });
 
-  const toggleStage = (stage: string) => {
-    setSelectedStages(prev => {
-      const next = new Set(prev);
-      if (next.has(stage)) next.delete(stage); else next.add(stage);
-      return next;
-    });
-  };
-
-  const handleFlag = async () => {
+  /**
+   * Flag the page for HITL review, optionally re-trigger pipeline stages,
+   * then invoke the appropriate navigation callback.
+   * @param stages  Pipeline stages to re-trigger (empty = flag only)
+   * @param andNext true = navigate to next page; false = close dialog
+   */
+  const doFlag = async (stages: string[], andNext: boolean) => {
     try {
-      const result = await flagMutation.mutateAsync({ pageId, reason: reason.trim() || "Failed human review", priority });
+      const result = await flagMutation.mutateAsync({
+        pageId,
+        reason: "Failed human review",
+        priority: "medium",
+      });
       if (result.alreadyQueued) toast.info("Page is already queued for HITL review.");
       else toast.success("Page flagged for HITL review.");
-      if (selectedStages.size > 0) {
+
+      if (stages.length > 0) {
         await retryMutation.mutateAsync({
-          pageId, hitlId: result.id,
-          stages: Array.from(selectedStages) as ("layout_analysis" | "bbox_detection" | "ocr_extraction")[],
+          pageId,
+          hitlId: result.id,
+          stages: stages as ("layout_analysis" | "bbox_detection" | "ocr_extraction")[],
         });
-        toast.success(`Re-queued ${selectedStages.size} stage${selectedStages.size > 1 ? "s" : ""}.`);
+        toast.success(`Re-queued: ${stages.map(s => s.replace(/_/g, " ")).join(", ")}.`);
       }
-      setReason(""); setSelectedStages(new Set()); setOpen(false);
-      onFlagged?.();
+
+      if (andNext) onFlagAndNext?.();
+      else onFlagged?.();
     } catch { /* already toasted */ }
   };
 
   const isBusy = flagMutation.isPending || retryMutation.isPending;
 
   return (
-    <div className="border-t border-border/30 pt-3 mt-1 flex-shrink-0">
-      {isAlreadyFlagged && !open ? (
-        <div className="flex items-center justify-between">
-          <span className="text-xs text-amber-400 flex items-center gap-1.5">
-            <Flag className="w-3.5 h-3.5" />Already flagged for HITL review
-          </span>
-          <Button size="sm" variant="ghost" className="h-7 text-xs gap-1.5" onClick={() => setOpen(true)}>
-            Re-queue stages
-          </Button>
-        </div>
-      ) : !open ? (
-        <Button size="sm" variant="ghost" className="h-7 text-xs gap-1.5 text-muted-foreground hover:text-amber-400" onClick={() => setOpen(true)}>
-          <Flag className="w-3.5 h-3.5" />Flag for HITL review / re-queue
-        </Button>
-      ) : (
-        <div className="space-y-2.5">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium flex items-center gap-1.5 text-amber-400">
-              <Flag className="w-3.5 h-3.5" />Flag for HITL Review
-            </span>
-            <Button size="sm" variant="ghost" className="h-6 text-xs px-2" onClick={() => setOpen(false)}>Cancel</Button>
-          </div>
-          <div className="grid grid-cols-[1fr_auto] gap-2">
-            <Textarea value={reason} onChange={e => setReason(e.target.value)}
-              placeholder={'Reason (optional — defaults to "Failed human review")'}
-              rows={2} className="text-xs resize-none" />
-            <Select value={priority} onValueChange={v => setPriority(v as typeof priority)}>
-              <SelectTrigger className="w-28 h-9 text-xs self-start"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {HITL_PRIORITIES.map(p => <SelectItem key={p} value={p} className="text-xs">{p}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1">
-            <p className="text-[11px] text-muted-foreground">Re-trigger stages (optional):</p>
-            <div className="flex items-center gap-4">
-              {RETRY_STAGES.map(s => (
-                <label key={s.value} className="flex items-center gap-1.5 cursor-pointer">
-                  <Checkbox checked={selectedStages.has(s.value)} onCheckedChange={() => toggleStage(s.value)} className="w-3.5 h-3.5" />
-                  <span className="text-xs text-muted-foreground">{s.label}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-          <Button size="sm" className="gap-1.5 text-xs" onClick={handleFlag} disabled={isBusy}>
-            {isBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Flag className="w-3.5 h-3.5" />}
-            {selectedStages.size > 0 ? "Flag & Re-queue" : "Flag for Review"}
-          </Button>
-        </div>
+    <div className="border-t border-border/30 pt-2.5 mt-1 flex-shrink-0 space-y-2">
+      {isAlreadyFlagged && (
+        <span className="text-[11px] text-amber-400/80 flex items-center gap-1">
+          <Flag className="w-3 h-3" />Already in HITL queue — buttons below re-queue with that stage
+        </span>
       )}
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {/* Primary: flag only */}
+        <Button
+          size="sm" variant="outline"
+          className="gap-1.5 h-7 text-xs border-amber-500/30 text-amber-400 hover:bg-amber-500/10 hover:border-amber-500/50"
+          onClick={() => doFlag([], false)}
+          disabled={isBusy}
+        >
+          {isBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Flag className="w-3 h-3" />}
+          HITL Review
+        </Button>
+
+        {/* Per-stage re-queue buttons */}
+        {RETRY_STAGES.map(s => (
+          <Button
+            key={s.value} size="sm" variant="ghost"
+            className="gap-1.5 h-7 text-xs text-muted-foreground hover:text-amber-300 hover:bg-amber-500/10"
+            onClick={() => doFlag([s.value], false)}
+            disabled={isBusy}
+          >
+            <Flag className="w-3 h-3" />
+            {s.label}
+          </Button>
+        ))}
+
+        {/* Review & Next — only shown when a next page is available */}
+        {onFlagAndNext && (
+          <Button
+            size="sm" variant="ghost"
+            className="gap-1.5 h-7 text-xs text-muted-foreground hover:text-primary hover:bg-primary/10 ml-auto"
+            onClick={() => doFlag([], true)}
+            disabled={isBusy}
+          >
+            {isBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : <ChevronRight className="w-3 h-3" />}
+            Review & Next
+          </Button>
+        )}
+      </div>
     </div>
   );
 }
 
 // ── Page detail dialog ────────────────────────────────────────────────────────
 
-function PageDetailDialog({ pageId, open, onClose }: { pageId: number; open: boolean; onClose: () => void }) {
+function PageDetailDialog({ pageId, open, onClose, onNext }: { pageId: number; open: boolean; onClose: () => void; onNext?: () => void }) {
   const [detailTab, setDetailTab] = useState<"image" | "ocr" | "regions" | "json" | "history">("image");
   const [selectedRegionIdx, setSelectedRegionIdx] = useState<number | null>(null);
   const [showOverlays, setShowOverlays] = useState(true);
@@ -316,6 +314,12 @@ function PageDetailDialog({ pageId, open, onClose }: { pageId: number; open: boo
     utils.library.listPages.invalidate();
     onClose();
   };
+
+  const handleFlagAndNext = onNext ? () => {
+    refetch();
+    utils.library.listPages.invalidate();
+    onNext();
+  } : undefined;
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
@@ -546,7 +550,7 @@ function PageDetailDialog({ pageId, open, onClose }: { pageId: number; open: boo
         </Tabs>
 
         {/* HITL re-queue footer */}
-        <HitlSection pageId={pageId} isAlreadyFlagged={(data as any)?.isFlagged} onFlagged={handleFlagged} />
+        <HitlSection pageId={pageId} isAlreadyFlagged={(data as any)?.isFlagged} onFlagged={handleFlagged} onFlagAndNext={handleFlagAndNext} />
       </DialogContent>
     </Dialog>
   );
@@ -887,6 +891,21 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
         </div>
       ) : (
         <>
+          {/* Pagination — top */}
+          {total > LIMIT && (
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">{total} pages · showing {offset + 1}–{Math.min(offset + LIMIT, total)}</span>
+              <div className="flex gap-2">
+                <Button size="sm" variant="outline" onClick={() => setOffset(Math.max(0, offset - LIMIT))} disabled={offset === 0} className="h-7 gap-1">
+                  <ChevronLeft className="w-3.5 h-3.5" />Prev
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => setOffset(offset + LIMIT)} disabled={offset + LIMIT >= total} className="h-7 gap-1">
+                  Next<ChevronRight className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
             {pages.map((page: any) => (
               <button
@@ -922,6 +941,7 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
             ))}
           </div>
 
+          {/* Pagination — bottom */}
           <div className="flex items-center justify-between pt-1">
             {total > LIMIT ? (
               <>
@@ -954,9 +974,20 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
         </>
       )}
 
-      {selectedPageId != null && (
-        <PageDetailDialog pageId={selectedPageId} open={true} onClose={() => setSelectedPageId(null)} />
-      )}
+      {selectedPageId != null && (() => {
+        const currentIdx = pages.findIndex((p: any) => p.id === selectedPageId);
+        const nextId = currentIdx >= 0 && currentIdx < pages.length - 1
+          ? (pages[currentIdx + 1] as any).id
+          : null;
+        return (
+          <PageDetailDialog
+            pageId={selectedPageId}
+            open={true}
+            onClose={() => setSelectedPageId(null)}
+            onNext={nextId ? () => setSelectedPageId(nextId) : undefined}
+          />
+        );
+      })()}
     </div>
   );
 }
