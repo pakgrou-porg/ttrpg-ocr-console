@@ -561,18 +561,26 @@ function PageDetailDialog({ pageId, open, onClose, onNext }: { pageId: number; o
 function PageThumbnailWithRegions({
   page,
   onClick,
+  selected,
+  onToggleSelect,
 }: {
   page: any;
   onClick: () => void;
+  selected?: boolean;
+  onToggleSelect?: () => void;
 }) {
   const regions = Array.isArray(page.contentRegions) ? page.contentRegions as any[] : [];
   const conf = page.ocrConfidence;
   const confColor = conf == null ? "" : conf >= 80 ? "text-green-400" : conf >= 60 ? "text-amber-400" : "text-red-400";
 
   return (
-    <button
+    <div
+      className={`group relative block w-full rounded-lg overflow-hidden transition-all bg-card text-left cursor-pointer ${
+        selected
+          ? "border-2 border-amber-500/70 shadow-amber-500/20 shadow-md"
+          : "border border-border/40 hover:border-primary/50 hover:shadow-md"
+      }`}
       onClick={onClick}
-      className="group relative block w-full rounded-lg border border-border/40 overflow-hidden hover:border-primary/50 hover:shadow-md transition-all bg-card text-left"
     >
       {/* Image + overlays */}
       <div className="relative w-full aspect-[3/4] overflow-hidden">
@@ -594,6 +602,19 @@ function PageThumbnailWithRegions({
         <div className="absolute inset-0 bg-primary/10 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
           <Eye className="w-5 h-5 text-primary drop-shadow" />
         </div>
+        {/* Selection checkbox — top-left corner */}
+        {onToggleSelect && (
+          <div
+            onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}
+            className={`absolute top-1 left-1 z-10 w-5 h-5 rounded flex items-center justify-center transition-colors cursor-pointer ${
+              selected
+                ? "bg-amber-500 border-2 border-amber-300"
+                : "bg-background/80 border border-border/60 hover:border-amber-400/70"
+            }`}
+          >
+            {selected && <Check className="w-3 h-3 text-white" />}
+          </div>
+        )}
       </div>
 
       {/* Footer */}
@@ -618,7 +639,7 @@ function PageThumbnailWithRegions({
           </div>
         )}
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -633,6 +654,10 @@ function RegionsOverview({
 }) {
   const [offset, setOffset] = useState(0);
   const LIMIT = 40;
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [isBulkFlagging, setIsBulkFlagging] = useState(false);
+
+  const utils = trpc.useUtils();
 
   const { data, isLoading } = trpc.library.listPages.useQuery(
     { documentId, offset, limit: LIMIT },
@@ -640,6 +665,13 @@ function RegionsOverview({
   );
   const pages = data?.pages ?? [];
   const total = data?.total ?? 0;
+
+  const flagMutation = trpc.hitl.flag.useMutation({
+    onError: (err) => toast.error(err.message),
+  });
+
+  // Clear selection when the user pages forward/back
+  useEffect(() => { setSelected(new Set()); }, [offset]);
 
   const totalRegions = useMemo(
     () => pages.reduce((s: number, p: any) => s + (Array.isArray(p.contentRegions) ? p.contentRegions.length : 0), 0),
@@ -651,6 +683,62 @@ function RegionsOverview({
     if (!ws.length) return null;
     return Math.round(ws.reduce((s: number, p: any) => s + p.ocrConfidence, 0) / ws.length);
   }, [pages]);
+
+  const toggleSelect = (pageId: number) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(pageId)) next.delete(pageId);
+      else next.add(pageId);
+      return next;
+    });
+  };
+
+  const allOnPageSelected = pages.length > 0 && pages.every((p: any) => selected.has(p.id));
+
+  const toggleSelectAll = () => {
+    if (allOnPageSelected) {
+      setSelected(prev => {
+        const next = new Set(prev);
+        pages.forEach((p: any) => next.delete(p.id));
+        return next;
+      });
+    } else {
+      setSelected(prev => {
+        const next = new Set(prev);
+        pages.forEach((p: any) => next.add(p.id));
+        return next;
+      });
+    }
+  };
+
+  const handleBulkFlag = async () => {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+    setIsBulkFlagging(true);
+    try {
+      let flagged = 0;
+      let alreadyQueued = 0;
+      const results = await Promise.all(
+        ids.map(pageId =>
+          flagMutation.mutateAsync({ pageId, reason: "Failed human review", priority: "medium" })
+        )
+      );
+      for (const r of results) {
+        if ((r as any).alreadyQueued) alreadyQueued++;
+        else flagged++;
+      }
+      const parts: string[] = [];
+      if (flagged > 0) parts.push(`${flagged} page${flagged !== 1 ? "s" : ""} flagged`);
+      if (alreadyQueued > 0) parts.push(`${alreadyQueued} already queued`);
+      toast.success(parts.join(", ") + ".");
+      setSelected(new Set());
+      void utils.library.listPages.invalidate({ documentId });
+    } catch {
+      /* individual errors already toasted */
+    } finally {
+      setIsBulkFlagging(false);
+    }
+  };
 
   if (isLoading) {
     return (
@@ -673,13 +761,46 @@ function RegionsOverview({
       {/* Summary bar */}
       <div className="flex items-center gap-4 text-xs text-muted-foreground flex-wrap">
         <span>{total} pages</span>
-        <span>{totalRegions} regions on this page</span>
+        <span>{totalRegions} regions on this batch</span>
         {noRegionCount > 0 && (
           <span className="text-amber-400 font-medium">{noRegionCount} missing regions</span>
         )}
         {avgConf != null && <span>avg {avgConf}% confidence</span>}
-        <span className="ml-auto opacity-60">Click any page to inspect details.</span>
+        <button
+          onClick={toggleSelectAll}
+          className="underline underline-offset-2 hover:text-foreground transition-colors"
+        >
+          {allOnPageSelected ? "Deselect all" : "Select all"}
+        </button>
+        <span className="ml-auto opacity-60">Click any page to inspect · checkbox to select.</span>
       </div>
+
+      {/* Bulk action bar — visible only when pages are selected */}
+      {selected.size > 0 && (
+        <div className="flex items-center gap-3 px-3 py-2 rounded-md bg-amber-500/10 border border-amber-500/30">
+          <span className="text-xs font-medium text-amber-300">
+            {selected.size} page{selected.size !== 1 ? "s" : ""} selected
+          </span>
+          <Button
+            size="sm"
+            onClick={handleBulkFlag}
+            disabled={isBulkFlagging}
+            className="h-7 gap-1.5 text-xs bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 border border-amber-500/30"
+            variant="ghost"
+          >
+            {isBulkFlagging
+              ? <Loader2 className="w-3 h-3 animate-spin" />
+              : <Flag className="w-3 h-3" />}
+            Flag for HITL Review
+          </Button>
+          <button
+            onClick={() => setSelected(new Set())}
+            className="ml-auto text-xs text-muted-foreground hover:text-foreground transition-colors underline underline-offset-2"
+          >
+            Clear selection
+          </button>
+        </div>
+      )}
 
       {/* Thumbnail grid */}
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2.5">
@@ -688,6 +809,8 @@ function RegionsOverview({
             key={page.id}
             page={page}
             onClick={() => onPageClick(page.id)}
+            selected={selected.has(page.id)}
+            onToggleSelect={() => toggleSelect(page.id)}
           />
         ))}
       </div>
