@@ -647,15 +647,14 @@ function PageThumbnailWithRegions({
 
 function RegionsOverview({
   documentId,
-  onPageClick,
 }: {
   documentId: number;
-  onPageClick: (id: number) => void;
 }) {
   const [offset, setOffset] = useState(0);
   const LIMIT = 40;
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [isBulkFlagging, setIsBulkFlagging] = useState(false);
+  const [selectedPageId, setSelectedPageId] = useState<number | null>(null);
 
   const utils = trpc.useUtils();
 
@@ -808,7 +807,7 @@ function RegionsOverview({
           <PageThumbnailWithRegions
             key={page.id}
             page={page}
-            onClick={() => onPageClick(page.id)}
+            onClick={() => setSelectedPageId(page.id)}
             selected={selected.has(page.id)}
             onToggleSelect={() => toggleSelect(page.id)}
           />
@@ -831,6 +830,22 @@ function RegionsOverview({
           </div>
         </div>
       )}
+
+      {/* Page detail dialog — owns next-page navigation against its own pages array */}
+      {selectedPageId != null && (() => {
+        const currentIdx = pages.findIndex((p: any) => p.id === selectedPageId);
+        const nextId = currentIdx >= 0 && currentIdx < pages.length - 1
+          ? (pages[currentIdx + 1] as any).id
+          : null;
+        return (
+          <PageDetailDialog
+            pageId={selectedPageId}
+            open={true}
+            onClose={() => setSelectedPageId(null)}
+            onNext={nextId ? () => setSelectedPageId(nextId) : undefined}
+          />
+        );
+      })()}
     </div>
   );
 }
@@ -1002,7 +1017,7 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
       </div>
 
       {viewMode === "regions" ? (
-        <RegionsOverview documentId={documentId} onPageClick={setSelectedPageId} />
+        <RegionsOverview documentId={documentId} />
       ) : isLoading ? (
         <div className="flex items-center justify-center py-10 text-muted-foreground gap-2">
           <Loader2 className="w-4 h-4 animate-spin" />Loading pages…
@@ -1097,7 +1112,8 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
         </>
       )}
 
-      {selectedPageId != null && (() => {
+      {/* Thumbnails-mode dialog — Regions view owns its own dialog internally */}
+      {viewMode === "thumbnails" && selectedPageId != null && (() => {
         const currentIdx = pages.findIndex((p: any) => p.id === selectedPageId);
         const nextId = currentIdx >= 0 && currentIdx < pages.length - 1
           ? (pages[currentIdx + 1] as any).id
