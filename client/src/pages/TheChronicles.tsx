@@ -1078,6 +1078,18 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
           </Select>
         )}
 
+        {/* Export buttons */}
+        <Button size="sm" variant="outline" className="gap-1.5 text-xs"
+          onClick={() => exportMutation.mutate({ documentId })} disabled={exportMutation.isPending || documentId === 0}>
+          {exportMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
+          Export Unsloth JSONL
+        </Button>
+        <Button size="sm" variant="outline" className="gap-1.5 text-xs"
+          onClick={() => exportFullMutation.mutate({ documentId })} disabled={exportFullMutation.isPending || documentId === 0}>
+          {exportFullMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Code2 className="w-3.5 h-3.5" />}
+          Export Full JSON
+        </Button>
+
         {/* View toggle */}
         <div className="flex items-center rounded-md border border-border/40 overflow-hidden ml-auto">
           <button
@@ -1168,35 +1180,19 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
           </div>
 
           {/* Pagination — bottom */}
-          <div className="flex items-center justify-between pt-1">
-            {total > LIMIT ? (
-              <>
-                <span className="text-xs text-muted-foreground">Showing {offset + 1}–{Math.min(offset + LIMIT, total)} of {total} pages</span>
-                <div className="flex gap-2">
-                  <Button size="sm" variant="outline" onClick={() => setOffset(Math.max(0, offset - LIMIT))} disabled={offset === 0} className="h-7 gap-1">
-                    <ChevronLeft className="w-3.5 h-3.5" />Prev
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={() => setOffset(offset + LIMIT)} disabled={offset + LIMIT >= total} className="h-7 gap-1">
-                    Next<ChevronRight className="w-3.5 h-3.5" />
-                  </Button>
-                </div>
-              </>
-            ) : (
-              <span className="text-xs text-muted-foreground">Showing 1–{total} of {total} pages</span>
-            )}
-            <div className="flex gap-2 ml-auto">
-              <Button size="sm" variant="outline" className="gap-1.5 text-xs"
-                onClick={() => exportMutation.mutate({ documentId })} disabled={exportMutation.isPending || documentId === 0}>
-                {exportMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
-                Export Unsloth JSONL
-              </Button>
-              <Button size="sm" variant="outline" className="gap-1.5 text-xs"
-                onClick={() => exportFullMutation.mutate({ documentId })} disabled={exportFullMutation.isPending || documentId === 0}>
-                {exportFullMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Code2 className="w-3.5 h-3.5" />}
-                Export Full JSON
-              </Button>
+          {total > LIMIT && (
+            <div className="flex items-center justify-between pt-1">
+              <span className="text-xs text-muted-foreground">Showing {offset + 1}–{Math.min(offset + LIMIT, total)} of {total} pages</span>
+              <div className="flex gap-2">
+                <Button size="sm" variant="outline" onClick={() => setOffset(Math.max(0, offset - LIMIT))} disabled={offset === 0} className="h-7 gap-1">
+                  <ChevronLeft className="w-3.5 h-3.5" />Prev
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => setOffset(offset + LIMIT)} disabled={offset + LIMIT >= total} className="h-7 gap-1">
+                  Next<ChevronRight className="w-3.5 h-3.5" />
+                </Button>
+              </div>
             </div>
-          </div>
+          )}
         </>
       )}
 
