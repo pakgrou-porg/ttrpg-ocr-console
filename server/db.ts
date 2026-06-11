@@ -1250,7 +1250,7 @@ export async function createDocumentPage(page: InsertDocumentPage) {
 export async function updateDocumentPage(id: number, updates: Partial<InsertDocumentPage>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(documentPages).set(updates).where(eq(documentPages.id, id));
+  await db.update(documentPages).set({ ...updates, updatedAt: new Date() }).where(eq(documentPages.id, id));
 }
 
 // ─── OCR Results ──────────────────────────────────────────────────────────────

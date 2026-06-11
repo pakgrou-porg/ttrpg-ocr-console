@@ -52,7 +52,17 @@ async function startServer() {
     } catch {
       res.status(401).json({ error: "Unauthorized." });
     }
-  }, express.static(pipelineWorkspace, { index: false, dotfiles: "deny" }));
+  }, express.static(pipelineWorkspace, {
+    index: false,
+    dotfiles: "deny",
+    // Prevent browsers from serving stale images after in-place rotation correction.
+    // no-cache means: cache locally but always revalidate with the server (ETag / Last-Modified).
+    // The ?_v=<updatedAt> query param on each URL provides an additional URL-level version,
+    // ensuring old cached entries are never reused after a page record changes.
+    setHeaders: (res) => {
+      res.setHeader("Cache-Control", "no-cache");
+    },
+  }));
   // File upload REST endpoints
   app.use(uploadRouter);
   app.use(uploadIngestRouter);

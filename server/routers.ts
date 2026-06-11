@@ -1807,7 +1807,7 @@ export const appRouter = router({
           pages: pages.map(page => ({
             ...page,
             rawPngUrl: page.rawPngUrl
-              ? `/api/pipeline/pages/${page.rawPngUrl.replace(/.*\/workspace\//, "")}`
+              ? `/api/pipeline/pages/${page.rawPngUrl.replace(/.*\/workspace\//, "")}?_v=${(page.updatedAt as Date).getTime()}`
               : null,
             ocr: ocrMap.get(page.id) ?? null,
             latestRetryStatus: latestRetryMap.get(page.id) ?? null,
@@ -1831,7 +1831,7 @@ export const appRouter = router({
         return {
           ...page,
           rawPngUrl: page.rawPngUrl
-            ? `/api/pipeline/pages/${page.rawPngUrl.replace(/.*\/workspace\//, "")}`
+            ? `/api/pipeline/pages/${page.rawPngUrl.replace(/.*\/workspace\//, "")}?_v=${(page.updatedAt as Date).getTime()}`
             : null,
           ocr: ocr ?? null,
           retryAttempts,
@@ -1876,7 +1876,16 @@ export const appRouter = router({
           contentRegions: null,
         });
 
-        return { newWidth, newHeight };
+        // Re-run all three per-page stages so headers, footers, page numbers and
+        // regions are re-detected against the corrected orientation.
+        enqueuePageRetry(
+          input.pageId,
+          ["layout_analysis", "bbox_detection", "ocr_extraction"],
+          undefined,
+          {},
+        );
+
+        return { newWidth, newHeight, reprocessing: true };
       }),
 
     /** Paginated page list for a document (Chronicles page browser) */
@@ -1906,7 +1915,7 @@ export const appRouter = router({
           pages: pages.map(p => ({
             ...p,
             rawPngUrl: p.rawPngUrl
-              ? `/api/pipeline/pages/${p.rawPngUrl.replace(/.*\/workspace\//, "")}`
+              ? `/api/pipeline/pages/${p.rawPngUrl.replace(/.*\/workspace\//, "")}?_v=${(p.updatedAt as Date).getTime()}`
               : null,
             ocr: ocrMap.get(p.id) ?? null,
             latestRetryStatus: latestRetryMap.get(p.id) ?? null,
@@ -2558,7 +2567,7 @@ export const appRouter = router({
           const ocr = page ? ocrMap.get(page.id) ?? null : null;
           if (!doc || !canAccessDocument(ctx, doc)) return [];
           const imageUrl = page?.rawPngUrl
-            ? `/api/pipeline/pages/${page.rawPngUrl.replace(/.*\/workspace\//, "")}`
+            ? `/api/pipeline/pages/${page.rawPngUrl.replace(/.*\/workspace\//, "")}?_v=${(page.updatedAt as Date).getTime()}`
             : null;
 
           return {
@@ -2652,7 +2661,7 @@ export const appRouter = router({
           if (!page || !doc || !canAccessDocument(ctx, doc)) return [];
 
           const imageUrl = page.rawPngUrl
-            ? `/api/pipeline/pages/${page.rawPngUrl.replace(/.*\/workspace\//, "")}`
+            ? `/api/pipeline/pages/${page.rawPngUrl.replace(/.*\/workspace\//, "")}?_v=${(page.updatedAt as Date).getTime()}`
             : null;
           const corrected = (ocr?.correctedStructuredData as Record<string, unknown> | null) ?? {};
           const layoutExpected = parseCorrection(corrected.layout_correction) ?? {
