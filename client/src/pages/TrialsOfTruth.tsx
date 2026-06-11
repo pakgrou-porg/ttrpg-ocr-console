@@ -14,7 +14,7 @@ import {
   CheckCircle2, XCircle, ArrowUpCircle, ChevronDown, ChevronRight,
   Loader2, ClipboardList, FileText, Layout, BoxSelect, ListTree, Braces, BookOpen,
   Trash2, ChevronLeft, Download, RefreshCw, Scissors, Save, Copy, ClipboardPaste,
-  ArrowUp, ArrowDown, RotateCcw, History, TrendingUp, TrendingDown, Minus,
+  ArrowUp, ArrowDown, RotateCcw, RotateCw, History, TrendingUp, TrendingDown, Minus,
 } from "lucide-react";
 import { BboxOverlayToggle } from "@/components/BboxOverlay";
 import { BboxRegionEditor, parseRegionJson, TYPE_COLORS, sortRegionsByPosition } from "@/components/BboxRegionEditor";
@@ -928,6 +928,18 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
   // Shared between BboxRegionEditor (canvas) and RegionsTab (reading order list) so
   // both sides stay in sync when either one triggers a reorder.
   const [regionsManualOrder, setRegionsManualOrder] = useState(false);
+  // Incremented after each manual rotation to bust the browser image cache.
+  const [imageKey, setImageKey] = useState(0);
+
+  const rotateMut = trpc.library.rotatePage.useMutation({
+    onSuccess: () => { setImageKey(k => k + 1); },
+    onError: (e) => toast({ title: "Rotation failed", description: e.message, variant: "destructive" }),
+  });
+
+  const handleRotate = (degrees: 90 | 180 | 270) => {
+    if (!item.page?.id) return;
+    rotateMut.mutate({ pageId: item.page.id, degrees });
+  };
 
   const resolveMut = trpc.hitl.resolve.useMutation({
     onSuccess: () => { toast({ title: "Approved" }); onResolved(); },
@@ -1204,11 +1216,48 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
           <div className="grid grid-cols-1 lg:grid-cols-[40%_1fr] gap-4">
             {/* Left: page image */}
             <div>
-              <p className="text-xs text-muted-foreground uppercase tracking-wide mb-2">Page Image</p>
-              {pageImagePath ? (
-                activeTab === "regions" ? (
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs text-muted-foreground uppercase tracking-wide">Page Image</p>
+                {/* Rotation controls */}
+                {pageImagePath && (
+                  <div className="flex items-center gap-1">
+                    <span className="text-[10px] text-muted-foreground mr-0.5">Rotate:</span>
+                    <button
+                      onClick={() => handleRotate(270)}
+                      disabled={rotateMut.isPending}
+                      title="Rotate 90° counter-clockwise"
+                      className="flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded border border-border/30 text-muted-foreground hover:text-foreground hover:border-border/60 disabled:opacity-40 transition-colors"
+                    >
+                      <RotateCcw className="w-2.5 h-2.5" />CCW
+                    </button>
+                    <button
+                      onClick={() => handleRotate(90)}
+                      disabled={rotateMut.isPending}
+                      title="Rotate 90° clockwise"
+                      className="flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded border border-border/30 text-muted-foreground hover:text-foreground hover:border-border/60 disabled:opacity-40 transition-colors"
+                    >
+                      {rotateMut.isPending
+                        ? <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                        : <RotateCw className="w-2.5 h-2.5" />}
+                      CW
+                    </button>
+                    <button
+                      onClick={() => handleRotate(180)}
+                      disabled={rotateMut.isPending}
+                      title="Rotate 180°"
+                      className="text-[10px] px-1.5 py-0.5 rounded border border-border/30 text-muted-foreground hover:text-foreground hover:border-border/60 disabled:opacity-40 transition-colors font-mono"
+                    >
+                      180°
+                    </button>
+                  </div>
+                )}
+              </div>
+              {pageImagePath ? (() => {
+                const url = imageKey > 0 ? `${pageImagePath}?_k=${imageKey}` : pageImagePath;
+                return activeTab === "regions" ? (
                   <BboxRegionEditor
-                    imageUrl={pageImagePath}
+                    key={imageKey}
+                    imageUrl={url}
                     regions={editableRegions}
                     onChange={setEditableRegions}
                     manualOrder={regionsManualOrder}
@@ -1216,12 +1265,13 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
                   />
                 ) : (
                   <BboxOverlayToggle
-                    imageUrl={pageImagePath}
+                    key={imageKey}
+                    imageUrl={url}
                     regions={editableRegions}
                     imageClassName="w-full rounded border border-border/50 object-contain max-h-[600px]"
                   />
-                )
-              ) : (
+                );
+              })() : (
                 <div className="h-48 flex items-center justify-center rounded border border-dashed border-border/50 bg-muted/10 text-muted-foreground text-sm">
                   Image not available
                 </div>
