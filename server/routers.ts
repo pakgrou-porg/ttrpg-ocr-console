@@ -37,6 +37,7 @@ import {
 import { encryptSecret, decryptSecret, storeSecretHint, renderMaskedSecret } from "./crypto";
 import { startJob, retryPageStages, RetryStage, enqueuePageRetry, exportDocumentAsUnsloth, cancelAllActiveJobs, pauseJob, resumeJob } from "./pipeline/runner";
 import { assembleDocumentContent } from "./pipeline/contentAssembly";
+import { applyRotationInPlace } from "./pipeline/rotationDetection";
 import { getAllCircuitBreakerStates } from "./pipeline/invoke";
 import { ENV } from "./_core/env";
 import { FEATURE_AREAS, PROVIDER_TYPES, PIPELINE_STAGES, SUPABASE_CONNECTION_TYPES, SUPABASE_ROLES, SUPABASE_SYNC_MODES, DOCUMENT_STATUSES, OCR_RESULT_STATUSES, HITL_PRIORITIES, HITL_STATUSES, type LlmProvider } from "../drizzle/schema";
@@ -1835,6 +1836,43 @@ export const appRouter = router({
           ocr: ocr ?? null,
           retryAttempts,
         };
+      }),
+
+    /**
+     * Manually rotate a page's raw (and preprocessed) PNG in place.
+     * Used by HITL reviewers to correct orientation that auto-detection
+     * missed or got wrong.  The file is overwritten; all downstream re-runs
+     * will see the corrected image.
+     */
+    rotatePage: protectedProcedure
+      .input(z.object({
+        pageId: z.number().int(),
+        /** Clockwise rotation to apply: 90 = CW quarter-turn, 270 = CCW quarter-turn, 180 = flip. */
+        degrees: z.union([z.literal(90), z.literal(180), z.literal(270)]),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const page = await getPageById(input.pageId);
+        if (!page) throw new TRPCError({ code: "NOT_FOUND", message: "Page not found." });
+        assertDocumentAccess(ctx, await getDocumentById(page.documentId));
+        if (!page.rawPngUrl) throw new TRPCError({ code: "BAD_REQUEST", message: "Page has no image on disk." });
+
+        // Rotate raw PNG (source of truth)
+        const { newWidth, newHeight } = await applyRotationInPlace(page.rawPngUrl, input.degrees as 90 | 180 | 270);
+
+        // Rotate preprocessed PNG if present (OCR stages use this path)
+        if (page.preprocessedPngUrl) {
+          await applyRotationInPlace(page.preprocessedPngUrl, input.degrees as 90 | 180 | 270).catch(err =>
+            console.warn(`[HITL] rotatePage: could not rotate preprocessed PNG for page ${input.pageId}: ${err.message}`),
+          );
+        }
+
+        await updateDocumentPage(input.pageId, {
+          rotationCorrected: true,
+          imageWidth: newWidth,
+          imageHeight: newHeight,
+        });
+
+        return { newWidth, newHeight };
       }),
 
     /** Paginated page list for a document (Chronicles page browser) */

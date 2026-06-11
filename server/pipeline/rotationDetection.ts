@@ -175,9 +175,11 @@ export async function detectDocumentMajorityIsPortrait(
  * the file in place.  White is used as the background fill for any uncovered
  * corners (though for right-angle rotations there are no uncovered corners).
  *
+ * Exported so the HITL router can apply manually-requested rotations.
+ *
  * @returns the new width and height of the corrected image
  */
-async function applyRotationInPlace(
+export async function applyRotationInPlace(
   imagePath: string,
   degrees: RotationDegrees,
 ): Promise<{ newWidth: number; newHeight: number }> {

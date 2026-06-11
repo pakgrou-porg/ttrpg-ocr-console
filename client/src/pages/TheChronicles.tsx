@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import {
-  BookOpen, Layers, RefreshCw, RotateCcw, ChevronsUpDown, ScrollText, ChevronRight, ChevronDown,
+  BookOpen, Layers, RefreshCw, RotateCcw, RotateCw, ChevronsUpDown, ScrollText, ChevronRight, ChevronDown,
   Check, Edit, Loader2, FileImage, ChevronLeft, Eye, Code2, AlignLeft,
   History, FileText, Grid3x3, Flag, LayoutGrid, List,
 } from "lucide-react";
@@ -288,12 +288,25 @@ function PageDetailDialog({ pageId, open, onClose, onNext }: { pageId: number; o
   const [detailTab, setDetailTab] = useState<"image" | "ocr" | "regions" | "json" | "history">("image");
   const [selectedRegionIdx, setSelectedRegionIdx] = useState<number | null>(null);
   const [showOverlays, setShowOverlays] = useState(true);
+  // Incremented after each manual rotation to bust the browser's image cache
+  const [imageKey, setImageKey] = useState(0);
 
   const utils = trpc.useUtils();
   const { data, isLoading, refetch } = trpc.library.getPageDetail.useQuery(
     { pageId },
     { enabled: open && pageId > 0 },
   );
+
+  const rotateMutation = trpc.library.rotatePage.useMutation({
+    onError: (err) => toast.error(`Rotation failed: ${err.message}`),
+  });
+
+  const handleRotate = async (degrees: 90 | 180 | 270) => {
+    await rotateMutation.mutateAsync({ pageId, degrees });
+    setImageKey(k => k + 1);
+    refetch();
+    void utils.library.listPages.invalidate();
+  };
 
   // Reset selected region when page changes
   useEffect(() => { setSelectedRegionIdx(null); }, [pageId]);
@@ -384,8 +397,9 @@ function PageDetailDialog({ pageId, open, onClose, onNext }: { pageId: number; o
               <TabsContent value="image" className="flex-1 overflow-auto mt-0 pt-3">
                 {data?.rawPngUrl ? (
                   <div className="space-y-2">
-                    {regions.length > 0 && (
-                      <div className="flex items-center gap-2 flex-wrap">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {/* Region overlay toggle */}
+                      {regions.length > 0 && (
                         <button
                           onClick={() => setShowOverlays(v => !v)}
                           className={`flex items-center gap-1.5 text-xs px-2 py-1 rounded border transition-colors ${
@@ -397,20 +411,53 @@ function PageDetailDialog({ pageId, open, onClose, onNext }: { pageId: number; o
                           <Grid3x3 className="w-3 h-3" />
                           {showOverlays ? "Regions on" : "Regions off"}
                         </button>
-                        {selectedRegionIdx !== null && (
-                          <span className="text-xs text-muted-foreground">
-                            Focused: <span className={`px-1.5 py-0.5 rounded font-mono text-[10px] ${regionPillClass(regions[selectedRegionIdx]?.type ?? "")}`}>
-                              {regions[selectedRegionIdx]?.type}
-                            </span>
-                            {" "}#{selectedRegionIdx + 1}
-                            <button className="ml-2 text-muted-foreground hover:text-foreground" onClick={() => setSelectedRegionIdx(null)}>✕</button>
+                      )}
+                      {selectedRegionIdx !== null && (
+                        <span className="text-xs text-muted-foreground">
+                          Focused: <span className={`px-1.5 py-0.5 rounded font-mono text-[10px] ${regionPillClass(regions[selectedRegionIdx]?.type ?? "")}`}>
+                            {regions[selectedRegionIdx]?.type}
                           </span>
-                        )}
+                          {" "}#{selectedRegionIdx + 1}
+                          <button className="ml-2 text-muted-foreground hover:text-foreground" onClick={() => setSelectedRegionIdx(null)}>✕</button>
+                        </span>
+                      )}
+
+                      {/* Manual rotation controls */}
+                      <div className={`flex items-center gap-1 ml-auto ${regions.length === 0 ? "" : "border-l border-border/30 pl-2"}`}>
+                        <span className="text-xs text-muted-foreground mr-0.5">Rotate:</span>
+                        <button
+                          onClick={() => handleRotate(270)}
+                          disabled={rotateMutation.isPending}
+                          title="Rotate 90° counter-clockwise"
+                          className="flex items-center gap-1 text-xs px-2 py-1 rounded border border-border/30 text-muted-foreground hover:text-foreground hover:border-border/60 disabled:opacity-40 transition-colors"
+                        >
+                          <RotateCcw className="w-3 h-3" />CCW
+                        </button>
+                        <button
+                          onClick={() => handleRotate(90)}
+                          disabled={rotateMutation.isPending}
+                          title="Rotate 90° clockwise"
+                          className="flex items-center gap-1 text-xs px-2 py-1 rounded border border-border/30 text-muted-foreground hover:text-foreground hover:border-border/60 disabled:opacity-40 transition-colors"
+                        >
+                          <RotateCw className="w-3 h-3" />CW
+                        </button>
+                        <button
+                          onClick={() => handleRotate(180)}
+                          disabled={rotateMutation.isPending}
+                          title="Rotate 180° (flip upside-down)"
+                          className="flex items-center gap-1 text-xs px-2 py-1 rounded border border-border/30 text-muted-foreground hover:text-foreground hover:border-border/60 disabled:opacity-40 transition-colors"
+                        >
+                          {rotateMutation.isPending
+                            ? <Loader2 className="w-3 h-3 animate-spin" />
+                            : <span className="font-mono">180°</span>}
+                        </button>
                       </div>
-                    )}
+                    </div>
+
                     <div className="relative w-full">
                       <img
-                        src={data.rawPngUrl}
+                        key={imageKey}
+                        src={`${data.rawPngUrl}${imageKey > 0 ? `?_k=${imageKey}` : ""}`}
                         alt={`Page ${data.pageNumber}`}
                         className="w-full block rounded border border-border/40"
                       />
