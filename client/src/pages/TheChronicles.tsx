@@ -642,7 +642,10 @@ function PageThumbnailWithRegions({
       onClick={onClick}
     >
       {/* Image + overlays */}
-      <div className="relative w-full aspect-[3/4] overflow-hidden">
+      <div
+        className="relative w-full overflow-hidden"
+        style={{ aspectRatio: page.imageWidth && page.imageHeight ? `${page.imageWidth}/${page.imageHeight}` : "3/4" }}
+      >
         {page.rawPngUrl ? (
           <img
             src={page.rawPngUrl}
@@ -1054,7 +1057,7 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
 
   const { data, isLoading } = trpc.library.listPages.useQuery(
     { documentId, offset, limit: LIMIT },
-    { enabled: documentId > 0 && viewMode === "thumbnails" },
+    { enabled: documentId > 0 },
   );
 
   const pages = data?.pages ?? [];
@@ -1092,6 +1095,21 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
         </div>
       </div>
 
+      {/* Persistent navigation — shown in both Thumbnails and Regions Overview */}
+      {total > LIMIT && (
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-muted-foreground">Showing {offset + 1}–{Math.min(offset + LIMIT, total)} of {total} pages</span>
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" onClick={() => setOffset(Math.max(0, offset - LIMIT))} disabled={offset === 0} className="h-7 gap-1">
+              <ChevronLeft className="w-3.5 h-3.5" />Prev
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setOffset(offset + LIMIT)} disabled={offset + LIMIT >= total} className="h-7 gap-1">
+              Next<ChevronRight className="w-3.5 h-3.5" />
+            </Button>
+          </div>
+        </div>
+      )}
+
       {viewMode === "regions" ? (
         <RegionsOverview documentId={documentId} offset={offset} onOffsetChange={setOffset} />
       ) : isLoading ? (
@@ -1105,20 +1123,6 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
         </div>
       ) : (
         <>
-          {/* Pagination — top */}
-          {total > LIMIT && (
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-muted-foreground">Showing {offset + 1}–{Math.min(offset + LIMIT, total)} of {total} pages</span>
-              <div className="flex gap-2">
-                <Button size="sm" variant="outline" onClick={() => setOffset(Math.max(0, offset - LIMIT))} disabled={offset === 0} className="h-7 gap-1">
-                  <ChevronLeft className="w-3.5 h-3.5" />Prev
-                </Button>
-                <Button size="sm" variant="outline" onClick={() => setOffset(offset + LIMIT)} disabled={offset + LIMIT >= total} className="h-7 gap-1">
-                  Next<ChevronRight className="w-3.5 h-3.5" />
-                </Button>
-              </div>
-            </div>
-          )}
 
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
             {pages.map((page: any) => (
@@ -1128,9 +1132,17 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
                 className="group relative rounded-lg border border-border/40 overflow-hidden hover:border-primary/50 hover:shadow-md transition-all text-left bg-card"
               >
                 {page.rawPngUrl ? (
-                  <img src={page.rawPngUrl} alt={`Page ${page.pageNumber}`} className="w-full aspect-[3/4] object-cover object-top" />
+                  <img
+                    src={page.rawPngUrl}
+                    alt={`Page ${page.pageNumber}`}
+                    className="w-full object-cover object-top"
+                    style={{ aspectRatio: page.imageWidth && page.imageHeight ? `${page.imageWidth}/${page.imageHeight}` : "3/4" }}
+                  />
                 ) : (
-                  <div className="w-full aspect-[3/4] bg-muted/30 flex items-center justify-center">
+                  <div
+                    className="w-full bg-muted/30 flex items-center justify-center"
+                    style={{ aspectRatio: "3/4" }}
+                  >
                     <FileImage className="w-8 h-8 text-muted-foreground/30" />
                   </div>
                 )}
