@@ -141,6 +141,13 @@
       "when": 1781136000000,
       "tag": "0019_rotation_detection",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1781222400000,
+      "tag": "0020_page_parts",
+      "breakpoints": true
     }
   ]
 }

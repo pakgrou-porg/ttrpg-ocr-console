@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, type ElementType } from "react";
+import { useState, useEffect, useMemo, useRef, Fragment, type ElementType } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -472,6 +472,42 @@ function LayoutTab({ item, correction, onCorrect, onSave, isSaving, onRotate, is
             ))}
           </SelectContent>
         </Select>
+        {onRotate && (
+          <>
+            <span className="text-muted-foreground/30 select-none">|</span>
+            <span className="text-xs text-muted-foreground">Rotate:</span>
+            <Button
+              size="sm" variant="outline"
+              className="gap-1.5 h-7 text-xs"
+              onClick={() => onRotate(270)}
+              disabled={isRotating}
+              title="Rotate 90° counter-clockwise"
+            >
+              <RotateCcw className="w-3 h-3" />CCW
+            </Button>
+            <Button
+              size="sm" variant="outline"
+              className="gap-1.5 h-7 text-xs"
+              onClick={() => onRotate(90)}
+              disabled={isRotating}
+              title="Rotate 90° clockwise"
+            >
+              <RotateCw className="w-3 h-3" />CW
+            </Button>
+            <Button
+              size="sm" variant="outline"
+              className="gap-1.5 h-7 text-xs"
+              onClick={() => onRotate(180)}
+              disabled={isRotating}
+              title="Flip 180°"
+            >
+              {isRotating
+                ? <Loader2 className="w-3 h-3 animate-spin" />
+                : <span className="font-mono text-[11px]">180°</span>}
+              Flip
+            </Button>
+          </>
+        )}
       </div>
 
       {layoutType === "body_text" ? (
@@ -491,58 +527,21 @@ function LayoutTab({ item, correction, onCorrect, onSave, isSaving, onRotate, is
             value={correction} onChange={onCorrect} onSave={onSave} isSaving={isSaving} />
         </>
       )}
-
-      {/* Rotation correction — shown when the page image needs reorienting */}
-      {onRotate && (
-        <div className="border-t border-border/30 pt-3 space-y-2">
-          <p className="text-xs text-muted-foreground uppercase tracking-wide">Correct Orientation</p>
-          <p className="text-[11px] text-muted-foreground leading-relaxed">
-            Rewrites the page image in place and clears the current layout and regions — they will need to be re-detected after saving.
-          </p>
-          <div className="flex items-center gap-2">
-            <Button
-              size="sm" variant="outline"
-              className="gap-1.5 h-7 text-xs"
-              onClick={() => onRotate(270)}
-              disabled={isRotating}
-              title="Rotate 90° counter-clockwise"
-            >
-              <RotateCcw className="w-3 h-3" />CCW 90°
-            </Button>
-            <Button
-              size="sm" variant="outline"
-              className="gap-1.5 h-7 text-xs"
-              onClick={() => onRotate(90)}
-              disabled={isRotating}
-              title="Rotate 90° clockwise"
-            >
-              <RotateCw className="w-3 h-3" />CW 90°
-            </Button>
-            <Button
-              size="sm" variant="outline"
-              className="gap-1.5 h-7 text-xs"
-              onClick={() => onRotate(180)}
-              disabled={isRotating}
-              title="Flip 180°"
-            >
-              {isRotating
-                ? <Loader2 className="w-3 h-3 animate-spin" />
-                : <span className="font-mono text-[11px]">180°</span>}
-              Flip
-            </Button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
 
-function RegionsTab({ item, correction, onCorrect, onSave, isSaving, editableRegions, onReorder, manualOrder, onAutoSort }: TabProps & {
+function RegionsTab({ item, correction, onCorrect, onSave, isSaving, editableRegions, onReorder, manualOrder, onAutoSort, onSplitRegion, isSplitting }: TabProps & {
   editableRegions?: any[];
   onReorder?: (regions: any[]) => void;
   manualOrder?: boolean;
   onAutoSort?: () => void;
+  /** Called when the user requests a region crop+rotate split. bbox is in % coords 0–100. */
+  onSplitRegion?: (bbox: { x: number; y: number; w: number; h: number }, degrees: 90 | 180 | 270) => void;
+  isSplitting?: boolean;
 }) {
+  const [splittingIdx, setSplittingIdx] = useState<number | null>(null);
+
   const sd = item.ocr?.structuredData as any;
   const regions = item.page?.contentRegions ?? sd?.regions ?? sd?.bounding_boxes ?? sd?.content_regions;
 
@@ -591,42 +590,97 @@ function RegionsTab({ item, correction, onCorrect, onSave, isSaving, editableReg
               </button>
             )}
           </div>
-          <div className="space-y-0.5 max-h-48 overflow-y-auto">
+          <div className="space-y-0.5 max-h-64 overflow-y-auto">
             {sortedRegions.map((region: any, idx: number, arr: any[]) => {
               const type = region.type ?? region.regionType ?? "unknown";
               const color = TYPE_COLORS[type] ?? TYPE_COLORS.unknown;
+              const isSplittingThis = splittingIdx === idx;
               return (
-                <div
-                  key={region.reviewId ?? idx}
-                  className="flex items-center gap-2 px-2 py-1 rounded text-xs text-muted-foreground hover:bg-muted/30 transition-colors"
-                >
-                  <span className="font-mono w-5 text-center flex-shrink-0 text-muted-foreground/60">{idx + 1}</span>
-                  <span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ background: color }} />
-                  <span className="flex-1 truncate">{type}</span>
-                  <span className="text-[10px] text-muted-foreground/40 flex-shrink-0 font-mono">
-                    {(region.bbox?.x ?? 0).toFixed(0)},{(region.bbox?.y ?? 0).toFixed(0)}
-                  </span>
-                  <div className="flex gap-0.5 flex-shrink-0">
-                    <button
-                      type="button"
-                      onClick={e => { e.stopPropagation(); reorderByStep(idx, "up"); }}
-                      disabled={idx === 0}
-                      className="p-0.5 rounded hover:bg-muted/50 disabled:opacity-20 transition-colors"
-                      title="Move earlier in reading order"
-                    >
-                      <ArrowUp className="w-3 h-3" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={e => { e.stopPropagation(); reorderByStep(idx, "down"); }}
-                      disabled={idx === arr.length - 1}
-                      className="p-0.5 rounded hover:bg-muted/50 disabled:opacity-20 transition-colors"
-                      title="Move later in reading order"
-                    >
-                      <ArrowDown className="w-3 h-3" />
-                    </button>
+                <Fragment key={region.reviewId ?? idx}>
+                  <div
+                    className={`flex items-center gap-2 px-2 py-1 rounded text-xs text-muted-foreground transition-colors ${isSplittingThis ? "bg-amber-500/5" : "hover:bg-muted/30"}`}
+                  >
+                    <span className="font-mono w-5 text-center flex-shrink-0 text-muted-foreground/60">{idx + 1}</span>
+                    <span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ background: color }} />
+                    <span className="flex-1 truncate">{type}</span>
+                    <span className="text-[10px] text-muted-foreground/40 flex-shrink-0 font-mono">
+                      {(region.bbox?.x ?? 0).toFixed(0)},{(region.bbox?.y ?? 0).toFixed(0)}
+                    </span>
+                    <div className="flex gap-0.5 flex-shrink-0">
+                      <button
+                        type="button"
+                        onClick={e => { e.stopPropagation(); reorderByStep(idx, "up"); }}
+                        disabled={idx === 0}
+                        className="p-0.5 rounded hover:bg-muted/50 disabled:opacity-20 transition-colors"
+                        title="Move earlier in reading order"
+                      >
+                        <ArrowUp className="w-3 h-3" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={e => { e.stopPropagation(); reorderByStep(idx, "down"); }}
+                        disabled={idx === arr.length - 1}
+                        className="p-0.5 rounded hover:bg-muted/50 disabled:opacity-20 transition-colors"
+                        title="Move later in reading order"
+                      >
+                        <ArrowDown className="w-3 h-3" />
+                      </button>
+                      {onSplitRegion && region.bbox && (
+                        <button
+                          type="button"
+                          onClick={e => { e.stopPropagation(); setSplittingIdx(isSplittingThis ? null : idx); }}
+                          className={`p-0.5 rounded transition-colors ${isSplittingThis ? "text-amber-400" : "text-muted-foreground/40 hover:text-amber-400 hover:bg-muted/50"}`}
+                          title="Extract & rotate this region as a separate page part"
+                        >
+                          <Scissors className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
                   </div>
-                </div>
+                  {isSplittingThis && onSplitRegion && region.bbox && (
+                    <div className="flex items-center gap-1.5 px-2 py-1.5 mx-0.5 rounded-b border border-t-0 border-amber-500/20 bg-amber-500/5 text-xs">
+                      <Scissors className="w-3 h-3 text-amber-400 flex-shrink-0" />
+                      <span className="text-muted-foreground text-[11px] flex-shrink-0">Split & rotate:</span>
+                      <Button
+                        size="sm" variant="outline"
+                        className="gap-1 h-6 text-[11px] px-1.5"
+                        disabled={isSplitting}
+                        title="Extract counter-clockwise 90°"
+                        onClick={() => { onSplitRegion(region.bbox, 270); setSplittingIdx(null); }}
+                      >
+                        <RotateCcw className="w-2.5 h-2.5" />CCW
+                      </Button>
+                      <Button
+                        size="sm" variant="outline"
+                        className="gap-1 h-6 text-[11px] px-1.5"
+                        disabled={isSplitting}
+                        title="Extract clockwise 90°"
+                        onClick={() => { onSplitRegion(region.bbox, 90); setSplittingIdx(null); }}
+                      >
+                        <RotateCw className="w-2.5 h-2.5" />CW
+                      </Button>
+                      <Button
+                        size="sm" variant="outline"
+                        className="gap-1 h-6 text-[11px] px-1.5"
+                        disabled={isSplitting}
+                        title="Extract and flip 180°"
+                        onClick={() => { onSplitRegion(region.bbox, 180); setSplittingIdx(null); }}
+                      >
+                        {isSplitting
+                          ? <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                          : <span className="font-mono text-[10px]">180°</span>}
+                        Flip
+                      </Button>
+                      <button
+                        type="button"
+                        className="ml-auto text-[10px] text-muted-foreground/50 hover:text-muted-foreground transition-colors px-1"
+                        onClick={() => setSplittingIdx(null)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+                </Fragment>
               );
             })}
           </div>
@@ -975,6 +1029,21 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
   const [regionsManualOrder, setRegionsManualOrder] = useState(false);
   // Incremented after each manual rotation to bust the browser image cache.
   const [imageKey, setImageKey] = useState(0);
+
+  const splitMut = trpc.library.splitPageRegion.useMutation({
+    onSuccess: (data) => {
+      toast({
+        title: "Region extracted",
+        description: `Page part ${data.partIndex} created (id ${data.newPageId}) — pipeline re-running.`,
+      });
+    },
+    onError: (e) => toast({ title: "Split failed", description: e.message, variant: "destructive" }),
+  });
+
+  const handleSplitRegion = (bbox: { x: number; y: number; w: number; h: number }, degrees: 90 | 180 | 270) => {
+    if (!item.page?.id) return;
+    splitMut.mutate({ pageId: item.page.id, bbox, degrees });
+  };
 
   const rotateMut = trpc.library.rotatePage.useMutation({
     onSuccess: () => {
@@ -1328,6 +1397,8 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
                   onReorder={(rs) => { setRegionsManualOrder(true); setEditableRegions(rs); }}
                   manualOrder={regionsManualOrder}
                   onAutoSort={() => { setRegionsManualOrder(false); setEditableRegions(sortRegionsByPosition(editableRegions)); }}
+                  onSplitRegion={handleSplitRegion}
+                  isSplitting={splitMut.isPending}
                 />}
                 {activeTab === "structure" && <StructureTab item={item} correction={corrections.structure} onCorrect={setCorrection("structure")} onSave={saveSection("structure")} isSaving={saveCorrectionMut.isPending} />}
                 {activeTab === "json"      && <JsonTab      item={item} correction={corrections.json}      onCorrect={setCorrection("json")}      onSave={saveSection("json")}      isSaving={saveCorrectionMut.isPending} />}

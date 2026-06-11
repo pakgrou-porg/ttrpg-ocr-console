@@ -1,3 +1,4 @@
+import path from "path";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { nanoid } from "nanoid";
@@ -21,7 +22,7 @@ import {
   getAllSupabaseInstances, getSupabaseInstanceById, createSupabaseInstance, updateSupabaseInstance, deleteSupabaseInstance, setActiveSupabaseInstance, testSupabaseInstanceConnection,
   getDocumentById, getAllDocuments, createDocument, updateDocument, deleteDocument, searchDocuments,
   getDocumentByJobId, getPagesByDocumentId, getPagesByDocumentIdPaginated, getDocumentPageCount,
-  getPageById, getPageByPhash, createDocumentPage, updateDocumentPage,
+  getPageById, getPageByPhash, createDocumentPage, updateDocumentPage, getPagePartIndicesForPageNumber,
   getPagesByIds, getDocumentsByIds, getOcrResultsByPageIds,
   getOcrResultByPageId, getOcrResultById, createOcrResult, updateOcrResult,
   getHitlItemById, getHitlItemsByIds, getHitlItemsByPageId, getAllHitlItems, createHitlItem, updateHitlItem, getHitlStats, getHitlCategoryStats, getHitlItemsQueuedByCategory,
@@ -37,7 +38,7 @@ import {
 import { encryptSecret, decryptSecret, storeSecretHint, renderMaskedSecret } from "./crypto";
 import { startJob, retryPageStages, RetryStage, enqueuePageRetry, exportDocumentAsUnsloth, cancelAllActiveJobs, pauseJob, resumeJob } from "./pipeline/runner";
 import { assembleDocumentContent } from "./pipeline/contentAssembly";
-import { applyRotationInPlace } from "./pipeline/rotationDetection";
+import { applyRotationInPlace, cropAndRotateRegion } from "./pipeline/rotationDetection";
 import { getAllCircuitBreakerStates } from "./pipeline/invoke";
 import { ENV } from "./_core/env";
 import { FEATURE_AREAS, PROVIDER_TYPES, PIPELINE_STAGES, SUPABASE_CONNECTION_TYPES, SUPABASE_ROLES, SUPABASE_SYNC_MODES, DOCUMENT_STATUSES, OCR_RESULT_STATUSES, HITL_PRIORITIES, HITL_STATUSES, type LlmProvider } from "../drizzle/schema";
@@ -1886,6 +1887,82 @@ export const appRouter = router({
         );
 
         return { newWidth, newHeight, reprocessing: true };
+      }),
+
+    /**
+     * Extract a bounding-box region from a page image, rotate the crop, and
+     * create a new sibling documentPage record with the same pageNumber so it
+     * can be processed independently by the pipeline.
+     *
+     * Use-case: a page contains a rotated table, chart, or sidebar that needs
+     * different orientation handling from the rest of the page.
+     *
+     * The bbox uses the pipeline's standard percentage coordinates (0–100).
+     * partIndex on the new record is automatically set to max(existingParts)+1.
+     * The original page is left unchanged; a HITL reviewer can manually remove
+     * the split region from the original's contentRegions if desired.
+     */
+    splitPageRegion: protectedProcedure
+      .input(z.object({
+        pageId: z.number().int(),
+        /** Crop region in % coordinates (0–100), same format as contentRegions bbox. */
+        bbox: z.object({
+          x: z.number().min(0).max(100),
+          y: z.number().min(0).max(100),
+          w: z.number().min(0.5).max(100),
+          h: z.number().min(0.5).max(100),
+        }),
+        /** Clockwise rotation to apply to the extracted sub-image. */
+        degrees: z.union([z.literal(90), z.literal(180), z.literal(270)]),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const page = await getPageById(input.pageId);
+        if (!page) throw new TRPCError({ code: "NOT_FOUND", message: "Page not found." });
+        assertDocumentAccess(ctx, await getDocumentById(page.documentId));
+        if (!page.rawPngUrl) throw new TRPCError({ code: "BAD_REQUEST", message: "Page has no image on disk." });
+
+        // Determine next part index for this (documentId, pageNumber) pair
+        const existingIndices = await getPagePartIndicesForPageNumber(page.documentId, page.pageNumber);
+        const nextPartIndex = existingIndices.length > 0 ? Math.max(...existingIndices) + 1 : 1;
+
+        // Derive a sibling filename: page-001.png → page-001-part-1.png
+        const dir       = path.dirname(page.rawPngUrl);
+        const base      = path.basename(page.rawPngUrl, ".png");
+        const partFile  = `${base}-part-${nextPartIndex}.png`;
+        const partPath  = path.join(dir, partFile);
+
+        // Crop the region and rotate it into the new file
+        const { newWidth, newHeight } = await cropAndRotateRegion(
+          page.rawPngUrl,
+          input.bbox,
+          input.degrees as 90 | 180 | 270,
+          partPath,
+        );
+
+        // Create a new page record for this part
+        const newPage = await createDocumentPage({
+          documentId:       page.documentId,
+          pageNumber:       page.pageNumber,
+          rawPngUrl:        partPath,
+          imageWidth:       newWidth,
+          imageHeight:      newHeight,
+          rotationCorrected: true,
+          detectedRotation: input.degrees,
+          partIndex:        nextPartIndex,
+          // Link back to the root original (skip intermediate splits)
+          parentPageId:     page.parentPageId ?? page.id,
+          sourceRegionBbox: input.bbox,
+        });
+
+        // Queue layout, bbox, and OCR stages for the new sub-image
+        enqueuePageRetry(
+          newPage.id,
+          ["layout_analysis", "bbox_detection", "ocr_extraction"],
+          undefined,
+          {},
+        );
+
+        return { newPageId: newPage.id, partIndex: nextPartIndex, reprocessing: true };
       }),
 
     /** Paginated page list for a document (Chronicles page browser) */

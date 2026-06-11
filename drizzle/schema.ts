@@ -510,6 +510,16 @@ export const documentPages = pgTable("document_pages", {
   detectedRotation: integer("detected_rotation"),
   /** True when the raw PNG was auto-corrected by rotating it to the upright orientation. */
   rotationCorrected: boolean("rotation_corrected").default(false).notNull(),
+  /**
+   * 0 = original / primary page image (all pre-existing rows).
+   * 1, 2, … = sub-images extracted when a region was split out due to a
+   *           different orientation.  Multiple parts share the same pageNumber.
+   */
+  partIndex: integer("part_index").notNull().default(0),
+  /** For split parts: references the original page this sub-image was cropped from. */
+  parentPageId: integer("parent_page_id"),
+  /** Bounding box (% of original page, 0–100) from which this part was cropped. */
+  sourceRegionBbox: jsonb("source_region_bbox").$type<{ x: number; y: number; w: number; h: number } | null>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (t) => ({

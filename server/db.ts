@@ -1239,6 +1239,21 @@ export async function getPageByPhash(phash: string) {
   return result.length > 0 ? result[0] : undefined;
 }
 
+/** Return all partIndex values for every row with the given (documentId, pageNumber).
+ *  Used to determine the next available partIndex when splitting a region. */
+export async function getPagePartIndicesForPageNumber(
+  documentId: number,
+  pageNumber: number,
+): Promise<number[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({ partIndex: documentPages.partIndex })
+    .from(documentPages)
+    .where(and(eq(documentPages.documentId, documentId), eq(documentPages.pageNumber, pageNumber)));
+  return rows.map(r => r.partIndex);
+}
+
 export async function createDocumentPage(page: InsertDocumentPage) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");

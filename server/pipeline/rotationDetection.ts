@@ -197,6 +197,54 @@ export async function applyRotationInPlace(
   return { newWidth: meta.width ?? 0, newHeight: meta.height ?? 0 };
 }
 
+// ─── Region crop + rotate ─────────────────────────────────────────────────────
+
+/**
+ * Crop a bounding-box region from a source image, rotate the crop, and write
+ * the result to a new file.
+ *
+ * The `bbox` uses percentage coordinates (0–100) matching the pipeline's
+ * stored format: x,y = top-left corner; w,h = width and height as percent of
+ * the source image dimensions.
+ *
+ * @param imagePath   Absolute filesystem path to the source PNG.
+ * @param bbox        Region to crop, in percentage coords { x, y, w, h }.
+ * @param degrees     Clockwise rotation to apply to the cropped image.
+ * @param outputPath  Absolute path where the output PNG will be written.
+ * @returns           Pixel dimensions of the resulting image.
+ */
+export async function cropAndRotateRegion(
+  imagePath: string,
+  bbox: { x: number; y: number; w: number; h: number },
+  degrees: RotationDegrees,
+  outputPath: string,
+): Promise<{ newWidth: number; newHeight: number }> {
+  const sharp = await loadSharp();
+  if (!sharp) throw new Error("[RotationDetect] Sharp not available — run: pnpm add sharp");
+
+  const meta = await sharp(imagePath).metadata();
+  const imgW = meta.width ?? 0;
+  const imgH = meta.height ?? 0;
+  if (!imgW || !imgH) throw new Error("[RotationDetect] Source image has no readable dimensions");
+
+  // Convert percentage bbox to pixel coordinates, clamped to image bounds
+  const left   = Math.max(0, Math.floor(bbox.x / 100 * imgW));
+  const top    = Math.max(0, Math.floor(bbox.y / 100 * imgH));
+  const width  = Math.min(Math.max(1, Math.ceil(bbox.w / 100 * imgW)), imgW - left);
+  const height = Math.min(Math.max(1, Math.ceil(bbox.h / 100 * imgH)), imgH - top);
+
+  const buffer = await sharp(imagePath)
+    .extract({ left, top, width, height })
+    .rotate(degrees, { background: { r: 255, g: 255, b: 255, alpha: 1 } })
+    .png()
+    .toBuffer();
+
+  await writeFile(outputPath, buffer);
+
+  const outMeta = await sharp(buffer).metadata();
+  return { newWidth: outMeta.width ?? 0, newHeight: outMeta.height ?? 0 };
+}
+
 // ─── Main export ──────────────────────────────────────────────────────────────
 
 /**
