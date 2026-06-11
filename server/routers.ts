@@ -1866,10 +1866,14 @@ export const appRouter = router({
           );
         }
 
+        // Clear layout and regions — their coordinates and classifications were
+        // derived from the pre-rotation image and are now invalid.
         await updateDocumentPage(input.pageId, {
           rotationCorrected: true,
           imageWidth: newWidth,
           imageHeight: newHeight,
+          layoutType: null,
+          contentRegions: null,
         });
 
         return { newWidth, newHeight };

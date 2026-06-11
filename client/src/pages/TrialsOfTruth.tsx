@@ -438,7 +438,10 @@ function BodyTextLayoutForm({ corrected, onCorrect, onSave, isSaving }: {
   );
 }
 
-function LayoutTab({ item, correction, onCorrect, onSave, isSaving }: TabProps) {
+function LayoutTab({ item, correction, onCorrect, onSave, isSaving, onRotate, isRotating }: TabProps & {
+  onRotate?: (degrees: 90 | 180 | 270) => void;
+  isRotating?: boolean;
+}) {
   const sd = item.ocr?.structuredData as any;
   const corrected = parseLayoutCorrection(correction);
   const layoutType = String(corrected.layout_type ?? corrected.layoutType ?? item.page?.layoutType ?? sd?.layout_type ?? "unknown");
@@ -487,6 +490,48 @@ function LayoutTab({ item, correction, onCorrect, onSave, isSaving }: TabProps) 
           <CorrectionField label="Layout correction (JSON)"
             value={correction} onChange={onCorrect} onSave={onSave} isSaving={isSaving} />
         </>
+      )}
+
+      {/* Rotation correction — shown when the page image needs reorienting */}
+      {onRotate && (
+        <div className="border-t border-border/30 pt-3 space-y-2">
+          <p className="text-xs text-muted-foreground uppercase tracking-wide">Correct Orientation</p>
+          <p className="text-[11px] text-muted-foreground leading-relaxed">
+            Rewrites the page image in place and clears the current layout and regions — they will need to be re-detected after saving.
+          </p>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm" variant="outline"
+              className="gap-1.5 h-7 text-xs"
+              onClick={() => onRotate(270)}
+              disabled={isRotating}
+              title="Rotate 90° counter-clockwise"
+            >
+              <RotateCcw className="w-3 h-3" />CCW 90°
+            </Button>
+            <Button
+              size="sm" variant="outline"
+              className="gap-1.5 h-7 text-xs"
+              onClick={() => onRotate(90)}
+              disabled={isRotating}
+              title="Rotate 90° clockwise"
+            >
+              <RotateCw className="w-3 h-3" />CW 90°
+            </Button>
+            <Button
+              size="sm" variant="outline"
+              className="gap-1.5 h-7 text-xs"
+              onClick={() => onRotate(180)}
+              disabled={isRotating}
+              title="Flip 180°"
+            >
+              {isRotating
+                ? <Loader2 className="w-3 h-3 animate-spin" />
+                : <span className="font-mono text-[11px]">180°</span>}
+              Flip
+            </Button>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -932,7 +977,11 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
   const [imageKey, setImageKey] = useState(0);
 
   const rotateMut = trpc.library.rotatePage.useMutation({
-    onSuccess: () => { setImageKey(k => k + 1); },
+    onSuccess: () => {
+      setImageKey(k => k + 1);
+      // Layout and regions were cleared server-side — reset local correction fields too
+      setCorrections(c => ({ ...c, layout: "", regions: "" }));
+    },
     onError: (e) => toast({ title: "Rotation failed", description: e.message, variant: "destructive" }),
   });
 
@@ -1216,42 +1265,7 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
           <div className="grid grid-cols-1 lg:grid-cols-[40%_1fr] gap-4">
             {/* Left: page image */}
             <div>
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-xs text-muted-foreground uppercase tracking-wide">Page Image</p>
-                {/* Rotation controls */}
-                {pageImagePath && (
-                  <div className="flex items-center gap-1">
-                    <span className="text-[10px] text-muted-foreground mr-0.5">Rotate:</span>
-                    <button
-                      onClick={() => handleRotate(270)}
-                      disabled={rotateMut.isPending}
-                      title="Rotate 90° counter-clockwise"
-                      className="flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded border border-border/30 text-muted-foreground hover:text-foreground hover:border-border/60 disabled:opacity-40 transition-colors"
-                    >
-                      <RotateCcw className="w-2.5 h-2.5" />CCW
-                    </button>
-                    <button
-                      onClick={() => handleRotate(90)}
-                      disabled={rotateMut.isPending}
-                      title="Rotate 90° clockwise"
-                      className="flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded border border-border/30 text-muted-foreground hover:text-foreground hover:border-border/60 disabled:opacity-40 transition-colors"
-                    >
-                      {rotateMut.isPending
-                        ? <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                        : <RotateCw className="w-2.5 h-2.5" />}
-                      CW
-                    </button>
-                    <button
-                      onClick={() => handleRotate(180)}
-                      disabled={rotateMut.isPending}
-                      title="Rotate 180°"
-                      className="text-[10px] px-1.5 py-0.5 rounded border border-border/30 text-muted-foreground hover:text-foreground hover:border-border/60 disabled:opacity-40 transition-colors font-mono"
-                    >
-                      180°
-                    </button>
-                  </div>
-                )}
-              </div>
+              <p className="text-xs text-muted-foreground uppercase tracking-wide mb-2">Page Image</p>
               {pageImagePath ? (() => {
                 const url = imageKey > 0 ? `${pageImagePath}?_k=${imageKey}` : pageImagePath;
                 return activeTab === "regions" ? (
@@ -1308,7 +1322,7 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
               {/* Tab content */}
               <div className="flex-1 overflow-auto">
                 {activeTab === "text"      && <TextTab      item={item} correction={corrections.text}      onCorrect={setCorrection("text")}      onSave={saveSection("text")}      isSaving={saveCorrectionMut.isPending} />}
-                {activeTab === "layout"    && <LayoutTab    item={item} correction={corrections.layout}    onCorrect={setCorrection("layout")}    onSave={saveSection("layout")}    isSaving={saveCorrectionMut.isPending} />}
+                {activeTab === "layout"    && <LayoutTab    item={item} correction={corrections.layout}    onCorrect={setCorrection("layout")}    onSave={saveSection("layout")}    isSaving={saveCorrectionMut.isPending} onRotate={handleRotate} isRotating={rotateMut.isPending} />}
                 {activeTab === "regions"   && <RegionsTab   item={item} correction={corrections.regions}   onCorrect={setCorrection("regions")}   onSave={saveSection("regions")}   isSaving={saveCorrectionMut.isPending}
                   editableRegions={editableRegions}
                   onReorder={(rs) => { setRegionsManualOrder(true); setEditableRegions(rs); }}
