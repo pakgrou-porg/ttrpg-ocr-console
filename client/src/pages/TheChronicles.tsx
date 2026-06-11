@@ -718,11 +718,14 @@ function PageThumbnailWithRegions({
 
 function RegionsOverview({
   documentId,
+  offset,
+  onOffsetChange,
 }: {
   documentId: number;
+  offset: number;
+  onOffsetChange: (n: number) => void;
 }) {
-  const [offset, setOffset] = useState(0);
-  const LIMIT = 40;
+  const LIMIT = 20;
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [isBulkFlagging, setIsBulkFlagging] = useState(false);
   const [selectedPageId, setSelectedPageId] = useState<number | null>(null);
@@ -742,6 +745,8 @@ function RegionsOverview({
 
   // Clear selection when the user pages forward/back
   useEffect(() => { setSelected(new Set()); }, [offset]);
+
+  const setOffset = onOffsetChange;
 
   const totalRegions = useMemo(
     () => pages.reduce((s: number, p: any) => s + (Array.isArray(p.contentRegions) ? p.contentRegions.length : 0), 0),
@@ -830,7 +835,7 @@ function RegionsOverview({
     <div className="space-y-3">
       {/* Summary bar */}
       <div className="flex items-center gap-4 text-xs text-muted-foreground flex-wrap">
-        <span>{total} pages</span>
+        <span>Showing {offset + 1}–{Math.min(offset + LIMIT, total)} of {total} pages</span>
         <span>{totalRegions} regions on this batch</span>
         {noRegionCount > 0 && (
           <span className="text-amber-400 font-medium">{noRegionCount} missing regions</span>
@@ -889,7 +894,7 @@ function RegionsOverview({
       {total > LIMIT && (
         <div className="flex items-center justify-between pt-1">
           <span className="text-xs text-muted-foreground">
-            {total} total · showing {offset + 1}–{Math.min(offset + LIMIT, total)}
+            Showing {offset + 1}–{Math.min(offset + LIMIT, total)} of {total} pages
           </span>
           <div className="flex gap-2">
             <Button size="sm" variant="outline" onClick={() => setOffset(Math.max(0, offset - LIMIT))} disabled={offset === 0} className="h-7 gap-1">
@@ -1088,7 +1093,7 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
       </div>
 
       {viewMode === "regions" ? (
-        <RegionsOverview documentId={documentId} />
+        <RegionsOverview documentId={documentId} offset={offset} onOffsetChange={setOffset} />
       ) : isLoading ? (
         <div className="flex items-center justify-center py-10 text-muted-foreground gap-2">
           <Loader2 className="w-4 h-4 animate-spin" />Loading pages…
@@ -1103,7 +1108,7 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
           {/* Pagination — top */}
           {total > LIMIT && (
             <div className="flex items-center justify-between">
-              <span className="text-xs text-muted-foreground">{total} pages · showing {offset + 1}–{Math.min(offset + LIMIT, total)}</span>
+              <span className="text-xs text-muted-foreground">Showing {offset + 1}–{Math.min(offset + LIMIT, total)} of {total} pages</span>
               <div className="flex gap-2">
                 <Button size="sm" variant="outline" onClick={() => setOffset(Math.max(0, offset - LIMIT))} disabled={offset === 0} className="h-7 gap-1">
                   <ChevronLeft className="w-3.5 h-3.5" />Prev
@@ -1154,7 +1159,7 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
           <div className="flex items-center justify-between pt-1">
             {total > LIMIT ? (
               <>
-                <span className="text-xs text-muted-foreground">{total} pages total</span>
+                <span className="text-xs text-muted-foreground">Showing {offset + 1}–{Math.min(offset + LIMIT, total)} of {total} pages</span>
                 <div className="flex gap-2">
                   <Button size="sm" variant="outline" onClick={() => setOffset(Math.max(0, offset - LIMIT))} disabled={offset === 0} className="h-7 gap-1">
                     <ChevronLeft className="w-3.5 h-3.5" />Prev
@@ -1165,7 +1170,7 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
                 </div>
               </>
             ) : (
-              <span className="text-xs text-muted-foreground">{total} pages total</span>
+              <span className="text-xs text-muted-foreground">Showing 1–{total} of {total} pages</span>
             )}
             <div className="flex gap-2 ml-auto">
               <Button size="sm" variant="outline" className="gap-1.5 text-xs"
