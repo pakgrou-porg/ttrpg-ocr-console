@@ -134,6 +134,13 @@
       "when": 1781049600000,
       "tag": "0018_content_blocks",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1781136000000,
+      "tag": "0019_rotation_detection",
+      "breakpoints": true
     }
   ]
 }

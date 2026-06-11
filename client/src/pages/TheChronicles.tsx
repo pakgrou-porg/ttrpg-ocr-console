@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import {
-  BookOpen, Layers, RefreshCw, ChevronsUpDown, ScrollText, ChevronRight, ChevronDown,
+  BookOpen, Layers, RefreshCw, RotateCcw, ChevronsUpDown, ScrollText, ChevronRight, ChevronDown,
   Check, Edit, Loader2, FileImage, ChevronLeft, Eye, Code2, AlignLeft,
   History, FileText, Grid3x3, Flag, LayoutGrid, List,
 } from "lucide-react";
@@ -338,6 +338,18 @@ function PageDetailDialog({ pageId, open, onClose, onNext }: { pageId: number; o
                 <Flag className="w-3 h-3" />HITL
               </span>
             )}
+            {(data as any)?.rotationCorrected && (
+              <span title={`Page was auto-rotated ${(data as any).detectedRotation}° to correct orientation`}
+                className="text-xs bg-sky-500/20 text-sky-400 border border-sky-500/30 px-1.5 py-0.5 rounded flex items-center gap-1">
+                <RotateCcw className="w-3 h-3" />Rotated {(data as any).detectedRotation}°
+              </span>
+            )}
+            {!(data as any)?.rotationCorrected && (data as any)?.detectedRotation != null && (data as any)?.detectedRotation !== 0 && (
+              <span title="Rotation suspected but direction unknown — verify in HITL review"
+                className="text-xs bg-amber-500/10 text-amber-400 border border-amber-500/30 px-1.5 py-0.5 rounded flex items-center gap-1">
+                <RotateCcw className="w-3 h-3" />Rotation?
+              </span>
+            )}
             {data?.ocrConfidence != null && (
               <span className="text-xs text-muted-foreground ml-auto mr-6">
                 {data.ocrConfidence}% confidence
@@ -623,6 +635,18 @@ function PageThumbnailWithRegions({
           <span className="text-xs font-mono font-medium">p.{page.pageNumber}</span>
           <div className="flex items-center gap-1">
             {(page as any).isFlagged && <Flag className="w-2.5 h-2.5 text-amber-400" />}
+            {(page as any).rotationCorrected && (
+              <span title={`Rotation auto-corrected: ${(page as any).detectedRotation}°`}
+                className="flex items-center gap-0.5 text-[10px] font-mono text-sky-400">
+                <RotateCcw className="w-2.5 h-2.5" />{(page as any).detectedRotation}°
+              </span>
+            )}
+            {!(page as any).rotationCorrected && (page as any).detectedRotation != null && (page as any).detectedRotation !== 0 && (
+              <span title={`Possible rotation detected: ${(page as any).detectedRotation}° (needs HITL review)`}
+                className="flex items-center gap-0.5 text-[10px] font-mono text-amber-400">
+                <RotateCcw className="w-2.5 h-2.5" />?
+              </span>
+            )}
             {regions.length > 0 && (
               <span className="text-[10px] font-mono text-muted-foreground">{regions.length}r</span>
             )}

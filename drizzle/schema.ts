@@ -223,6 +223,7 @@ export const PIPELINE_STAGES = [
   "document_intelligence",
   "pdf_to_png",
   "pdf_text_extract",
+  "rotation_detection",
   "layout_analysis",
   "layout_classification",
   "bbox_detection",
@@ -254,6 +255,7 @@ export const STAGE_PHASES: Record<PipelineStage, 1 | 2 | 3 | 0> = {
   document_intelligence: 1,
   pdf_to_png: 1,
   pdf_text_extract: 1,
+  rotation_detection: 1,
   layout_analysis: 1,
   layout_classification: 1,
   bbox_detection: 1,
@@ -504,6 +506,10 @@ export const documentPages = pgTable("document_pages", {
   nativeText: text("native_text"),
   /** True when pdftotext found a usable embedded text layer on this page. */
   hasEmbeddedText: boolean("has_embedded_text").default(false).notNull(),
+  /** Rotation (0/90/180/270) detected by Tesseract OSD or aspect-ratio heuristic. Null = not yet checked. */
+  detectedRotation: integer("detected_rotation"),
+  /** True when the raw PNG was auto-corrected by rotating it to the upright orientation. */
+  rotationCorrected: boolean("rotation_corrected").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (t) => ({

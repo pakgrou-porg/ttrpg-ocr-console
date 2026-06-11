@@ -25,6 +25,10 @@ import {
 import { invokeStage, parseJsonResponse, UserContentPart, InvokeOptions } from "./invoke";
 import { downloadDriveFile, getDriveFileName, deleteLocalFile } from "./drive";
 import { assembleDocumentContent } from "./contentAssembly";
+import {
+  detectAndCorrectPageRotation,
+  detectDocumentMajorityIsPortrait,
+} from "./rotationDetection";
 
 const execFileAsync = promisify(execFile);
 
@@ -1394,6 +1398,45 @@ async function _runJob(jobId: number): Promise<number | null> {
   // information and image quality are preserved. Text-extraction stages (layout,
   // bbox, OCR, tabular) benefit from the cleaner binarized versions.
   const rawPageFiles = [...pageFiles]; // snapshot originals before possible reassignment
+
+  // ── Stage: rotation_detection ─────────────────────────────────────────────
+  // Detects and auto-corrects rotated pages BEFORE preprocessing and layout
+  // analysis so all downstream stages receive correctly-oriented images.
+  // Files are overwritten in place — both rawPageFiles and pageFiles reflect
+  // the correction since they point to the same paths at this stage.
+  {
+    await updateIngestionJobStatus(jobId, { currentStage: "rotation_detection" });
+    const majorityIsPortrait = await detectDocumentMajorityIsPortrait(pageFiles);
+    let correctedCount = 0;
+    let flaggedCount = 0;
+    for (let i = 0; i < pageFiles.length; i++) {
+      try {
+        const result = await detectAndCorrectPageRotation(pageFiles[i], majorityIsPortrait);
+        if (result.degrees !== 0) {
+          const updates: Record<string, unknown> = { detectedRotation: result.degrees };
+          if (result.corrected) {
+            updates.rotationCorrected = true;
+            if (result.newWidth) updates.imageWidth = result.newWidth;
+            if (result.newHeight) updates.imageHeight = result.newHeight;
+            correctedCount++;
+          } else {
+            flaggedCount++;
+          }
+          await updateDocumentPage(pageIds[i], updates as any);
+        }
+      } catch (err: any) {
+        console.warn(`[Pipeline] Job ${jobId} p${pageOffset + i + 1}: rotation_detection failed (non-fatal): ${err.message}`);
+      }
+    }
+    if (correctedCount > 0 || flaggedCount > 0) {
+      console.log(
+        `[Pipeline] Job ${jobId}: rotation_detection — ` +
+        `${correctedCount} auto-corrected, ${flaggedCount} flagged (low confidence / direction unknown)`,
+      );
+    } else {
+      console.log(`[Pipeline] Job ${jobId}: rotation_detection — all ${pageFiles.length} pages upright`);
+    }
+  }
 
   if (pipelineConfig.binarize.enabled) {
     await updateIngestionJobStatus(jobId, { currentStage: "preprocess" });
