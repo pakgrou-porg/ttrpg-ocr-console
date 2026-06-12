@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,7 @@ import { toast } from "sonner";
 import {
   BookOpen, Layers, RefreshCw, RotateCcw, RotateCw, ChevronsUpDown, ScrollText, ChevronRight, ChevronDown,
   Check, Edit, Loader2, FileImage, ChevronLeft, Eye, Code2, AlignLeft,
-  History, FileText, Grid3x3, Flag, LayoutGrid, List,
+  History, FileText, Grid3x3, Flag, LayoutGrid, List, Package, Upload,
 } from "lucide-react";
 import { PipelineStatusBadge } from "@/components/PipelineStatusBadge";
 
@@ -1030,14 +1030,28 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
   const [viewMode, setViewMode] = useState<"thumbnails" | "regions">("thumbnails");
   const LIMIT = 20;
 
+  /** Trigger a browser file download from a Blob. Appends/removes a temporary
+   *  anchor so the click works in all browsers, and delays URL revocation so
+   *  the browser has time to read the blob before it's freed. */
+  const triggerDownload = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  };
+
   const exportMutation = trpc.library.exportUnsloth.useMutation({
     onSuccess: (data) => {
       if (!data.jsonl) { toast.error("No exportable data found."); return; }
-      const blob = new Blob([data.jsonl], { type: "application/jsonl" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url; a.download = `document-${documentId}-unsloth.jsonl`; a.click();
-      URL.revokeObjectURL(url);
+      triggerDownload(
+        new Blob([data.jsonl], { type: "application/jsonl" }),
+        `document-${documentId}-unsloth.jsonl`,
+      );
       toast.success(`Exported ${data.lineCount} training examples.`);
     },
     onError: (err) => toast.error(err.message),
@@ -1045,16 +1059,51 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
 
   const exportFullMutation = trpc.library.exportFull.useMutation({
     onSuccess: (data) => {
+      if (!data?.pages) { toast.error("No exportable data returned."); return; }
       const json = JSON.stringify(data, null, 2);
-      const blob = new Blob([json], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url; a.download = `document-${documentId}-full.json`; a.click();
-      URL.revokeObjectURL(url);
+      triggerDownload(
+        new Blob([json], { type: "application/json" }),
+        `document-${documentId}-full.json`,
+      );
       toast.success(`Exported ${data.pages.length} pages.`);
     },
     onError: (err) => toast.error(err.message),
   });
+
+  const exportBundleMutation = trpc.library.exportBundle.useMutation({
+    onSuccess: (data) => {
+      const json = JSON.stringify(data, null, 2);
+      triggerDownload(
+        new Blob([json], { type: "application/json" }),
+        `document-${documentId}-bundle.json`,
+      );
+      toast.success(`Bundle exported — ${(data as any).pages?.length ?? 0} pages.`);
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const importFileRef = useRef<HTMLInputElement>(null);
+  const importBundleMutation = trpc.library.importBundle.useMutation({
+    onSuccess: (result) => {
+      toast.success(`Bundle imported — ${result.pagesUpdated} pages, ${result.ocrUpserted} OCR records, ${result.summariesCreated} summaries.`);
+      setImportDialogOpen(false);
+      setImportFile(null);
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const handleImportBundle = async () => {
+    if (!importFile || documentId === 0) return;
+    try {
+      const text = await importFile.text();
+      const bundle = JSON.parse(text);
+      importBundleMutation.mutate({ documentId, bundle });
+    } catch {
+      toast.error("Invalid bundle file — could not parse JSON.");
+    }
+  };
 
   const { data, isLoading } = trpc.library.listPages.useQuery(
     { documentId, offset, limit: LIMIT },
@@ -1079,7 +1128,7 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
           </Select>
         )}
 
-        {/* Export buttons */}
+        {/* Export / Import buttons */}
         <Button size="sm" variant="outline" className="gap-1.5 text-xs"
           onClick={() => exportMutation.mutate({ documentId })} disabled={exportMutation.isPending || documentId === 0}>
           {exportMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
@@ -1089,6 +1138,18 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
           onClick={() => exportFullMutation.mutate({ documentId })} disabled={exportFullMutation.isPending || documentId === 0}>
           {exportFullMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Code2 className="w-3.5 h-3.5" />}
           Export Full JSON
+        </Button>
+        <Button size="sm" variant="outline" className="gap-1.5 text-xs"
+          onClick={() => exportBundleMutation.mutate({ documentId })} disabled={exportBundleMutation.isPending || documentId === 0}
+          title="Export a portable pipeline results bundle (no images) for import on another system">
+          {exportBundleMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Package className="w-3.5 h-3.5" />}
+          Export Bundle
+        </Button>
+        <Button size="sm" variant="outline" className="gap-1.5 text-xs"
+          onClick={() => setImportDialogOpen(true)} disabled={documentId === 0}
+          title="Import a pipeline results bundle into the current document — replaces existing OCR and summaries">
+          <Upload className="w-3.5 h-3.5" />
+          Import Bundle
         </Button>
 
         {/* View toggle */}
@@ -1212,6 +1273,64 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
           />
         );
       })()}
+
+      {/* Import Bundle dialog */}
+      <Dialog open={importDialogOpen} onOpenChange={(open) => { if (!open) { setImportDialogOpen(false); setImportFile(null); } }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Upload className="h-5 w-5 text-violet-400" />
+              Import Pipeline Bundle
+            </DialogTitle>
+            <DialogDescription>
+              Select a <code className="text-xs bg-muted px-1 rounded">-bundle.json</code> file exported from another system.
+              The document must already be ingested here (images in workspace).
+              Existing OCR results and content summaries will be replaced.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div
+              className="flex flex-col items-center justify-center gap-2 rounded-md border-2 border-dashed border-border/60 p-6 text-sm text-muted-foreground cursor-pointer hover:border-primary/40 hover:bg-muted/20 transition-colors"
+              onClick={() => importFileRef.current?.click()}
+            >
+              <Package className="h-8 w-8 opacity-40" />
+              {importFile
+                ? <span className="text-foreground font-medium">{importFile.name}</span>
+                : <span>Click to select a bundle JSON file</span>}
+              <input
+                ref={importFileRef}
+                type="file"
+                accept=".json,application/json"
+                className="hidden"
+                onChange={(e) => setImportFile(e.target.files?.[0] ?? null)}
+              />
+            </div>
+
+            {importFile && (
+              <div className="rounded-md bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-xs text-amber-300">
+                This will overwrite all OCR results and content summaries for document #{documentId}.
+                Page images and pipeline jobs are not affected.
+              </div>
+            )}
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" size="sm" onClick={() => { setImportDialogOpen(false); setImportFile(null); }}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleImportBundle}
+              disabled={!importFile || importBundleMutation.isPending}
+              className="gap-1.5"
+            >
+              {importBundleMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+              Import
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

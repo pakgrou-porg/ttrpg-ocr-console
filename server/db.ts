@@ -2135,3 +2135,292 @@ export async function updateContentBlock(id: number, updates: Partial<InsertDocu
     .set({ ...updates, updatedAt: new Date() })
     .where(eq(documentContentBlocks.id, id));
 }
+
+// ─── Pipeline Results Bundle (export / import) ────────────────────────────────
+//
+// A "bundle" is a portable JSON snapshot of everything the pipeline produced for
+// a document: per-page layout, OCR, regions, structural breaks, and the content-
+// summary hierarchy.  Images are NOT included — they stay in the workspace.
+//
+// Typical use-case: process a document on one machine, export the bundle, then on
+// a second machine re-ingest the same PDF (creating the page images) and import
+// the bundle to populate all pipeline results without re-running any LLM calls.
+
+export interface BundlePage {
+  pageNumber:             number;
+  partIndex:              number;
+  printedPageLabel:       string | null;
+  imageWidth:             number | null;
+  imageHeight:            number | null;
+  layoutType:             string | null;
+  contentRegions:         unknown | null;
+  continuityFlags:        unknown | null;
+  structuralBreaks:       unknown | null;
+  pageJsonOutput:         unknown | null;
+  isFlagged:              boolean;
+  ocrCompleted:           boolean;
+  ocrConfidence:          number | null;
+  hasEmbeddedText:        boolean;
+  detectedRotation:       number | null;
+  rotationCorrected:      boolean;
+  sourceRegionBbox:       unknown | null;
+  ocr: {
+    rawText:              string | null;
+    markdownText:         string | null;
+    normalisedText:       string | null;
+    nativeSimilarity:     number | null;
+    structuredData:       unknown | null;
+    layoutMetadata:       unknown | null;
+    confidence:           number | null;
+    status:               string;
+    qualityScore:         number | null;
+    qualityNotes:         string | null;
+    correctedText:        string | null;
+    correctedStructuredData: unknown | null;
+  } | null;
+}
+
+export interface BundleSummary {
+  /** 0-based position within the bundle array — used to re-link parentId on import */
+  bundleIdx:      number;
+  parentBundleIdx: number | null;
+  levelType:      string;
+  headingText:    string | null;
+  startPageNumber: number;
+  endPageNumber:  number | null;
+  shortSummary:   string | null;
+  longSummary:    string | null;
+  keyTerms:       string[];
+  keyEntities:    string[];
+  summaryStatus:  string;
+}
+
+export interface DocumentBundle {
+  schema_version: "bundle_v1";
+  exported_at:    string;
+  document: {
+    title:          string | null;
+    filename:       string;
+    publisher:      string | null;
+    documentType:   string | null;
+    gameSystem:     string | null;
+    edition:        string | null;
+    totalPages:     number | null;
+    avgConfidence:  number | null;
+    documentSummary: string | null;
+  };
+  pages:          BundlePage[];
+  summaries:      BundleSummary[];
+}
+
+/** Export a complete pipeline results bundle for a document (no images). */
+export async function exportDocumentBundle(documentId: number): Promise<DocumentBundle> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const doc = await getDocumentById(documentId);
+  if (!doc) throw new Error("Document not found");
+
+  const pages = await getPagesByDocumentId(documentId);
+  const pageIds = pages.map(p => p.id);
+  const ocrs = pageIds.length > 0
+    ? await getOcrResultsByPageIds(pageIds)
+    : [];
+  const ocrByPageId = new Map(ocrs.map(o => [o.pageId, o]));
+
+  const summaryRows = await db.select().from(contentSummaries)
+    .where(eq(contentSummaries.documentId, documentId))
+    .orderBy(asc(contentSummaries.startPageNumber), asc(contentSummaries.id));
+
+  // Build a bundle-local index for summaries so parentId can be re-linked on import
+  const summaryIdToIdx = new Map(summaryRows.map((s, i) => [s.id, i]));
+  const bundleSummaries: BundleSummary[] = summaryRows.map((s, i) => ({
+    bundleIdx:        i,
+    parentBundleIdx:  s.parentId != null ? (summaryIdToIdx.get(s.parentId) ?? null) : null,
+    levelType:        s.levelType,
+    headingText:      s.headingText ?? null,
+    startPageNumber:  s.startPageNumber,
+    endPageNumber:    s.endPageNumber ?? null,
+    shortSummary:     s.shortSummary ?? null,
+    longSummary:      s.longSummary ?? null,
+    keyTerms:         (s.keyTerms as string[]) ?? [],
+    keyEntities:      (s.keyEntities as string[]) ?? [],
+    summaryStatus:    s.summaryStatus,
+  }));
+
+  const bundlePages: BundlePage[] = pages.map(p => {
+    const ocr = ocrByPageId.get(p.id) ?? null;
+    return {
+      pageNumber:       p.pageNumber,
+      partIndex:        p.partIndex,
+      printedPageLabel: p.printedPageLabel ?? null,
+      imageWidth:       p.imageWidth ?? null,
+      imageHeight:      p.imageHeight ?? null,
+      layoutType:       p.layoutType ?? null,
+      contentRegions:   p.contentRegions ?? null,
+      continuityFlags:  p.continuityFlags ?? null,
+      structuralBreaks: p.structuralBreaks ?? null,
+      pageJsonOutput:   p.pageJsonOutput ?? null,
+      isFlagged:        p.isFlagged,
+      ocrCompleted:     p.ocrCompleted,
+      ocrConfidence:    p.ocrConfidence ?? null,
+      hasEmbeddedText:  p.hasEmbeddedText,
+      detectedRotation: p.detectedRotation ?? null,
+      rotationCorrected: p.rotationCorrected,
+      sourceRegionBbox: p.sourceRegionBbox ?? null,
+      ocr: ocr ? {
+        rawText:              ocr.rawText ?? null,
+        markdownText:         ocr.markdownText ?? null,
+        normalisedText:       ocr.normalisedText ?? null,
+        nativeSimilarity:     ocr.nativeSimilarity ?? null,
+        structuredData:       ocr.structuredData ?? null,
+        layoutMetadata:       ocr.layoutMetadata ?? null,
+        confidence:           ocr.confidence ?? null,
+        status:               ocr.status,
+        qualityScore:         ocr.qualityScore ?? null,
+        qualityNotes:         ocr.qualityNotes ?? null,
+        correctedText:        ocr.correctedText ?? null,
+        correctedStructuredData: ocr.correctedStructuredData ?? null,
+      } : null,
+    };
+  });
+
+  return {
+    schema_version: "bundle_v1",
+    exported_at:    new Date().toISOString(),
+    document: {
+      title:           doc.title ?? null,
+      filename:        doc.filename,
+      publisher:       doc.publisher ?? null,
+      documentType:    doc.documentType ?? null,
+      gameSystem:      doc.gameSystem ?? null,
+      edition:         doc.edition ?? null,
+      totalPages:      doc.totalPages ?? null,
+      avgConfidence:   doc.avgConfidence ?? null,
+      documentSummary: doc.documentSummary ?? null,
+    },
+    pages:     bundlePages,
+    summaries: bundleSummaries,
+  };
+}
+
+/** Import a pipeline results bundle into an existing document.
+ *
+ *  The target document must already exist and have its pages ingested (images
+ *  present in the workspace).  Pages are matched by (pageNumber, partIndex).
+ *  Any existing OCR results and content summaries are replaced.
+ *
+ *  Returns counts of pages updated, OCR records upserted, and summaries created.
+ */
+export async function importDocumentBundle(
+  documentId: number,
+  bundle: DocumentBundle,
+): Promise<{ pagesUpdated: number; ocrUpserted: number; summariesCreated: number }> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  if (bundle.schema_version !== "bundle_v1") {
+    throw new Error(`Unsupported bundle schema version: ${(bundle as any).schema_version}`);
+  }
+
+  // Load existing pages so we can match by (pageNumber, partIndex)
+  const existingPages = await getPagesByDocumentId(documentId);
+  const pageKey = (pageNumber: number, partIndex: number) => `${pageNumber}:${partIndex}`;
+  const pageByKey = new Map(existingPages.map(p => [pageKey(p.pageNumber, p.partIndex), p]));
+
+  let pagesUpdated = 0;
+  let ocrUpserted = 0;
+
+  for (const bp of bundle.pages) {
+    const existing = pageByKey.get(pageKey(bp.pageNumber, bp.partIndex));
+    if (!existing) continue; // page not yet ingested on this system — skip
+
+    // Update the page's pipeline result columns
+    await db.update(documentPages).set({
+      printedPageLabel:  bp.printedPageLabel ?? undefined,
+      imageWidth:        bp.imageWidth ?? undefined,
+      imageHeight:       bp.imageHeight ?? undefined,
+      layoutType:        bp.layoutType ?? undefined,
+      contentRegions:    bp.contentRegions as any ?? undefined,
+      continuityFlags:   bp.continuityFlags as any ?? undefined,
+      structuralBreaks:  bp.structuralBreaks as any ?? undefined,
+      pageJsonOutput:    bp.pageJsonOutput as any ?? undefined,
+      isFlagged:         bp.isFlagged,
+      ocrCompleted:      bp.ocrCompleted,
+      ocrConfidence:     bp.ocrConfidence ?? undefined,
+      hasEmbeddedText:   bp.hasEmbeddedText,
+      detectedRotation:  bp.detectedRotation ?? undefined,
+      rotationCorrected: bp.rotationCorrected,
+      updatedAt:         new Date(),
+    }).where(eq(documentPages.id, existing.id));
+    pagesUpdated++;
+
+    if (bp.ocr) {
+      // Delete any existing OCR result for this page, then insert fresh
+      await db.delete(ocrResults).where(eq(ocrResults.pageId, existing.id));
+      await db.insert(ocrResults).values({
+        pageId:                  existing.id,
+        rawText:                 bp.ocr.rawText ?? undefined,
+        markdownText:            bp.ocr.markdownText ?? undefined,
+        normalisedText:          bp.ocr.normalisedText ?? undefined,
+        nativeSimilarity:        bp.ocr.nativeSimilarity ?? undefined,
+        structuredData:          bp.ocr.structuredData as any ?? undefined,
+        layoutMetadata:          bp.ocr.layoutMetadata as any ?? undefined,
+        confidence:              bp.ocr.confidence ?? 0,
+        status:                  bp.ocr.status as any,
+        qualityScore:            bp.ocr.qualityScore ?? undefined,
+        qualityNotes:            bp.ocr.qualityNotes ?? undefined,
+        correctedText:           bp.ocr.correctedText ?? undefined,
+        correctedStructuredData: bp.ocr.correctedStructuredData as any ?? undefined,
+      });
+      ocrUpserted++;
+    }
+  }
+
+  // Replace content summaries: delete existing, re-insert from bundle
+  await db.delete(contentSummaries).where(eq(contentSummaries.documentId, documentId));
+
+  // First pass: insert all summaries without parentId
+  const insertedIds: number[] = [];
+  for (const bs of bundle.summaries) {
+    const rows = await db.insert(contentSummaries).values({
+      documentId,
+      levelType:       bs.levelType,
+      headingText:     bs.headingText ?? undefined,
+      startPageId:     existingPages[0]?.id ?? 0, // placeholder — resolved below
+      startPageNumber: bs.startPageNumber,
+      endPageNumber:   bs.endPageNumber ?? undefined,
+      shortSummary:    bs.shortSummary ?? undefined,
+      longSummary:     bs.longSummary ?? undefined,
+      keyTerms:        bs.keyTerms as any,
+      keyEntities:     bs.keyEntities as any,
+      summaryStatus:   bs.summaryStatus as any,
+    }).returning({ id: contentSummaries.id });
+    insertedIds.push(rows[0].id);
+  }
+
+  // Second pass: wire up parentId references using bundle indices
+  for (let i = 0; i < bundle.summaries.length; i++) {
+    const bs = bundle.summaries[i];
+    if (bs.parentBundleIdx != null && insertedIds[bs.parentBundleIdx] != null) {
+      await db.update(contentSummaries)
+        .set({ parentId: insertedIds[bs.parentBundleIdx] })
+        .where(eq(contentSummaries.id, insertedIds[i]));
+    }
+  }
+
+  // Re-resolve startPageId FK references now that pages are matched
+  for (const existing of existingPages) {
+    await db.update(contentSummaries)
+      .set({ startPageId: existing.id })
+      .where(
+        and(
+          eq(contentSummaries.documentId, documentId),
+          eq(contentSummaries.startPageNumber, existing.pageNumber),
+          isNull(contentSummaries.parentId) ? sql`true` : sql`true`, // always
+        ),
+      );
+  }
+
+  return { pagesUpdated, ocrUpserted, summariesCreated: insertedIds.length };
+}

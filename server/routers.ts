@@ -32,6 +32,7 @@ import {
   getLlmMetricsByPage, getLlmMetricsJobSummary, getLlmMetricsPageSummary, getLlmProviderMetricsSummary, getStageArtificerMetrics,
   getActiveRetryAttempts,
   getContentSummariesByDocument, updateContentSummary, resolveContentSummaryBoundaries,
+  exportDocumentBundle, importDocumentBundle, type DocumentBundle,
   getContentBlocksByDocumentPaginated, getContentBlocksCount,
   deleteContentBlocksByDocumentId,
 } from "./db";
@@ -2235,6 +2236,37 @@ export const appRouter = router({
         const doc = assertDocumentAccess(ctx, await getDocumentById(input.documentId));
         await resolveContentSummaryBoundaries(input.documentId, doc.totalPages ?? 0);
         return { success: true };
+      }),
+
+    /**
+     * Export all pipeline results for a document as a portable bundle JSON.
+     * The bundle contains per-page layout/OCR data and the content-summary hierarchy.
+     * Images are NOT included — they stay in the workspace.
+     */
+    exportBundle: adminProcedure
+      .input(z.object({ documentId: z.number().int() }))
+      .mutation(async ({ ctx, input }) => {
+        assertDocumentAccess(ctx, await getDocumentById(input.documentId));
+        const bundle = await exportDocumentBundle(input.documentId);
+        return bundle;
+      }),
+
+    /**
+     * Import a pipeline results bundle into an existing document.
+     * The document must already exist and its pages must have been ingested
+     * (page images in workspace).  All existing OCR results and content
+     * summaries for the document are replaced.
+     */
+    importBundle: adminProcedure
+      .input(z.object({
+        documentId: z.number().int(),
+        // Accept as any and let importDocumentBundle validate schema_version
+        bundle: z.any(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        assertDocumentAccess(ctx, await getDocumentById(input.documentId));
+        const result = await importDocumentBundle(input.documentId, input.bundle as DocumentBundle);
+        return result;
       }),
   }),
 
