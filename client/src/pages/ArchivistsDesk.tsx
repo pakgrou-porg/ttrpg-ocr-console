@@ -685,16 +685,18 @@ export default function ArchivistsDesk() {
                     : "(all-time)"}
                 </span>
               </CardTitle>
-              <button
-                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 gap-1.5 text-xs"
                 onClick={() => resetMetricsMutation.mutate()}
                 disabled={resetMetricsMutation.isPending}
               >
                 {resetMetricsMutation.isPending
                   ? <Loader2 className="h-3 w-3 animate-spin" />
                   : <RotateCcw className="h-3 w-3" />}
-                Reset
-              </button>
+                Reset All
+              </Button>
             </div>
           </CardHeader>
           <CardContent className="p-4">

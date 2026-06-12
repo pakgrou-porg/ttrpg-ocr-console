@@ -650,6 +650,7 @@ export default function TheArtificers() {
   const [testResults, setTestResults] = useState<Record<number, TestResult>>({});
   const [testingId, setTestingId] = useState<number | null>(null);
   const [expandedModels, setExpandedModels] = useState<Record<number, boolean>>({});
+  const [statsProvider, setStatsProvider] = useState<any | null>(null);
 
   // Per-card discover state
   const [cardDiscoverState, setCardDiscoverState] = useState<Record<number, {
@@ -666,8 +667,18 @@ export default function TheArtificers() {
   const { data: topology, isLoading: isTopologyLoading, refetch: refetchTopology } = trpc.assignments.topology.useQuery();
   const { data: tokenStats, refetch: refetchTokenStats } = trpc.metrics.providerStatsSinceReset.useQuery();
   const { data: resetTimeData } = trpc.metrics.resetTime.useQuery();
+  const { data: stageStats } = trpc.metrics.stageStats.useQuery();
   const resetMetricsMutation = trpc.metrics.reset.useMutation({
-    onSuccess: () => { toast.success("Token stats reset."); refetchTokenStats(); },
+    onSuccess: () => { toast.success("Token stats reset for all Artificers."); refetchTokenStats(); },
+    onError: (e) => toast.error(e.message),
+  });
+  const resetProviderMutation = trpc.metrics.resetProvider.useMutation({
+    onSuccess: (_data, vars) => {
+      const name = providers?.find(p => p.id === vars.providerId)?.displayName
+        ?? providers?.find(p => p.id === vars.providerId)?.name ?? "Artificer";
+      toast.success(`Stats reset for ${name}.`);
+      refetchTokenStats();
+    },
     onError: (e) => toast.error(e.message),
   });
 
@@ -913,14 +924,16 @@ export default function TheArtificers() {
                   ? <> since {new Date(resetTimeData.resetAt).toLocaleDateString()}</>
                   : <> (all-time)</>}
               </span>
-              <button
-                className="flex items-center gap-1 hover:text-foreground transition-colors"
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 gap-1.5 text-xs"
                 onClick={() => resetMetricsMutation.mutate()}
                 disabled={resetMetricsMutation.isPending}
               >
                 {resetMetricsMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
-                Reset counters
-              </button>
+                Reset All
+              </Button>
             </div>
           )}
           {isLoading ? (
@@ -1007,6 +1020,24 @@ export default function TheArtificers() {
                           <Button variant="outline" size="sm" onClick={() => handleEdit(provider)} className="gap-1.5">
                             <Edit className="h-4 w-4" />
                             Edit
+                          </Button>
+                          <Button variant="outline" size="sm" onClick={() => setStatsProvider(provider)} className="gap-1.5">
+                            <BarChart2 className="h-4 w-4" />
+                            Stats
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              if (confirm(`Reset stats for ${provider.displayName ?? provider.name}? This cannot be undone.`)) {
+                                resetProviderMutation.mutate({ providerId: provider.id });
+                              }
+                            }}
+                            disabled={resetProviderMutation.isPending && resetProviderMutation.variables?.providerId === provider.id}
+                            className="gap-1.5"
+                          >
+                            <RotateCcw className="h-4 w-4" />
+                            Reset
                           </Button>
                           <Button
                             variant="outline"
@@ -1230,6 +1261,117 @@ export default function TheArtificers() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      {/* ── Per-Provider Stats Dialog ─────────────────────────────────────────── */}
+      {statsProvider && (() => {
+        const sp = statsProvider;
+        const stats = tokenStats?.find(s => s.provider_id === sp.id);
+        const stages = stageStats?.filter(s => s.provider_name === sp.name) ?? [];
+        const fmtMs = (ms: number) => ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
+        const fmtTokens = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(0)}K` : String(n);
+        const STAGE_LABELS: Record<string, string> = {
+          layout_analysis: "Layout Analysis",
+          bbox_detection: "BBox Detection",
+          ocr_extraction: "OCR Extraction",
+          content_assembly: "Content Assembly",
+          translation: "Translation",
+        };
+        return (
+          <Dialog open={!!statsProvider} onOpenChange={(open) => { if (!open) setStatsProvider(null); }}>
+            <DialogContent className="max-w-lg">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <BarChart2 className="h-5 w-5 text-violet-400" />
+                  {sp.displayName ?? sp.name}
+                </DialogTitle>
+                <DialogDescription>
+                  Usage statistics since last reset
+                  {resetTimeData?.resetAt
+                    ? ` (${new Date(resetTimeData.resetAt).toLocaleDateString()})`
+                    : " (all-time)"}
+                </DialogDescription>
+              </DialogHeader>
+
+              {/* Overall stats */}
+              {stats && stats.total_calls > 0 ? (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div className="rounded-md border bg-muted/30 p-3 space-y-0.5">
+                      <div className="text-xs text-muted-foreground">Total Calls</div>
+                      <div className="text-xl font-semibold">{stats.total_calls.toLocaleString()}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {stats.failure_count > 0 && <span className="text-destructive">{stats.failure_count} failed · </span>}
+                        {stats.fallback_count > 0 && <span className="text-amber-400">{stats.fallback_count} fallbacks · </span>}
+                        <span className="text-emerald-400">{stats.success_rate?.toFixed(1)}% success</span>
+                      </div>
+                    </div>
+                    <div className="rounded-md border bg-muted/30 p-3 space-y-0.5">
+                      <div className="text-xs text-muted-foreground">Tokens Used</div>
+                      <div className="text-xl font-semibold">{fmtTokens(stats.total_tokens)}</div>
+                      <div className="text-xs text-muted-foreground">total tokens consumed</div>
+                    </div>
+                    <div className="rounded-md border bg-muted/30 p-3 space-y-0.5">
+                      <div className="text-xs text-muted-foreground">Avg Latency</div>
+                      <div className="text-xl font-semibold">{fmtMs(stats.avg_duration_ms)}</div>
+                      <div className="text-xs text-muted-foreground">per call</div>
+                    </div>
+                    <div className="rounded-md border bg-muted/30 p-3 space-y-0.5">
+                      <div className="text-xs text-muted-foreground">Latency Range</div>
+                      <div className="text-base font-semibold">{fmtMs(stats.min_duration_ms)} – {fmtMs(stats.max_duration_ms)}</div>
+                      <div className="text-xs text-muted-foreground">min / max</div>
+                    </div>
+                  </div>
+
+                  {/* Stage breakdown */}
+                  {stages.length > 0 && (
+                    <div className="space-y-2">
+                      <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Stage Breakdown (all-time)</div>
+                      <div className="divide-y divide-border rounded-md border text-sm">
+                        {stages.map(row => (
+                          <div key={row.stage} className="flex items-center justify-between px-3 py-2">
+                            <span className="text-muted-foreground">{STAGE_LABELS[row.stage] ?? row.stage}</span>
+                            <div className="flex items-center gap-3 text-xs">
+                              <span>{row.call_count.toLocaleString()} calls</span>
+                              {row.failure_count > 0 && <span className="text-destructive">{row.failure_count} failed</span>}
+                              <span className="text-muted-foreground">{fmtMs(row.avg_duration_ms)} avg</span>
+                              {row.total_tokens > 0 && <span className="text-violet-400">{fmtTokens(Number(row.total_tokens))}</span>}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="py-8 text-center text-sm text-muted-foreground">
+                  No usage data recorded yet for this Artificer.
+                </div>
+              )}
+
+              <DialogFooter className="gap-2 sm:justify-between">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  onClick={() => {
+                    if (confirm(`Reset stats for ${sp.displayName ?? sp.name}? This cannot be undone.`)) {
+                      resetProviderMutation.mutate({ providerId: sp.id });
+                      setStatsProvider(null);
+                    }
+                  }}
+                  disabled={resetProviderMutation.isPending}
+                >
+                  <RotateCcw className="h-4 w-4" />
+                  Reset Stats
+                </Button>
+                <Button variant="secondary" size="sm" onClick={() => setStatsProvider(null)}>
+                  Close
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        );
+      })()}
     </div>
   );
 }

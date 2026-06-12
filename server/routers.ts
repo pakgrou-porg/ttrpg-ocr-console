@@ -3121,18 +3121,31 @@ export const appRouter = router({
       .query(({ input }) => getLlmProviderMetricsSummary(input.days)),
 
     /** Per-provider aggregates since the last reset (or all-time if never reset).
-     *  The reset timestamp is stored in systemConfig key "metrics_reset_at". */
+     *  Respects both the global "metrics_reset_at" and per-provider
+     *  "metrics_reset_at_provider_{id}" keys so individual resets are honoured. */
     providerStatsSinceReset: protectedProcedure.query(async () => {
       const config = await getAllSystemConfig();
       const resetEntry = config.find(c => c.key === "metrics_reset_at");
       const since = resetEntry ? new Date(resetEntry.value) : new Date(0);
-      return getLlmProviderMetricsSummary(9999, since);
+
+      // Build per-provider override map from "metrics_reset_at_provider_{id}" keys
+      const perProviderSince: Record<number, Date> = {};
+      for (const entry of config) {
+        const m = entry.key.match(/^metrics_reset_at_provider_(\d+)$/);
+        if (m) perProviderSince[parseInt(m[1], 10)] = new Date(entry.value);
+      }
+
+      return getLlmProviderMetricsSummary(
+        9999,
+        since,
+        Object.keys(perProviderSince).length > 0 ? perProviderSince : undefined,
+      );
     }),
 
     /** Stage × provider aggregates (all-time). */
     stageStats: protectedProcedure.query(() => getStageArtificerMetrics()),
 
-    /** Store the current timestamp as the metrics reset point. */
+    /** Store the current timestamp as the global metrics reset point (all providers). */
     reset: adminProcedure.mutation(async ({ ctx }) => {
       await upsertSystemConfig({
         key: "metrics_reset_at",
@@ -3142,6 +3155,19 @@ export const appRouter = router({
       });
       return { success: true, resetAt: new Date().toISOString() };
     }),
+
+    /** Reset stats for a single provider by storing a per-provider timestamp. */
+    resetProvider: adminProcedure
+      .input(z.object({ providerId: z.number().int() }))
+      .mutation(async ({ ctx, input }) => {
+        await upsertSystemConfig({
+          key: `metrics_reset_at_provider_${input.providerId}`,
+          value: new Date().toISOString(),
+          category: "metrics",
+          updatedBy: ctx.user.id,
+        });
+        return { success: true, resetAt: new Date().toISOString() };
+      }),
 
     /** Return the stored reset timestamp (null if never reset). */
     resetTime: protectedProcedure.query(async () => {

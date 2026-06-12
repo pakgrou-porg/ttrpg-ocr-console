@@ -1968,11 +1968,35 @@ export async function resolveContentSummaryBoundaries(documentId: number, totalP
   }
 }
 
-/** Per-provider summary over the last N days. */
-export async function getLlmProviderMetricsSummary(days = 7, sinceOverride?: Date) {
+/** Per-provider summary over the last N days.
+ *
+ * @param perProviderSince  Optional map of provider_id → reset Date.  When a
+ *   provider's individual reset is more recent than the global `sinceOverride`,
+ *   its records before that per-provider time are excluded.  This enables
+ *   per-provider stat resets without a full table wipe.
+ */
+export async function getLlmProviderMetricsSummary(
+  days = 7,
+  sinceOverride?: Date,
+  perProviderSince?: Record<number, Date>,
+) {
   const db = await getDb();
   if (!db) return [];
   const since = sinceOverride ?? new Date(Date.now() - days * 86_400_000);
+
+  // Build a compound WHERE clause.  Start with the global floor, then for each
+  // provider that was individually reset more recently than the global reset,
+  // exclude their earlier records.
+  let whereClause = sql`created_at >= ${since}`;
+  if (perProviderSince) {
+    for (const [idStr, date] of Object.entries(perProviderSince)) {
+      if (date > since) {
+        const numId = parseInt(idStr, 10);
+        whereClause = sql`${whereClause} AND NOT (provider_id = ${numId} AND created_at < ${date})`;
+      }
+    }
+  }
+
   const rows = await db.execute(sql`
     SELECT
       provider_id,
@@ -1989,7 +2013,7 @@ export async function getLlmProviderMetricsSummary(days = 7, sinceOverride?: Dat
         1
       )::float                                                 AS success_rate
     FROM llm_timing_metrics
-    WHERE created_at >= ${since}
+    WHERE ${whereClause}
     GROUP BY provider_id, provider_name
     ORDER BY total_calls DESC
   `);
