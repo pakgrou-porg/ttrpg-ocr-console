@@ -1,6 +1,8 @@
 import { and, asc, desc, eq, gte, ilike, isNull, lte, ne, notInArray, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
+import { readFile, writeFile, mkdir } from "fs/promises";
+import path from "path";
 import {
   InsertUser, users,
   userProfiles, InsertUserProfile,
@@ -2139,12 +2141,21 @@ export async function updateContentBlock(id: number, updates: Partial<InsertDocu
 // ─── Pipeline Results Bundle (export / import) ────────────────────────────────
 //
 // A "bundle" is a portable JSON snapshot of everything the pipeline produced for
-// a document: per-page layout, OCR, regions, structural breaks, and the content-
-// summary hierarchy.  Images are NOT included — they stay in the workspace.
+// a document: per-page layout, OCR, regions, structural breaks, the content-
+// summary hierarchy, and optionally the page images as base64.
 //
-// Typical use-case: process a document on one machine, export the bundle, then on
-// a second machine re-ingest the same PDF (creating the page images) and import
-// the bundle to populate all pipeline results without re-running any LLM calls.
+// Supersedes the old "document_export_v1" (Full JSON) format — a bundle contains
+// all of that data plus raw OCR fields and re-importable summary indices.
+//
+// Typical workflow (no images):
+//   System A — process document → Export Bundle → bundle.json
+//   System B — ingest same PDF (creates images) → Import Bundle → all pipeline
+//              results populated, no LLM calls needed.
+//
+// With images: the bundle is self-contained; System B does not need to ingest
+// the PDF first.
+
+const BUNDLE_WORKSPACE = process.env.PIPELINE_WORKSPACE ?? "/app/workspace";
 
 export interface BundlePage {
   pageNumber:             number;
@@ -2164,6 +2175,8 @@ export interface BundlePage {
   detectedRotation:       number | null;
   rotationCorrected:      boolean;
   sourceRegionBbox:       unknown | null;
+  /** Base64-encoded PNG, present only when exported with includeImages: true */
+  imageBase64?:           string;
   ocr: {
     rawText:              string | null;
     markdownText:         string | null;
@@ -2182,39 +2195,104 @@ export interface BundlePage {
 
 export interface BundleSummary {
   /** 0-based position within the bundle array — used to re-link parentId on import */
-  bundleIdx:      number;
+  bundleIdx:       number;
   parentBundleIdx: number | null;
-  levelType:      string;
-  headingText:    string | null;
+  levelType:       string;
+  headingText:     string | null;
   startPageNumber: number;
-  endPageNumber:  number | null;
-  shortSummary:   string | null;
-  longSummary:    string | null;
-  keyTerms:       string[];
-  keyEntities:    string[];
-  summaryStatus:  string;
+  endPageNumber:   number | null;
+  shortSummary:    string | null;
+  longSummary:     string | null;
+  keyTerms:        string[];
+  keyEntities:     string[];
+  summaryStatus:   string;
+}
+
+/** Nested summary tree node — mirrors the old Full JSON content_structure shape */
+export interface ContentStructureNode {
+  level_type:      string;
+  heading_text:    string | null;
+  start_page:      number;
+  end_page:        number | null;
+  summary_status:  string;
+  short_summary:   string | null;
+  long_summary:    string | null;
+  key_terms:       string[];
+  key_entities:    string[];
+  children:        ContentStructureNode[];
 }
 
 export interface DocumentBundle {
   schema_version: "bundle_v1";
   exported_at:    string;
+  includes_images: boolean;
   document: {
-    title:          string | null;
-    filename:       string;
-    publisher:      string | null;
-    documentType:   string | null;
-    gameSystem:     string | null;
-    edition:        string | null;
-    totalPages:     number | null;
-    avgConfidence:  number | null;
+    id:              number;
+    title:           string | null;
+    filename:        string;
+    publisher:       string | null;
+    documentType:    string | null;
+    gameSystem:      string | null;
+    edition:         string | null;
+    totalPages:      number | null;
+    avgConfidence:   number | null;
     documentSummary: string | null;
+    status:          string;
   };
-  pages:          BundlePage[];
-  summaries:      BundleSummary[];
+  /** Ready-to-consume nested hierarchy tree (same shape as the old Full JSON content_structure) */
+  content_structure: ContentStructureNode[];
+  /** Flat summary array with bundle-local parent indices — used for re-import */
+  summaries:       BundleSummary[];
+  pages:           BundlePage[];
 }
 
-/** Export a complete pipeline results bundle for a document (no images). */
-export async function exportDocumentBundle(documentId: number): Promise<DocumentBundle> {
+/** Build a nested content_structure tree from a flat list of summary rows. */
+function buildContentStructure(
+  summaryRows: Array<{
+    id: number; parentId: number | null; levelType: string; headingText: string | null;
+    startPageNumber: number; endPageNumber: number | null; summaryStatus: string;
+    shortSummary: string | null; longSummary: string | null;
+    keyTerms: unknown; keyEntities: unknown;
+  }>,
+): ContentStructureNode[] {
+  const nodes = new Map<number, ContentStructureNode & { _id: number }>(
+    summaryRows.map(s => [s.id, {
+      _id:            s.id,
+      level_type:     s.levelType,
+      heading_text:   s.headingText ?? null,
+      start_page:     s.startPageNumber,
+      end_page:       s.endPageNumber ?? null,
+      summary_status: s.summaryStatus,
+      short_summary:  s.shortSummary ?? null,
+      long_summary:   s.longSummary ?? null,
+      key_terms:      (s.keyTerms as string[]) ?? [],
+      key_entities:   (s.keyEntities as string[]) ?? [],
+      children:       [],
+    }]),
+  );
+  const roots: ContentStructureNode[] = [];
+  for (const s of summaryRows) {
+    const node = nodes.get(s.id)!;
+    if (s.parentId != null && nodes.has(s.parentId)) {
+      nodes.get(s.parentId)!.children.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+  return roots;
+}
+
+/**
+ * Export a complete pipeline results bundle for a document.
+ *
+ * @param includeImages  When true, each page's PNG is read from the workspace
+ *                       and embedded as a base64 string.  Makes the bundle
+ *                       self-contained but significantly larger.
+ */
+export async function exportDocumentBundle(
+  documentId: number,
+  options?: { includeImages?: boolean },
+): Promise<DocumentBundle> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
@@ -2223,16 +2301,14 @@ export async function exportDocumentBundle(documentId: number): Promise<Document
 
   const pages = await getPagesByDocumentId(documentId);
   const pageIds = pages.map(p => p.id);
-  const ocrs = pageIds.length > 0
-    ? await getOcrResultsByPageIds(pageIds)
-    : [];
+  const ocrs = pageIds.length > 0 ? await getOcrResultsByPageIds(pageIds) : [];
   const ocrByPageId = new Map(ocrs.map(o => [o.pageId, o]));
 
   const summaryRows = await db.select().from(contentSummaries)
     .where(eq(contentSummaries.documentId, documentId))
     .orderBy(asc(contentSummaries.startPageNumber), asc(contentSummaries.id));
 
-  // Build a bundle-local index for summaries so parentId can be re-linked on import
+  // Flat summaries array (for re-import)
   const summaryIdToIdx = new Map(summaryRows.map((s, i) => [s.id, i]));
   const bundleSummaries: BundleSummary[] = summaryRows.map((s, i) => ({
     bundleIdx:        i,
@@ -2248,47 +2324,63 @@ export async function exportDocumentBundle(documentId: number): Promise<Document
     summaryStatus:    s.summaryStatus,
   }));
 
-  const bundlePages: BundlePage[] = pages.map(p => {
+  const includeImages = options?.includeImages ?? false;
+
+  const bundlePages: BundlePage[] = await Promise.all(pages.map(async p => {
     const ocr = ocrByPageId.get(p.id) ?? null;
+
+    let imageBase64: string | undefined;
+    if (includeImages && p.rawPngUrl) {
+      try {
+        const bytes = await readFile(p.rawPngUrl);
+        imageBase64 = bytes.toString("base64");
+      } catch {
+        // File missing — omit rather than failing the whole export
+      }
+    }
+
     return {
-      pageNumber:       p.pageNumber,
-      partIndex:        p.partIndex,
-      printedPageLabel: p.printedPageLabel ?? null,
-      imageWidth:       p.imageWidth ?? null,
-      imageHeight:      p.imageHeight ?? null,
-      layoutType:       p.layoutType ?? null,
-      contentRegions:   p.contentRegions ?? null,
-      continuityFlags:  p.continuityFlags ?? null,
-      structuralBreaks: p.structuralBreaks ?? null,
-      pageJsonOutput:   p.pageJsonOutput ?? null,
-      isFlagged:        p.isFlagged,
-      ocrCompleted:     p.ocrCompleted,
-      ocrConfidence:    p.ocrConfidence ?? null,
-      hasEmbeddedText:  p.hasEmbeddedText,
-      detectedRotation: p.detectedRotation ?? null,
+      pageNumber:        p.pageNumber,
+      partIndex:         p.partIndex,
+      printedPageLabel:  p.printedPageLabel ?? null,
+      imageWidth:        p.imageWidth ?? null,
+      imageHeight:       p.imageHeight ?? null,
+      layoutType:        p.layoutType ?? null,
+      contentRegions:    p.contentRegions ?? null,
+      continuityFlags:   p.continuityFlags ?? null,
+      structuralBreaks:  p.structuralBreaks ?? null,
+      pageJsonOutput:    p.pageJsonOutput ?? null,
+      isFlagged:         p.isFlagged,
+      ocrCompleted:      p.ocrCompleted,
+      ocrConfidence:     p.ocrConfidence ?? null,
+      hasEmbeddedText:   p.hasEmbeddedText,
+      detectedRotation:  p.detectedRotation ?? null,
       rotationCorrected: p.rotationCorrected,
-      sourceRegionBbox: p.sourceRegionBbox ?? null,
+      sourceRegionBbox:  p.sourceRegionBbox ?? null,
+      ...(imageBase64 !== undefined ? { imageBase64 } : {}),
       ocr: ocr ? {
-        rawText:              ocr.rawText ?? null,
-        markdownText:         ocr.markdownText ?? null,
-        normalisedText:       ocr.normalisedText ?? null,
-        nativeSimilarity:     ocr.nativeSimilarity ?? null,
-        structuredData:       ocr.structuredData ?? null,
-        layoutMetadata:       ocr.layoutMetadata ?? null,
-        confidence:           ocr.confidence ?? null,
-        status:               ocr.status,
-        qualityScore:         ocr.qualityScore ?? null,
-        qualityNotes:         ocr.qualityNotes ?? null,
-        correctedText:        ocr.correctedText ?? null,
+        rawText:                 ocr.rawText ?? null,
+        markdownText:            ocr.markdownText ?? null,
+        normalisedText:          ocr.normalisedText ?? null,
+        nativeSimilarity:        ocr.nativeSimilarity ?? null,
+        structuredData:          ocr.structuredData ?? null,
+        layoutMetadata:          ocr.layoutMetadata ?? null,
+        confidence:              ocr.confidence ?? null,
+        status:                  ocr.status,
+        qualityScore:            ocr.qualityScore ?? null,
+        qualityNotes:            ocr.qualityNotes ?? null,
+        correctedText:           ocr.correctedText ?? null,
         correctedStructuredData: ocr.correctedStructuredData ?? null,
       } : null,
     };
-  });
+  }));
 
   return {
-    schema_version: "bundle_v1",
-    exported_at:    new Date().toISOString(),
+    schema_version:    "bundle_v1",
+    exported_at:       new Date().toISOString(),
+    includes_images:   includeImages,
     document: {
+      id:              doc.id,
       title:           doc.title ?? null,
       filename:        doc.filename,
       publisher:       doc.publisher ?? null,
@@ -2298,24 +2390,29 @@ export async function exportDocumentBundle(documentId: number): Promise<Document
       totalPages:      doc.totalPages ?? null,
       avgConfidence:   doc.avgConfidence ?? null,
       documentSummary: doc.documentSummary ?? null,
+      status:          doc.status,
     },
-    pages:     bundlePages,
-    summaries: bundleSummaries,
+    content_structure: buildContentStructure(summaryRows),
+    summaries:         bundleSummaries,
+    pages:             bundlePages,
   };
 }
 
-/** Import a pipeline results bundle into an existing document.
+/**
+ * Import a pipeline results bundle into an existing (or empty) document.
  *
- *  The target document must already exist and have its pages ingested (images
- *  present in the workspace).  Pages are matched by (pageNumber, partIndex).
- *  Any existing OCR results and content summaries are replaced.
+ * Pages are matched by (pageNumber, partIndex).  When `imageBase64` is present
+ * on a bundle page AND no matching page record exists yet, a new page record is
+ * created and the image written to the workspace.  When a page already exists,
+ * its image is only overwritten if `overwriteImages` is true.
  *
- *  Returns counts of pages updated, OCR records upserted, and summaries created.
+ * Returns counts of pages updated/created, OCR records upserted, and summaries.
  */
 export async function importDocumentBundle(
   documentId: number,
   bundle: DocumentBundle,
-): Promise<{ pagesUpdated: number; ocrUpserted: number; summariesCreated: number }> {
+  options?: { overwriteImages?: boolean },
+): Promise<{ pagesUpdated: number; pagesCreated: number; ocrUpserted: number; summariesCreated: number }> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
@@ -2323,19 +2420,58 @@ export async function importDocumentBundle(
     throw new Error(`Unsupported bundle schema version: ${(bundle as any).schema_version}`);
   }
 
+  const overwriteImages = options?.overwriteImages ?? false;
+  const docDir = path.join(BUNDLE_WORKSPACE, `doc-${documentId}`, "pages");
+
   // Load existing pages so we can match by (pageNumber, partIndex)
-  const existingPages = await getPagesByDocumentId(documentId);
-  const pageKey = (pageNumber: number, partIndex: number) => `${pageNumber}:${partIndex}`;
-  const pageByKey = new Map(existingPages.map(p => [pageKey(p.pageNumber, p.partIndex), p]));
+  let existingPages = await getPagesByDocumentId(documentId);
+  const pageKey = (n: number, pi: number) => `${n}:${pi}`;
+  const pageByKey = () => new Map(existingPages.map(p => [pageKey(p.pageNumber, p.partIndex), p]));
 
   let pagesUpdated = 0;
+  let pagesCreated = 0;
   let ocrUpserted = 0;
 
   for (const bp of bundle.pages) {
-    const existing = pageByKey.get(pageKey(bp.pageNumber, bp.partIndex));
-    if (!existing) continue; // page not yet ingested on this system — skip
+    let existing = pageByKey().get(pageKey(bp.pageNumber, bp.partIndex));
 
-    // Update the page's pipeline result columns
+    // ── If bundle carries an image and no page exists yet, create one ──────
+    if (!existing && bp.imageBase64) {
+      await mkdir(docDir, { recursive: true });
+      const padN = String(bp.pageNumber).padStart(3, "0");
+      const filename = bp.partIndex > 0
+        ? `page-${padN}-part-${bp.partIndex}.png`
+        : `page-${padN}.png`;
+      const filePath = path.join(docDir, filename);
+      await writeFile(filePath, Buffer.from(bp.imageBase64, "base64"));
+
+      const inserted = await db.insert(documentPages).values({
+        documentId,
+        pageNumber:        bp.pageNumber,
+        partIndex:         bp.partIndex,
+        rawPngUrl:         filePath,
+        imageWidth:        bp.imageWidth ?? undefined,
+        imageHeight:       bp.imageHeight ?? undefined,
+      }).returning();
+      existingPages = await getPagesByDocumentId(documentId); // refresh
+      existing = inserted[0];
+      pagesCreated++;
+    }
+
+    if (!existing) continue; // no page and no image — cannot import this page
+
+    // ── Optionally overwrite the image on an existing page ─────────────────
+    if (overwriteImages && bp.imageBase64 && existing.rawPngUrl) {
+      try {
+        await mkdir(path.dirname(existing.rawPngUrl), { recursive: true });
+        await writeFile(existing.rawPngUrl, Buffer.from(bp.imageBase64, "base64"));
+      } catch {
+        // Log but don't abort the rest of the import
+        console.warn(`[importBundle] Failed to write image for page ${bp.pageNumber}`);
+      }
+    }
+
+    // ── Update pipeline result columns ──────────────────────────────────────
     await db.update(documentPages).set({
       printedPageLabel:  bp.printedPageLabel ?? undefined,
       imageWidth:        bp.imageWidth ?? undefined,
@@ -2355,8 +2491,8 @@ export async function importDocumentBundle(
     }).where(eq(documentPages.id, existing.id));
     pagesUpdated++;
 
+    // ── Replace OCR result ──────────────────────────────────────────────────
     if (bp.ocr) {
-      // Delete any existing OCR result for this page, then insert fresh
       await db.delete(ocrResults).where(eq(ocrResults.pageId, existing.id));
       await db.insert(ocrResults).values({
         pageId:                  existing.id,
@@ -2377,17 +2513,28 @@ export async function importDocumentBundle(
     }
   }
 
-  // Replace content summaries: delete existing, re-insert from bundle
+  // ── Replace content summaries ─────────────────────────────────────────────
   await db.delete(contentSummaries).where(eq(contentSummaries.documentId, documentId));
 
-  // First pass: insert all summaries without parentId
+  // Build a pageNumber → primary page id map (partIndex 0 preferred for FK)
+  const finalPages = await getPagesByDocumentId(documentId);
+  const primaryPageByNumber = new Map<number, number>();
+  for (const p of finalPages) {
+    if (p.partIndex === 0 || !primaryPageByNumber.has(p.pageNumber)) {
+      primaryPageByNumber.set(p.pageNumber, p.id);
+    }
+  }
+  const fallbackPageId = finalPages[0]?.id ?? 0;
+
+  // First pass: insert without parentId
   const insertedIds: number[] = [];
   for (const bs of bundle.summaries) {
+    const startPageId = primaryPageByNumber.get(bs.startPageNumber) ?? fallbackPageId;
     const rows = await db.insert(contentSummaries).values({
       documentId,
       levelType:       bs.levelType,
       headingText:     bs.headingText ?? undefined,
-      startPageId:     existingPages[0]?.id ?? 0, // placeholder — resolved below
+      startPageId,
       startPageNumber: bs.startPageNumber,
       endPageNumber:   bs.endPageNumber ?? undefined,
       shortSummary:    bs.shortSummary ?? undefined,
@@ -2399,7 +2546,7 @@ export async function importDocumentBundle(
     insertedIds.push(rows[0].id);
   }
 
-  // Second pass: wire up parentId references using bundle indices
+  // Second pass: wire parentId references
   for (let i = 0; i < bundle.summaries.length; i++) {
     const bs = bundle.summaries[i];
     if (bs.parentBundleIdx != null && insertedIds[bs.parentBundleIdx] != null) {
@@ -2409,18 +2556,5 @@ export async function importDocumentBundle(
     }
   }
 
-  // Re-resolve startPageId FK references now that pages are matched
-  for (const existing of existingPages) {
-    await db.update(contentSummaries)
-      .set({ startPageId: existing.id })
-      .where(
-        and(
-          eq(contentSummaries.documentId, documentId),
-          eq(contentSummaries.startPageNumber, existing.pageNumber),
-          isNull(contentSummaries.parentId) ? sql`true` : sql`true`, // always
-        ),
-      );
-  }
-
-  return { pagesUpdated, ocrUpserted, summariesCreated: insertedIds.length };
+  return { pagesUpdated, pagesCreated, ocrUpserted, summariesCreated: insertedIds.length };
 }

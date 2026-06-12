@@ -2097,126 +2097,6 @@ export const appRouter = router({
         });
       }),
 
-    /**
-     * Export the complete structured output for a document: metadata, hierarchical content
-     * structure (chapters → sections → subsections), and per-page JSON assembled from all
-     * pipeline stages.  Pages without a stored pageJsonOutput fall back to a minimal record
-     * built from the columns available at query time.
-     */
-    exportFull: protectedProcedure
-      .input(z.object({ documentId: z.number().int() }))
-      .mutation(async ({ ctx, input }) => {
-        const doc = assertDocumentAccess(ctx, await getDocumentById(input.documentId));
-        const pages = await getPagesByDocumentId(input.documentId);
-        const summaries = await getContentSummariesByDocument(input.documentId);
-
-        // Batch-fetch OCR results only for pages that lack a stored pageJsonOutput
-        const pagesNeedingOcr = pages.filter(p => !p.pageJsonOutput);
-        const ocrMap = new Map<number, any>();
-        if (pagesNeedingOcr.length > 0) {
-          const ocrs = await getOcrResultsByPageIds(pagesNeedingOcr.map(p => p.id));
-          for (const r of ocrs) ocrMap.set(r.pageId, r);
-        }
-
-        // Build the nested chapter → section → subsection tree from flat content_summaries
-        const LEVEL_DEPTH: Record<string, number> = { chapter: 1, section: 2, subsection: 3, page: 4 };
-        const summaryNodes = summaries.map(s => ({
-          id: s.id,
-          level_type: s.levelType,
-          heading_text: s.headingText ?? null,
-          start_page: s.startPageNumber,
-          end_page: s.endPageNumber ?? null,
-          summary_status: s.summaryStatus,
-          short_summary: s.shortSummary ?? null,
-          long_summary: s.longSummary ?? null,
-          key_terms: s.keyTerms ?? [],
-          key_entities: s.keyEntities ?? [],
-          parent_id: s.parentId ?? null,
-          children: [] as any[],
-        }));
-        const nodeMap = new Map(summaryNodes.map(n => [n.id, n]));
-        const rootNodes: any[] = [];
-        for (const node of summaryNodes) {
-          if (node.parent_id && nodeMap.has(node.parent_id)) {
-            nodeMap.get(node.parent_id)!.children.push(node);
-          } else {
-            rootNodes.push(node);
-          }
-        }
-
-        const pageOutputs = pages.map(page => {
-          if (page.pageJsonOutput) {
-            return {
-              page_number: page.pageNumber,
-              printed_page_number: page.printedPageLabel ?? null,
-              layout_type: page.layoutType ?? null,
-              ocr_confidence: page.ocrConfidence ?? null,
-              is_flagged: page.isFlagged,
-              has_native_pdf_text: page.hasEmbeddedText,
-              page_output: page.pageJsonOutput,
-            };
-          }
-          // Fallback for pages processed before pageJsonOutput was introduced
-          const ocr = ocrMap.get(page.id) ?? null;
-          return {
-            page_number: page.pageNumber,
-            printed_page_number: page.printedPageLabel ?? null,
-            layout_type: page.layoutType ?? null,
-            ocr_confidence: ocr?.confidence ?? page.ocrConfidence ?? null,
-            is_flagged: page.isFlagged,
-            has_native_pdf_text: page.hasEmbeddedText,
-            page_output: {
-              schema_version: "page_v1_legacy",
-              sequence_number: page.pageNumber,
-              printed_page_number: page.printedPageLabel ?? null,
-              inferred_page_number: null,
-              layout: {
-                layout_type: page.layoutType ?? null,
-                columns: (ocr?.layoutMetadata as any)?.columns ?? 1,
-                content_types: Array.isArray(page.contentRegions)
-                  ? Array.from(new Set((page.contentRegions as any[]).map((r: any) => r.type ?? "unknown"))).sort()
-                  : [],
-                has_text:      Array.isArray(page.contentRegions) && (page.contentRegions as any[]).some((r: any) => ["heading","paragraph","sidebar","text"].includes(r.type)),
-                has_tabular:   Array.isArray(page.contentRegions) && (page.contentRegions as any[]).some((r: any) => ["table","stat_block"].includes(r.type)) || (ocr?.layoutMetadata as any)?.has_table === true,
-                has_visual:    Array.isArray(page.contentRegions) && (page.contentRegions as any[]).some((r: any) => ["illustration","image","map","graphic"].includes(r.type)) || (ocr?.layoutMetadata as any)?.has_image_or_art === true,
-                has_decorative: Array.isArray(page.contentRegions) && (page.contentRegions as any[]).some((r: any) => ["advertisement","header","footer","page_number"].includes(r.type)),
-                has_list:      (ocr?.layoutMetadata as any)?.has_list === true,
-                heading_levels: [],
-              },
-              content_regions: page.contentRegions ?? [],
-              structural_position: {
-                structural_breaks: page.structuralBreaks ?? [],
-                continuity: page.continuityFlags ?? null,
-              },
-              content_blocks: (ocr?.structuredData as any)?.content_blocks ?? [],
-              ocr_confidence: ocr?.confidence ?? page.ocrConfidence ?? null,
-              native_similarity: ocr?.nativeSimilarity ?? null,
-              ...(page.nativeText ? { native_pdf_text: page.nativeText } : {}),
-            },
-          };
-        });
-
-        return {
-          schema_version: "document_export_v1",
-          exported_at: new Date().toISOString(),
-          document: {
-            id: doc.id,
-            title: doc.title ?? doc.filename,
-            filename: doc.filename,
-            publisher: doc.publisher ?? null,
-            document_type: doc.documentType ?? null,
-            game_system: doc.gameSystem ?? null,
-            edition: doc.edition ?? null,
-            summary: doc.documentSummary ?? null,
-            total_pages: doc.totalPages,
-            avg_confidence: doc.avgConfidence,
-            status: doc.status,
-          },
-          content_structure: rootNodes,
-          pages: pageOutputs,
-        };
-      }),
-
     /** Get available document statuses */
     documentStatuses: protectedProcedure.query(() => {
       return DOCUMENT_STATUSES.map(s => ({
@@ -2239,34 +2119,41 @@ export const appRouter = router({
       }),
 
     /**
-     * Export all pipeline results for a document as a portable bundle JSON.
-     * The bundle contains per-page layout/OCR data and the content-summary hierarchy.
-     * Images are NOT included — they stay in the workspace.
+     * Export all pipeline results as a portable bundle JSON (supersedes exportFull).
+     * Includes per-page layout/OCR data, the full content-summary hierarchy as both
+     * a nested tree (content_structure) and a re-importable flat array (summaries).
+     * Pass includeImages: true to embed page PNGs as base64 — self-contained but large.
      */
     exportBundle: adminProcedure
-      .input(z.object({ documentId: z.number().int() }))
-      .mutation(async ({ ctx, input }) => {
-        assertDocumentAccess(ctx, await getDocumentById(input.documentId));
-        const bundle = await exportDocumentBundle(input.documentId);
-        return bundle;
-      }),
-
-    /**
-     * Import a pipeline results bundle into an existing document.
-     * The document must already exist and its pages must have been ingested
-     * (page images in workspace).  All existing OCR results and content
-     * summaries for the document are replaced.
-     */
-    importBundle: adminProcedure
       .input(z.object({
-        documentId: z.number().int(),
-        // Accept as any and let importDocumentBundle validate schema_version
-        bundle: z.any(),
+        documentId:    z.number().int(),
+        includeImages: z.boolean().default(false),
       }))
       .mutation(async ({ ctx, input }) => {
         assertDocumentAccess(ctx, await getDocumentById(input.documentId));
-        const result = await importDocumentBundle(input.documentId, input.bundle as DocumentBundle);
-        return result;
+        return exportDocumentBundle(input.documentId, { includeImages: input.includeImages });
+      }),
+
+    /**
+     * Import a pipeline results bundle into a document.
+     * Pages are matched by (pageNumber, partIndex).
+     * If the bundle includes images AND a page doesn't exist yet, the page record is
+     * created and the image written to the workspace.
+     * Pass overwriteImages: true to replace images on already-existing pages too.
+     */
+    importBundle: adminProcedure
+      .input(z.object({
+        documentId:      z.number().int(),
+        overwriteImages: z.boolean().default(false),
+        bundle:          z.any(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        assertDocumentAccess(ctx, await getDocumentById(input.documentId));
+        return importDocumentBundle(
+          input.documentId,
+          input.bundle as DocumentBundle,
+          { overwriteImages: input.overwriteImages },
+        );
       }),
   }),
 

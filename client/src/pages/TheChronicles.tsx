@@ -1057,49 +1057,67 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
     onError: (err) => toast.error(err.message),
   });
 
-  const exportFullMutation = trpc.library.exportFull.useMutation({
-    onSuccess: (data) => {
-      if (!data?.pages) { toast.error("No exportable data returned."); return; }
-      const json = JSON.stringify(data, null, 2);
-      triggerDownload(
-        new Blob([json], { type: "application/json" }),
-        `document-${documentId}-full.json`,
-      );
-      toast.success(`Exported ${data.pages.length} pages.`);
-    },
-    onError: (err) => toast.error(err.message),
-  });
+  // ── Bundle export state ──────────────────────────────────────────────────────
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [exportIncludeImages, setExportIncludeImages] = useState(false);
 
   const exportBundleMutation = trpc.library.exportBundle.useMutation({
     onSuccess: (data) => {
+      const d = data as any;
+      const suffix = d.includes_images ? "-with-images" : "";
       const json = JSON.stringify(data, null, 2);
       triggerDownload(
         new Blob([json], { type: "application/json" }),
-        `document-${documentId}-bundle.json`,
+        `document-${documentId}-bundle${suffix}.json`,
       );
-      toast.success(`Bundle exported — ${(data as any).pages?.length ?? 0} pages.`);
+      toast.success(`Bundle exported — ${d.pages?.length ?? 0} pages${d.includes_images ? " with images" : ""}.`);
+      setExportDialogOpen(false);
     },
     onError: (err) => toast.error(err.message),
   });
 
+  // ── Bundle import state ──────────────────────────────────────────────────────
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
+  const [importOverwriteImages, setImportOverwriteImages] = useState(false);
+  const [importBundleHasImages, setImportBundleHasImages] = useState(false);
   const importFileRef = useRef<HTMLInputElement>(null);
+
   const importBundleMutation = trpc.library.importBundle.useMutation({
     onSuccess: (result) => {
-      toast.success(`Bundle imported — ${result.pagesUpdated} pages, ${result.ocrUpserted} OCR records, ${result.summariesCreated} summaries.`);
+      const r = result as any;
+      const parts = [
+        `${r.pagesUpdated} pages updated`,
+        r.pagesCreated > 0 ? `${r.pagesCreated} created` : null,
+        `${r.ocrUpserted} OCR records`,
+        `${r.summariesCreated} summaries`,
+      ].filter(Boolean).join(", ");
+      toast.success(`Bundle imported — ${parts}.`);
       setImportDialogOpen(false);
       setImportFile(null);
+      setImportBundleHasImages(false);
+      setImportOverwriteImages(false);
     },
     onError: (err) => toast.error(err.message),
   });
+
+  const handleImportFileChange = async (file: File | null) => {
+    setImportFile(file);
+    setImportBundleHasImages(false);
+    if (!file) return;
+    try {
+      // Peek at the top of the file to detect includes_images without parsing the whole thing
+      const head = await file.slice(0, 512).text();
+      setImportBundleHasImages(/"includes_images"\s*:\s*true/.test(head));
+    } catch { /* ignore */ }
+  };
 
   const handleImportBundle = async () => {
     if (!importFile || documentId === 0) return;
     try {
       const text = await importFile.text();
       const bundle = JSON.parse(text);
-      importBundleMutation.mutate({ documentId, bundle });
+      importBundleMutation.mutate({ documentId, overwriteImages: importOverwriteImages, bundle });
     } catch {
       toast.error("Invalid bundle file — could not parse JSON.");
     }
@@ -1135,14 +1153,10 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
           Export Unsloth JSONL
         </Button>
         <Button size="sm" variant="outline" className="gap-1.5 text-xs"
-          onClick={() => exportFullMutation.mutate({ documentId })} disabled={exportFullMutation.isPending || documentId === 0}>
-          {exportFullMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Code2 className="w-3.5 h-3.5" />}
-          Export Full JSON
-        </Button>
-        <Button size="sm" variant="outline" className="gap-1.5 text-xs"
-          onClick={() => exportBundleMutation.mutate({ documentId })} disabled={exportBundleMutation.isPending || documentId === 0}
-          title="Export a portable pipeline results bundle (no images) for import on another system">
-          {exportBundleMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Package className="w-3.5 h-3.5" />}
+          onClick={() => { setExportIncludeImages(false); setExportDialogOpen(true); }}
+          disabled={documentId === 0}
+          title="Export a portable pipeline results bundle (layout, OCR, summaries, optional images)">
+          <Package className="w-3.5 h-3.5" />
           Export Bundle
         </Button>
         <Button size="sm" variant="outline" className="gap-1.5 text-xs"
@@ -1274,8 +1288,76 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
         );
       })()}
 
-      {/* Import Bundle dialog */}
-      <Dialog open={importDialogOpen} onOpenChange={(open) => { if (!open) { setImportDialogOpen(false); setImportFile(null); } }}>
+      {/* ── Export Bundle dialog ───────────────────────────────────────────── */}
+      <Dialog open={exportDialogOpen} onOpenChange={setExportDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Package className="h-5 w-5 text-emerald-400" />
+              Export Pipeline Bundle
+            </DialogTitle>
+            <DialogDescription>
+              Exports a portable snapshot of all pipeline results — page layout, OCR text,
+              regions, and content summaries — as a single JSON file for archiving or
+              transferring to another system.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            {/* Include images toggle */}
+            <div className="flex items-start gap-3 rounded-md border border-border/50 px-4 py-3">
+              <input
+                id="export-include-images"
+                type="checkbox"
+                checked={exportIncludeImages}
+                onChange={(e) => setExportIncludeImages(e.target.checked)}
+                className="mt-0.5 h-4 w-4 cursor-pointer accent-emerald-500"
+              />
+              <div className="flex flex-col gap-0.5">
+                <label htmlFor="export-include-images" className="text-sm font-medium cursor-pointer select-none">
+                  Include page images (base-64)
+                </label>
+                <p className="text-xs text-muted-foreground">
+                  Embeds each page PNG as base-64 in the bundle, making it fully
+                  self-contained. <strong className="text-amber-400">Warning:</strong> this
+                  can significantly increase file size (multi-page documents may be
+                  100 MB+). Only enable if you need a system-independent archive or
+                  if the target system has no access to the originals.
+                </p>
+              </div>
+            </div>
+
+            {exportIncludeImages && (
+              <div className="rounded-md bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-xs text-amber-300">
+                Image export reads all page PNGs from the workspace. Large documents may take
+                several seconds and produce very large files.
+              </div>
+            )}
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" size="sm" onClick={() => setExportDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => exportBundleMutation.mutate({ documentId, includeImages: exportIncludeImages })}
+              disabled={exportBundleMutation.isPending}
+              className="gap-1.5"
+            >
+              {exportBundleMutation.isPending
+                ? <Loader2 className="h-4 w-4 animate-spin" />
+                : <Package className="h-4 w-4" />}
+              Export
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Import Bundle dialog ───────────────────────────────────────────── */}
+      <Dialog open={importDialogOpen} onOpenChange={(open) => {
+        if (!open) { setImportDialogOpen(false); setImportFile(null); setImportBundleHasImages(false); setImportOverwriteImages(false); }
+      }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -1283,9 +1365,9 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
               Import Pipeline Bundle
             </DialogTitle>
             <DialogDescription>
-              Select a <code className="text-xs bg-muted px-1 rounded">-bundle.json</code> file exported from another system.
-              The document must already be ingested here (images in workspace).
-              Existing OCR results and content summaries will be replaced.
+              Select a <code className="text-xs bg-muted px-1 rounded">-bundle.json</code> file
+              exported from another system. Existing OCR results and content summaries for
+              document #{documentId} will be replaced.
             </DialogDescription>
           </DialogHeader>
 
@@ -1303,20 +1385,46 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
                 type="file"
                 accept=".json,application/json"
                 className="hidden"
-                onChange={(e) => setImportFile(e.target.files?.[0] ?? null)}
+                onChange={(e) => handleImportFileChange(e.target.files?.[0] ?? null)}
               />
             </div>
+
+            {/* Overwrite images toggle — only shown when bundle contains images */}
+            {importBundleHasImages && (
+              <div className="flex items-start gap-3 rounded-md border border-border/50 px-4 py-3">
+                <input
+                  id="import-overwrite-images"
+                  type="checkbox"
+                  checked={importOverwriteImages}
+                  onChange={(e) => setImportOverwriteImages(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 cursor-pointer accent-violet-500"
+                />
+                <div className="flex flex-col gap-0.5">
+                  <label htmlFor="import-overwrite-images" className="text-sm font-medium cursor-pointer select-none">
+                    Overwrite existing page images
+                  </label>
+                  <p className="text-xs text-muted-foreground">
+                    The bundle contains embedded page images. If a page already has an image in
+                    the workspace, overwrite it with the bundle version. Leave unchecked to only
+                    write images for pages that don't yet exist locally.
+                  </p>
+                </div>
+              </div>
+            )}
 
             {importFile && (
               <div className="rounded-md bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-xs text-amber-300">
                 This will overwrite all OCR results and content summaries for document #{documentId}.
-                Page images and pipeline jobs are not affected.
+                {importBundleHasImages && " Page images from the bundle will be written to the workspace."}
               </div>
             )}
           </div>
 
           <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" size="sm" onClick={() => { setImportDialogOpen(false); setImportFile(null); }}>
+            <Button variant="outline" size="sm" onClick={() => {
+              setImportDialogOpen(false); setImportFile(null);
+              setImportBundleHasImages(false); setImportOverwriteImages(false);
+            }}>
               Cancel
             </Button>
             <Button
