@@ -87,6 +87,7 @@ function StatusBadge({ status }: { status: string }) {
 
 const LEVEL_STYLES: Record<string, string> = {
   chapter:    "bg-purple-500/20 text-purple-300 border-purple-500/30",
+  appendix:   "bg-amber-500/20 text-amber-300 border-amber-500/30",
   section:    "bg-indigo-500/20 text-indigo-300 border-indigo-500/30",
   subsection: "bg-sky-500/20 text-sky-300 border-sky-500/30",
   page:       "bg-slate-500/20 text-slate-300 border-slate-500/30",
@@ -1217,7 +1218,7 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
 
 // ── Tree node component ───────────────────────────────────────────────────────
 
-const INDENT: Record<string, number> = { chapter: 0, section: 20, subsection: 40, page: 60 };
+const INDENT: Record<string, number> = { chapter: 0, appendix: 0, section: 20, subsection: 40, page: 60 };
 
 function SummaryNode({
   node,
@@ -1627,6 +1628,14 @@ export default function TheChronicles() {
     onError: (err) => toast.error(err.message),
   });
 
+  const rebuildHierarchyMutation = trpc.library.rebuildHierarchy.useMutation({
+    onSuccess: () => {
+      toast.success("Hierarchy rebuilt — invalid entries removed.");
+      utils.summaries.listByDocumentIds.invalidate();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
   const handleApproveAll = async () => {
     if (!selectedDocIds.length) return;
     let total = 0;
@@ -1776,28 +1785,51 @@ export default function TheChronicles() {
                     )}
                   </div>
 
-                  {/* Collapse level selector */}
-                  {tree.length > 0 && (
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                      <span className="text-xs text-muted-foreground">Collapse to:</span>
-                      <div className="flex rounded-md border border-border/40 overflow-hidden">
-                        {COLLAPSE_LEVELS.map((opt, i) => (
-                          <button
-                            key={opt.label}
-                            onClick={() => setCollapseLevel(opt.value)}
-                            title={opt.title}
-                            className={`px-2.5 py-1.5 text-xs transition-colors ${i > 0 ? "border-l border-border/40" : ""} ${
-                              collapseLevel === opt.value
-                                ? "bg-primary/20 text-primary"
-                                : "text-muted-foreground hover:bg-muted/40"
-                            }`}
-                          >
-                            {opt.label}
-                          </button>
-                        ))}
+                  <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
+                    {/* Rebuild hierarchy button — purges invalid types, re-resolves bounds */}
+                    {selectedDocIds.length > 0 && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 gap-1.5 text-xs"
+                        onClick={() => {
+                          for (const docId of selectedDocIds) {
+                            rebuildHierarchyMutation.mutate({ documentId: docId });
+                          }
+                        }}
+                        disabled={rebuildHierarchyMutation.isPending}
+                        title="Remove invalid hierarchy entries (lists, tables, etc.) and re-resolve chapter boundaries"
+                      >
+                        {rebuildHierarchyMutation.isPending
+                          ? <Loader2 className="w-3 h-3 animate-spin" />
+                          : <RefreshCw className="w-3 h-3" />}
+                        Rebuild
+                      </Button>
+                    )}
+
+                    {/* Collapse level selector */}
+                    {tree.length > 0 && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-muted-foreground">Collapse to:</span>
+                        <div className="flex rounded-md border border-border/40 overflow-hidden">
+                          {COLLAPSE_LEVELS.map((opt, i) => (
+                            <button
+                              key={opt.label}
+                              onClick={() => setCollapseLevel(opt.value)}
+                              title={opt.title}
+                              className={`px-2.5 py-1.5 text-xs transition-colors ${i > 0 ? "border-l border-border/40" : ""} ${
+                                collapseLevel === opt.value
+                                  ? "bg-primary/20 text-primary"
+                                  : "text-muted-foreground hover:bg-muted/40"
+                              }`}
+                            >
+                              {opt.label}
+                            </button>
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
               </CardHeader>
 

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, ilike, isNull, lte, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, isNull, lte, ne, notInArray, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import {
@@ -441,13 +441,17 @@ Domain Rules:
 1. Determine if the first sentence continues a thought from the look-ahead buffer.
 2. Determine if the final sentence on the page is incomplete.
 3. Output must be raw JSON only.
+4. break_type MUST be EXACTLY one of: chapter | section | subsection | appendix
+   NEVER use: list, table, figure, sidebar, preface, foreword, index, or any other value.
+   Lists, tables, figures, and sidebars are content WITHIN sections — not structural breaks.
+   Appendix A/B/C headings → "appendix". Named sub-sections within a chapter → "section" or "subsection".
 
 Output JSON Schema:
 {
   "page_number": "integer",
   "structural_breaks": [
     {
-      "break_type": "enum (chapter | section | subsection | appendix | none)",
+      "break_type": "enum (chapter | section | subsection | appendix)",
       "heading_text": "string",
       "position_in_reading_order": "integer"
     }
@@ -1928,7 +1932,20 @@ export async function resolveContentSummaryBoundaries(documentId: number, totalP
   const db = await getDb();
   if (!db) return;
 
-  const LEVEL_DEPTH: Record<string, number> = { chapter: 1, section: 2, subsection: 3, page: 4 };
+  // Structural hierarchy levels in ascending depth order.
+  // appendix is treated as a top-level type (depth 1) — peer to chapter.
+  const VALID_TYPES = new Set(["chapter", "appendix", "section", "subsection", "page"]);
+  const LEVEL_DEPTH: Record<string, number> = { chapter: 1, appendix: 1, section: 2, subsection: 3, page: 4 };
+
+  // Purge any records with invalid/hallucinated level types (e.g. "list", "table", "figure")
+  // that should never have been persisted.  These were created by LLM responses that violated
+  // the allowed enum; removing them here cleans up both freshly-processed and legacy documents.
+  await db.delete(contentSummaries).where(
+    and(
+      eq(contentSummaries.documentId, documentId),
+      notInArray(contentSummaries.levelType, Array.from(VALID_TYPES)),
+    ),
+  );
 
   const all = await db.select().from(contentSummaries)
     .where(eq(contentSummaries.documentId, documentId))

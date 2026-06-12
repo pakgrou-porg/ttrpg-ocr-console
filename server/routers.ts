@@ -31,7 +31,7 @@ import {
   getAllGameSystems, createGameSystem, updateGameSystem, deleteGameSystem,
   getLlmMetricsByPage, getLlmMetricsJobSummary, getLlmMetricsPageSummary, getLlmProviderMetricsSummary, getStageArtificerMetrics,
   getActiveRetryAttempts,
-  getContentSummariesByDocument, updateContentSummary,
+  getContentSummariesByDocument, updateContentSummary, resolveContentSummaryBoundaries,
   getContentBlocksByDocumentPaginated, getContentBlocksCount,
   deleteContentBlocksByDocumentId,
 } from "./db";
@@ -2223,6 +2223,19 @@ export const appRouter = router({
         label: s.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" "),
       }));
     }),
+
+    /**
+     * Re-run hierarchy resolution for a document without re-processing the pipeline.
+     * Purges any invalid-type content summary records (e.g. "list", "table") that were
+     * created by LLM hallucination, then re-computes end-page bounds and parentIds.
+     */
+    rebuildHierarchy: adminProcedure
+      .input(z.object({ documentId: z.number().int() }))
+      .mutation(async ({ ctx, input }) => {
+        const doc = assertDocumentAccess(ctx, await getDocumentById(input.documentId));
+        await resolveContentSummaryBoundaries(input.documentId, doc.totalPages ?? 0);
+        return { success: true };
+      }),
   }),
 
   // ─── HITL Queue (Archivist's Desk) ────────────────────────────────────────

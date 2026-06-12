@@ -179,8 +179,12 @@ ${STRICT_RULES}
 Required output schema:
 {"page_number":1,"structural_breaks":[{"break_type":"chapter","heading_text":"Chapter 3: Combat","position":1}],"continuity":{"continues_from_previous_page":false,"continues_to_next_page":false,"mid_sentence_break_at_end":false,"section_continues_from_previous_page":false},"confidence":89}
 
-break_type must be one of: chapter, section, subsection, appendix
-structural_breaks lists ALL heading transitions visible on this page — may be empty [].
+break_type MUST be EXACTLY one of: chapter | section | subsection | appendix
+NEVER output: list, table, figure, sidebar, preface, foreword, index, or any other value.
+Lists, tables, figures, and sidebars are CONTENT within sections — not structural breaks. Do not emit a structural_break for them.
+"Appendix A/B/C" headings → break_type: "appendix"
+Named rule sub-sections (e.g. "Equipment Lists", "Saving Throws") within a chapter → break_type: "section" or "subsection"
+structural_breaks lists ALL heading transitions on this page — may be empty [].
 position is the 1-based reading-order index where the break occurs.
 continues_from_previous_page: true when the first sentence is clearly a continuation.
 mid_sentence_break_at_end: true when the final sentence is incomplete (cut off at bottom of page).`;
@@ -1794,9 +1798,13 @@ async function _runJob(jobId: number): Promise<number | null> {
           }
         }
 
-        // Skeleton contentSummaries records — boundaries resolved after all pages are done
+        // Skeleton contentSummaries records — boundaries resolved after all pages are done.
+        // Only valid structural hierarchy types are persisted; anything else (list, table,
+        // figure, sidebar, etc.) is silently dropped — these are content elements, not
+        // document-structure nodes.
+        const VALID_STRUCTURAL_TYPES = new Set(["chapter", "section", "subsection", "appendix"]);
         for (const brk of breaks) {
-          if (brk.break_type && brk.break_type !== "none") {
+          if (brk.break_type && VALID_STRUCTURAL_TYPES.has(brk.break_type)) {
             await createContentSummary({
               documentId,
               levelType: brk.break_type,
