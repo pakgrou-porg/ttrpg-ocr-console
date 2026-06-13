@@ -1329,7 +1329,12 @@ export async function updateOcrResult(id: number, updates: Partial<InsertOcrResu
 
 const priorityRank = sql`CASE ${hitlQueue.priority} WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 99 END`;
 
-export async function getAllHitlItems(options?: { status?: string; priority?: string; flagCategory?: string; excludeCategory?: string; limit?: number; offset?: number; orderByPriority?: boolean }) {
+export async function getAllHitlItems(options?: {
+  status?: string; priority?: string; flagCategory?: string; excludeCategory?: string;
+  limit?: number; offset?: number; orderByPriority?: boolean;
+  /** Filter to a specific document (matched via the page's documentId). */
+  documentId?: number;
+}) {
   const db = await getDb();
   if (!db) return [];
   const conditions = [];
@@ -1342,17 +1347,46 @@ export async function getAllHitlItems(options?: { status?: string; priority?: st
   if (options?.excludeCategory) conditions.push(
     or(isNull(hitlQueue.flagCategory), ne(hitlQueue.flagCategory, options.excludeCategory as any))!
   );
+  if (options?.documentId) conditions.push(eq(documentPages.documentId, options.documentId));
 
+  // Default order: document → page → part, so pages from the same book are
+  // grouped together.  Priority sort keeps priority rank first, then doc/page.
   const order = options?.orderByPriority
-    ? [asc(priorityRank), asc(hitlQueue.createdAt)]
-    : [asc(hitlQueue.createdAt)];
+    ? [asc(priorityRank), asc(documentPages.documentId), asc(documentPages.pageNumber), asc(documentPages.partIndex)]
+    : [asc(documentPages.documentId), asc(documentPages.pageNumber), asc(documentPages.partIndex)];
 
-  const baseQuery = db.select().from(hitlQueue);
+  // JOIN documentPages so we can filter/sort by document and page number.
+  const baseQuery = db
+    .select({ hitl: hitlQueue })
+    .from(hitlQueue)
+    .innerJoin(documentPages, eq(hitlQueue.pageId, documentPages.id));
   const filtered = conditions.length > 0 ? baseQuery.where(and(...conditions)) : baseQuery;
-  return filtered
+  const rows = await filtered
     .orderBy(...order)
     .limit(options?.limit ?? 100)
     .offset(options?.offset ?? 0);
+  return rows.map(r => r.hitl);
+}
+
+/** Return distinct documents that currently have at least one HITL item. */
+export async function getDocumentsWithHitlItems(status?: string) {
+  const db = await getDb();
+  if (!db) return [];
+  const conditions = status ? [eq(hitlQueue.status, status as any)] : [];
+  const baseQuery = db
+    .select({
+      id: documents.id,
+      title: documents.title,
+      filename: documents.filename,
+      gameSystem: documents.gameSystem,
+      edition: documents.edition,
+    })
+    .from(hitlQueue)
+    .innerJoin(documentPages, eq(hitlQueue.pageId, documentPages.id))
+    .innerJoin(documents, eq(documentPages.documentId, documents.id))
+    .groupBy(documents.id, documents.title, documents.filename, documents.gameSystem, documents.edition);
+  const q = conditions.length > 0 ? baseQuery.where(and(...conditions)) : baseQuery;
+  return q.orderBy(asc(documents.id));
 }
 
 export async function getHitlItemById(id: number) {

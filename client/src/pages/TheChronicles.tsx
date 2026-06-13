@@ -1825,7 +1825,9 @@ export default function TheChronicles() {
     const map = new Map<string, { label: string; ids: number[] }>();
     for (const d of docs) {
       if ((d.totalPages ?? 0) === 0) continue;
-      const label = d.title ?? d.filename ?? `Document #${d.id}`;
+      const base = d.title ?? d.filename ?? `Document #${d.id}`;
+      const meta = [d.gameSystem, d.edition].filter(Boolean).join(" · ");
+      const label = meta ? `${base} [${meta}]` : base;
       const existing = map.get(label);
       if (existing) { existing.ids.push(d.id); }
       else { map.set(label, { label, ids: [d.id] }); }

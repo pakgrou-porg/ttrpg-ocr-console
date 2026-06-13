@@ -21,6 +21,15 @@ import { BboxRegionEditor, parseRegionJson, TYPE_COLORS, sortRegionsByPosition }
 import { trpc } from "@/lib/trpc";
 import { useToast } from "@/hooks/use-toast";
 
+// ── Document label helper ─────────────────────────────────────────────────────
+
+/** Produce a human-readable document label, optionally appending game system and edition. */
+function docLabel(doc: { title?: string | null; filename: string; gameSystem?: string | null; edition?: string | null }) {
+  const base = doc.title ?? doc.filename;
+  const meta = [doc.gameSystem, doc.edition].filter(Boolean).join(" · ");
+  return meta ? `${base} [${meta}]` : base;
+}
+
 // ── Download helpers ──────────────────────────────────────────────────────────
 
 function triggerJsonDownload(filename: string, data: unknown) {
@@ -746,6 +755,11 @@ function DocumentTab({ item }: { item: any }) {
       <div>
         <p className="text-xs text-muted-foreground mb-1">Document</p>
         <p className="text-sm font-medium">{item.documentTitle ?? "Unknown"}</p>
+        {(item.gameSystem || item.edition) && (
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {[item.gameSystem, item.edition].filter(Boolean).join(" · ")}
+          </p>
+        )}
       </div>
       {item.page?.pageNumber && (
         <div>
@@ -1269,13 +1283,23 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
               className="flex items-center gap-3 min-w-0 flex-1 text-left text-muted-foreground hover:text-foreground"
             >
               {expanded ? <ChevronDown className="w-4 h-4 flex-shrink-0" /> : <ChevronRight className="w-4 h-4 flex-shrink-0" />}
-              <CardTitle className="text-base truncate">
-                PDF p.{item.page?.pageNumber ?? "?"}
-                {item.page?.printedPageLabel && (
-                  <span className="text-muted-foreground font-normal"> / Doc p.{item.page.printedPageLabel}</span>
-                )}
-                {" — "}{item.reason}
-              </CardTitle>
+              <div className="min-w-0 flex-1">
+                <CardTitle className="text-base truncate">
+                  PDF p.{item.page?.pageNumber ?? "?"}
+                  {item.page?.printedPageLabel && (
+                    <span className="text-muted-foreground font-normal"> / Doc p.{item.page.printedPageLabel}</span>
+                  )}
+                  {" — "}{item.reason}
+                </CardTitle>
+                <p className="text-xs text-muted-foreground truncate mt-0.5">
+                  {item.documentTitle ?? "Unknown"}
+                  {(item.gameSystem || item.edition) && (
+                    <span className="ml-1 opacity-70">
+                      [{[item.gameSystem, item.edition].filter(Boolean).join(" · ")}]
+                    </span>
+                  )}
+                </p>
+              </div>
             </button>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
@@ -1545,14 +1569,20 @@ export default function TrialsOfTruth() {
   // "review" = all categories except provider_exhausted (needs human judgment);
   // "infrastructure" = only provider_exhausted (needs batch retry, not manual review)
   const [categoryGroup, setCategoryGroup] = useState<"review" | "infrastructure">("review");
+  const [documentFilter, setDocumentFilter] = useState<number | undefined>(undefined);
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [activeItemId, setActiveItemId] = useState<number | null>(null);
+
+  // Documents available for filtering — fetched independently of status so the
+  // dropdown always shows all docs that have HITL items of any kind.
+  const { data: hitlDocs = [] } = trpc.hitl.listDocuments.useQuery(undefined);
 
   const { data: items, isLoading, refetch } = trpc.hitl.list.useQuery({
     status: statusFilter,
     excludeCategory: categoryGroup === "review" ? "provider_exhausted" : undefined,
     flagCategory:    categoryGroup === "infrastructure" ? "provider_exhausted" : undefined,
+    documentId: documentFilter,
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
   });
@@ -1574,7 +1604,7 @@ export default function TrialsOfTruth() {
   const totalForStatus: number = stats?.[statusFilter] ?? 0;
   const totalPages = Math.ceil(totalForStatus / PAGE_SIZE);
 
-  const switchFilter = (s: typeof statusFilter) => { setStatusFilter(s); setPage(0); };
+  const switchFilter = (s: typeof statusFilter) => { setStatusFilter(s); setPage(0); setSelected(new Set()); };
 
   const toggleSelect = (id: number) =>
     setSelected(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
@@ -1689,6 +1719,29 @@ export default function TrialsOfTruth() {
             {categoryGroup === "review" ? "Human-reviewable quality issues" : "Provider exhaustion — use Retry All from Archivist's Desk"}
           </span>
         </div>
+        {/* Document filter */}
+        {hitlDocs.length > 0 && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground">Document:</span>
+            <Select
+              value={documentFilter !== undefined ? String(documentFilter) : "all"}
+              onValueChange={v => { setDocumentFilter(v === "all" ? undefined : Number(v)); setPage(0); setSelected(new Set()); }}
+            >
+              <SelectTrigger className="h-7 text-xs w-64">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All documents</SelectItem>
+                {hitlDocs.map((d: any) => (
+                  <SelectItem key={d.id} value={String(d.id)}>
+                    {docLabel(d)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div className="flex gap-2 flex-wrap">
             {(["queued", "resolved", "escalated", "skipped"] as const).map(s => (

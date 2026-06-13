@@ -25,7 +25,7 @@ import {
   getPageById, getPageByPhash, createDocumentPage, updateDocumentPage, getPagePartIndicesForPageNumber,
   getPagesByIds, getDocumentsByIds, getOcrResultsByPageIds,
   getOcrResultByPageId, getOcrResultById, createOcrResult, updateOcrResult,
-  getHitlItemById, getHitlItemsByIds, getHitlItemsByPageId, getAllHitlItems, createHitlItem, updateHitlItem, getHitlStats, getHitlCategoryStats, getHitlItemsQueuedByCategory,
+  getHitlItemById, getHitlItemsByIds, getHitlItemsByPageId, getAllHitlItems, getDocumentsWithHitlItems, createHitlItem, updateHitlItem, getHitlStats, getHitlCategoryStats, getHitlItemsQueuedByCategory,
   getHitlRetryAttemptsByPageId, getHitlRetryAttemptsByPageIds, getHitlRetryAttemptsByPage,
   getLatestRetryStatusByPageIds, getPageIdsWithFallback, getLatestHitlReasonByPageIds,
   getAllGameSystems, createGameSystem, updateGameSystem, deleteGameSystem,
@@ -2159,13 +2159,15 @@ export const appRouter = router({
 
   // ─── HITL Queue (Archivist's Desk) ────────────────────────────────────────
   hitl: router({
-    /** List HITL queue items with optional filters */
+    /** List HITL queue items with optional filters, sorted by document then page number */
     list: protectedProcedure
       .input(z.object({
         status: z.enum(HITL_STATUSES).optional(),
         priority: z.enum(HITL_PRIORITIES).optional(),
         flagCategory: z.string().max(64).optional(),
         excludeCategory: z.string().max(64).optional(),
+        /** Restrict to a single document */
+        documentId: z.number().int().optional(),
         limit: z.number().int().min(1).max(2000).optional(),
         offset: z.number().int().min(0).optional(),
       }).optional())
@@ -2175,6 +2177,7 @@ export const appRouter = router({
           priority: input?.priority,
           flagCategory: input?.flagCategory,
           excludeCategory: input?.excludeCategory,
+          documentId: input?.documentId,
           limit: input?.limit ?? 50,
           offset: input?.offset ?? 0,
         });
@@ -2209,9 +2212,16 @@ export const appRouter = router({
             retryAttempts: retryMap.get(item.pageId) ?? [],
             documentTitle: doc?.title ?? doc?.filename ?? "Unknown",
             documentId: page?.documentId ?? null,
+            gameSystem: doc?.gameSystem ?? null,
+            edition: doc?.edition ?? null,
           };
         });
       }),
+
+    /** List distinct documents that have at least one HITL item */
+    listDocuments: protectedProcedure
+      .input(z.object({ status: z.enum(HITL_STATUSES).optional() }).optional())
+      .query(async ({ input }) => getDocumentsWithHitlItems(input?.status)),
 
     /** Get a single HITL item with full context (page, OCR, document) */
     get: protectedProcedure

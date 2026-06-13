@@ -313,7 +313,11 @@ function JobPageBrowser({ jobId, pageOffset, blockSize, onClose }: {
       <div className="flex items-center gap-3">
         <BookOpen className="h-4 w-4 text-muted-foreground" />
         <span className="text-sm font-medium">
-          {doc ? (doc.title ?? doc.filename) : "Loading…"}
+          {doc ? (() => {
+            const base = doc.title ?? doc.filename;
+            const meta = [doc.gameSystem, doc.edition].filter(Boolean).join(" · ");
+            return meta ? `${base} [${meta}]` : base;
+          })() : "Loading…"}
         </span>
         {doc && <span className="text-xs text-muted-foreground">· {blockSize} page{blockSize !== 1 ? "s" : ""} in this block</span>}
         <Button size="sm" variant="ghost" className="ml-auto h-7 w-7 p-0 text-muted-foreground" onClick={onClose}>
