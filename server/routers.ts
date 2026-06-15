@@ -2282,13 +2282,16 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         const item = await getHitlItemOrThrow(input.id);
 
-        // Update the HITL item
-        await updateHitlItem(input.id, {
-          status: "resolved",
-          resolutionNotes: input.resolutionNotes,
-          resolvedBy: ctx.user.id,
-          resolvedAt: new Date(),
-        });
+        // Update the HITL item and clear the page flag so Chronicles reflects the resolution
+        await Promise.all([
+          updateHitlItem(input.id, {
+            status: "resolved",
+            resolutionNotes: input.resolutionNotes,
+            resolvedBy: ctx.user.id,
+            resolvedAt: new Date(),
+          }),
+          updateDocumentPage(item.pageId, { isFlagged: false }),
+        ]);
 
         // Apply corrections to the OCR result if provided
         const ocrResult = item.ocrResultId
@@ -2351,13 +2354,16 @@ export const appRouter = router({
         resolutionNotes: z.string().max(2048).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        await getHitlItemOrThrow(input.id);
-        await updateHitlItem(input.id, {
-          status: "skipped",
-          resolutionNotes: input.resolutionNotes,
-          resolvedBy: ctx.user.id,
-          resolvedAt: new Date(),
-        });
+        const item = await getHitlItemOrThrow(input.id);
+        await Promise.all([
+          updateHitlItem(input.id, {
+            status: "skipped",
+            resolutionNotes: input.resolutionNotes,
+            resolvedBy: ctx.user.id,
+            resolvedAt: new Date(),
+          }),
+          updateDocumentPage(item.pageId, { isFlagged: false }),
+        ]);
         return { success: true };
       }),
 

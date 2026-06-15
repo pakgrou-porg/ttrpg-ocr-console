@@ -1679,10 +1679,13 @@ export async function getLatestHitlReasonByPageIds(pageIds: number[]): Promise<M
   const db = await getDb();
   if (!db || pageIds.length === 0) return new Map();
   const { inArray } = await import("drizzle-orm");
+  // Only surface a reason when the item is still active — resolved/skipped items
+  // should not continue to show the flag in Chronicles.
+  const ACTIVE_STATUSES = ["queued", "in_progress", "escalated"] as const;
   const rows = await db
     .select({ pageId: hitlQueue.pageId, reason: hitlQueue.reason })
     .from(hitlQueue)
-    .where(inArray(hitlQueue.pageId, pageIds))
+    .where(and(inArray(hitlQueue.pageId, pageIds), inArray(hitlQueue.status, ACTIVE_STATUSES as unknown as string[])))
     .orderBy(desc(hitlQueue.createdAt));
   const out = new Map<number, string>();
   for (const r of rows) {
