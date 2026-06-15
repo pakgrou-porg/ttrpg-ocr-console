@@ -208,6 +208,17 @@ async function buildProviderCall(
   if (finalModel) body.model = finalModel;
   else delete body.model;
 
+  // Anthropic extended thinking is incompatible with an assistant prefill turn.
+  // Strip the trailing `{"role":"assistant","content":"{"}` when thinking is enabled;
+  // the post-processing step already handles prepending "{" to responses that don't start with it.
+  const isThinkingEnabled = "enable_thinking" in body || "thinking" in body;
+  if (isThinkingEnabled) {
+    const msgs = body.messages as any[];
+    if (msgs.length > 0 && msgs[msgs.length - 1].role === "assistant" && msgs[msgs.length - 1].content === "{") {
+      body.messages = msgs.slice(0, -1);
+    }
+  }
+
   return { url, headers, body };
 }
 
