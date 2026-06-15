@@ -1708,8 +1708,7 @@ export async function getHitlStats() {
   const all = await db.select().from(hitlQueue);
   return {
     total: all.length,
-    // "queued" stat combines queued + in_progress so the Awaiting Review card matches the list
-    queued: all.filter(i => i.status === "queued" || i.status === "in_progress").length,
+    queued: all.filter(i => i.status === "queued").length,
     inProgress: all.filter(i => i.status === "in_progress").length,
     resolved: all.filter(i => i.status === "resolved").length,
     skipped: all.filter(i => i.status === "skipped").length,
