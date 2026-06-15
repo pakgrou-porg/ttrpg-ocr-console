@@ -2334,15 +2334,19 @@ export async function retryPageStages(
     PAGE_LLM_SEMAPHORE.release();
   }
 
-  // Auto-resolve the HITL item if retry passed; otherwise update notes
+  // Auto-resolve the HITL item if retry passed; on failure reset to "queued" so it
+  // reappears in the review console (staying "in_progress" makes it invisible forever).
   if (hitlId != null) {
     const passed = stagesFailed.length === 0 && ocrConfidence >= HITL_CONFIDENCE_THRESHOLD;
     if (passed) {
-      await updateHitlItem(hitlId, {
-        status: "resolved",
-        resolutionNotes: `Auto-resolved by retry — confidence ${ocrConfidence}%`,
-        resolvedAt: new Date(),
-      });
+      await Promise.all([
+        updateHitlItem(hitlId, {
+          status: "resolved",
+          resolutionNotes: `Auto-resolved by retry — confidence ${ocrConfidence}%`,
+          resolvedAt: new Date(),
+        }),
+        updateDocumentPage(pageId, { isFlagged: false }),
+      ]);
     } else {
       const parts = ["Retry attempted"];
       if (stagesFailed.length > 0) parts.push(`failed: ${stagesFailed.join(", ")}`);
@@ -2350,7 +2354,8 @@ export async function retryPageStages(
         if (stageErrors[stage]) parts.push(`${stage}: ${stageErrors[stage].slice(0, 160)}`);
       }
       if (ocrConfidence < HITL_CONFIDENCE_THRESHOLD) parts.push(`confidence ${ocrConfidence}%`);
-      await updateHitlItem(hitlId, { resolutionNotes: parts.join(" — ") });
+      // Reset to "queued" so the item is visible again in the review console.
+      await updateHitlItem(hitlId, { status: "queued", resolutionNotes: parts.join(" — ") });
     }
   }
 

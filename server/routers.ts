@@ -2172,8 +2172,13 @@ export const appRouter = router({
         offset: z.number().int().min(0).optional(),
       }).optional())
       .query(async ({ input }) => {
+        // The "queued" view also surfaces "in_progress" items so pages whose pipeline
+        // retry failed (and were reset to queued) or are mid-retry don't go invisible.
+        const statusArg = input?.status === "queued"
+          ? { statuses: ["queued", "in_progress"] as string[] }
+          : { status: input?.status };
         const items = await getAllHitlItems({
-          status: input?.status,
+          ...statusArg,
           priority: input?.priority,
           flagCategory: input?.flagCategory,
           excludeCategory: input?.excludeCategory,

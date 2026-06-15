@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, ilike, isNull, lte, ne, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, inArray, isNull, lte, ne, notInArray, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { readFile, writeFile, mkdir } from "fs/promises";
@@ -1330,7 +1330,11 @@ export async function updateOcrResult(id: number, updates: Partial<InsertOcrResu
 const priorityRank = sql`CASE ${hitlQueue.priority} WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 99 END`;
 
 export async function getAllHitlItems(options?: {
-  status?: string; priority?: string; flagCategory?: string; excludeCategory?: string;
+  /** Single status filter — mutually exclusive with `statuses`. */
+  status?: string;
+  /** Multi-status OR filter (e.g. ["queued","in_progress"] for the active-review view). */
+  statuses?: string[];
+  priority?: string; flagCategory?: string; excludeCategory?: string;
   limit?: number; offset?: number; orderByPriority?: boolean;
   /** Filter to a specific document (matched via the page's documentId). */
   documentId?: number;
@@ -1338,7 +1342,11 @@ export async function getAllHitlItems(options?: {
   const db = await getDb();
   if (!db) return [];
   const conditions = [];
-  if (options?.status) conditions.push(eq(hitlQueue.status, options.status as any));
+  if (options?.statuses && options.statuses.length > 0) {
+    conditions.push(inArray(hitlQueue.status, options.statuses as any[]));
+  } else if (options?.status) {
+    conditions.push(eq(hitlQueue.status, options.status as any));
+  }
   if (options?.priority) conditions.push(eq(hitlQueue.priority, options.priority as any));
   if (options?.flagCategory) conditions.push(eq(hitlQueue.flagCategory, options.flagCategory as any));
   // Use (IS NULL OR !=) rather than plain != so that rows with a NULL flagCategory
@@ -1700,7 +1708,8 @@ export async function getHitlStats() {
   const all = await db.select().from(hitlQueue);
   return {
     total: all.length,
-    queued: all.filter(i => i.status === "queued").length,
+    // "queued" stat combines queued + in_progress so the Awaiting Review card matches the list
+    queued: all.filter(i => i.status === "queued" || i.status === "in_progress").length,
     inProgress: all.filter(i => i.status === "in_progress").length,
     resolved: all.filter(i => i.status === "resolved").length,
     skipped: all.filter(i => i.status === "skipped").length,
