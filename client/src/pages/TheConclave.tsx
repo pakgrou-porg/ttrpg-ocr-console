@@ -104,6 +104,8 @@ export default function TheConclave() {
   const [wipeConfirmOpen, setWipeConfirmOpen] = useState(false);
   const [wipeMode, setWipeMode] = useState<"all" | "custom">("all");
   const [selectedTargets, setSelectedTargets] = useState<Set<WipeTarget>>(new Set());
+  const [selectedDocId, setSelectedDocId] = useState<number | null>(null);
+  const [deleteDocConfirmOpen, setDeleteDocConfirmOpen] = useState(false);
 
   const toggleTarget = (id: WipeTarget) => {
     setSelectedTargets(prev => {
@@ -126,6 +128,17 @@ export default function TheConclave() {
       toast.success(`Processing data wiped — ${total} records removed.`);
       setSelectedTargets(new Set());
       utils.pipeline.exchangeLogs.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const { data: allDocuments } = trpc.library.listDocuments.useQuery();
+
+  const deleteDocumentMutation = trpc.library.deleteDocument.useMutation({
+    onSuccess: () => {
+      utils.library.listDocuments.invalidate();
+      setSelectedDocId(null);
+      toast.success("Document banished from the Kodex.");
     },
     onError: (e) => toast.error(e.message),
   });
@@ -527,6 +540,46 @@ export default function TheConclave() {
             </Button>
           </div>
         </div>
+
+        {/* Delete Single Document */}
+        <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-5 space-y-3">
+          <div>
+            <p className="font-medium text-sm">Delete Single Document</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Permanently remove one document and all its pages, OCR results, and HITL items.
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            <Select
+              value={selectedDocId !== null ? String(selectedDocId) : ""}
+              onValueChange={(v) => setSelectedDocId(v ? Number(v) : null)}
+            >
+              <SelectTrigger className="flex-1 h-8 text-sm">
+                <SelectValue placeholder="Choose a document…" />
+              </SelectTrigger>
+              <SelectContent>
+                {(allDocuments ?? []).map(doc => (
+                  <SelectItem key={doc.id} value={String(doc.id)}>
+                    {doc.title ?? doc.filename ?? `Document #${doc.id}`}
+                    {doc.gameSystem ? ` — ${doc.gameSystem}` : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              variant="destructive"
+              size="sm"
+              className="flex-shrink-0 gap-2"
+              onClick={() => setDeleteDocConfirmOpen(true)}
+              disabled={selectedDocId === null || deleteDocumentMutation.isPending}
+            >
+              {deleteDocumentMutation.isPending
+                ? <Loader2 className="w-4 h-4 animate-spin" />
+                : <Trash2 className="w-4 h-4" />}
+              Delete
+            </Button>
+          </div>
+        </div>
       </section>
 
       {/* ── Provider Exchange Log Console ──────────────────────────────────── */}
@@ -650,6 +703,45 @@ export default function TheConclave() {
           )}
         </div>
       </section>
+
+      {/* Delete single document confirmation dialog */}
+      <AlertDialog open={deleteDocConfirmOpen} onOpenChange={setDeleteDocConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="w-5 h-5" />
+              Delete Document?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-2">
+              {selectedDocId !== null && (() => {
+                const doc = (allDocuments ?? []).find(d => d.id === selectedDocId);
+                return (
+                  <>
+                    <span className="block font-medium text-foreground">
+                      {doc?.title ?? doc?.filename ?? `Document #${selectedDocId}`}
+                    </span>
+                    <span className="block">
+                      This will permanently delete the document and all its pages, OCR results, HITL review items,
+                      and processing history. This cannot be undone.
+                    </span>
+                  </>
+                );
+              })()}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (selectedDocId !== null) deleteDocumentMutation.mutate({ id: selectedDocId });
+              }}
+            >
+              Yes, delete document
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Wipe confirmation dialog */}
       <AlertDialog open={wipeConfirmOpen} onOpenChange={setWipeConfirmOpen}>
