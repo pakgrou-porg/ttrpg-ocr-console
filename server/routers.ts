@@ -2252,7 +2252,18 @@ export const appRouter = router({
         // Prevent duplicate: if any open item already exists for this page, return it
         const existing = await getHitlItemsByPageId(input.pageId);
         const open = existing.find(i => i.status === "queued" || i.status === "in_progress" || i.status === "escalated");
-        if (open) return { success: true, id: open.id, alreadyQueued: true };
+        if (open) {
+          // If the existing item is an infrastructure failure but the user is manually
+          // flagging for human review, promote it into the Needs Review queue by clearing
+          // the category — otherwise it stays invisible in "Needs Review."
+          const isInfra = open.flagCategory === "provider_exhausted";
+          const isManualFlag = !input.flagCategory || input.flagCategory === "manual_flag";
+          if (isInfra && isManualFlag) {
+            await updateHitlItem(open.id, { flagCategory: null as any, reason: input.reason, priority: input.priority });
+            return { success: true, id: open.id, alreadyQueued: false };
+          }
+          return { success: true, id: open.id, alreadyQueued: true };
+        }
 
         const item = await createHitlItem(input);
         await updateDocumentPage(input.pageId, { isFlagged: true });
