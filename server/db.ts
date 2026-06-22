@@ -1704,11 +1704,16 @@ export async function getLatestHitlReasonByPageIds(pageIds: number[]): Promise<M
 
 export async function getHitlStats() {
   const db = await getDb();
-  if (!db) return { total: 0, queued: 0, inProgress: 0, resolved: 0, skipped: 0, escalated: 0, byCritical: 0, byHigh: 0, byMedium: 0, byLow: 0 };
+  if (!db) return { total: 0, queued: 0, queuedReview: 0, queuedInfra: 0, inProgress: 0, resolved: 0, skipped: 0, escalated: 0, byCritical: 0, byHigh: 0, byMedium: 0, byLow: 0 };
   const all = await db.select().from(hitlQueue);
+  const INFRA = "provider_exhausted";
   return {
     total: all.length,
     queued: all.filter(i => i.status === "queued").length,
+    // Split counts so the UI can show the right number per category-group view.
+    // "review" = human-correctable items; "infra" = provider_exhausted (needs retry, not manual review).
+    queuedReview: all.filter(i => i.status === "queued" && i.flagCategory !== INFRA).length,
+    queuedInfra:  all.filter(i => i.status === "queued" && i.flagCategory === INFRA).length,
     inProgress: all.filter(i => i.status === "in_progress").length,
     resolved: all.filter(i => i.status === "resolved").length,
     skipped: all.filter(i => i.status === "skipped").length,

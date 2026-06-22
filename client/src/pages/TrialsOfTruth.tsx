@@ -1601,7 +1601,12 @@ export default function TrialsOfTruth() {
   });
 
   const queuedIds = (items ?? []).filter((i: any) => i.status === "queued").map((i: any) => i.id);
-  const totalForStatus: number = stats?.[statusFilter] ?? 0;
+  // Use the view-specific queued count so the stat card and tab label match what the list
+  // actually returns: "review" excludes provider_exhausted; "infrastructure" shows only those.
+  const effectiveQueuedCount = categoryGroup === "review"
+    ? (stats?.queuedReview ?? 0)
+    : (stats?.queuedInfra ?? 0);
+  const totalForStatus: number = statusFilter === "queued" ? effectiveQueuedCount : (stats?.[statusFilter] ?? 0);
   const totalPages = Math.ceil(totalForStatus / PAGE_SIZE);
 
   const switchFilter = (s: typeof statusFilter) => { setStatusFilter(s); setPage(0); setSelected(new Set()); };
@@ -1693,7 +1698,9 @@ export default function TrialsOfTruth() {
             <Card key={key} className="bg-card/50 backdrop-blur-sm border-border/50 cursor-pointer hover:border-border/80 transition-colors"
               onClick={() => switchFilter(key)}>
               <CardContent className="pt-4 pb-3">
-                <p className={`text-3xl font-bold ${color}`}>{(stats as any)[key] ?? 0}</p>
+                <p className={`text-3xl font-bold ${color}`}>
+                  {key === "queued" ? effectiveQueuedCount : ((stats as any)[key] ?? 0)}
+                </p>
                 <p className="text-xs text-muted-foreground mt-1">{label}</p>
               </CardContent>
             </Card>
@@ -1750,7 +1757,7 @@ export default function TrialsOfTruth() {
                   statusFilter === s ? "bg-primary text-primary-foreground" : "bg-muted/30 text-muted-foreground hover:text-foreground"
                 }`}>
                 {s.charAt(0).toUpperCase() + s.slice(1)}
-                {stats && <span className="ml-1.5 opacity-60 text-xs">({(stats as any)[s] ?? 0})</span>}
+                {stats && <span className="ml-1.5 opacity-60 text-xs">({s === "queued" ? effectiveQueuedCount : ((stats as any)[s] ?? 0)})</span>}
               </button>
             ))}
           </div>
