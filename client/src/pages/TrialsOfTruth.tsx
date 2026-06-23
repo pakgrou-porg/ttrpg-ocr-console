@@ -340,9 +340,11 @@ function BodyTextLayoutForm({ corrected, onCorrect, onSave, isSaving }: {
   const hasArt   = corrected.has_image_or_art != null ? Boolean(corrected.has_image_or_art) : false;
   const hasList  = corrected.has_list         != null ? Boolean(corrected.has_list)         : false;
 
-  // Seed the correction JSON with body_text defaults the first time the form appears
+  // Seed the correction JSON with body_text defaults only when there is no correction yet.
+  // Skip seeding if layout_type is already "body_text" — a previously saved correction
+  // was pre-populated from correctedStructuredData and must not be overwritten with defaults.
   useEffect(() => {
-    if (!corrected.layout_type) {
+    if (corrected.layout_type !== "body_text") {
       onCorrect(JSON.stringify(
         { layout_type: "body_text", columns: 2, has_table: false, has_image_or_art: false, has_list: false },
         null, 2,
@@ -453,7 +455,7 @@ function LayoutTab({ item, correction, onCorrect, onSave, isSaving, onRotate, is
 }) {
   const sd = item.ocr?.structuredData as any;
   const corrected = parseLayoutCorrection(correction);
-  const layoutType = String(corrected.layout_type ?? corrected.layoutType ?? item.page?.layoutType ?? sd?.layout_type ?? "unknown");
+  const layoutType = String(corrected.layout_type || corrected.layoutType || item.page?.layoutType || sd?.layout_type || "unknown");
   const layoutMeta = sd?.layout ?? sd?.layout_metadata ?? sd?.page_layout;
 
   const setLayoutType = (value: string) => {
@@ -1022,13 +1024,20 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
   const [activeTab, setActiveTab] = useState<TabId>("text");
   const [corrections, setCorrections] = useState<Record<TabId, string>>(() => {
     const sd = item.ocr?.structuredData as any;
+    const correctedSd = item.ocr?.correctedStructuredData as any;
     const hasLayout    = !!(item.page?.layoutType || sd?.layout_type || sd?.layout || sd?.layout_metadata || sd?.page_layout);
     const hasRegions   = !!(item.page?.contentRegions || sd?.regions || sd?.bounding_boxes || sd?.content_regions);
     const hasStructure = !!(sd?.chapter || sd?.section || sd?.subsection || sd?.headings || sd?.document_summary || sd?.page_summary || sd?.summary);
     const hasJson      = !!sd;
+    // Pre-populate layout from the previously saved correction so body_text metadata
+    // (columns, has_table, etc.) is restored on re-open instead of resetting to defaults.
+    const savedLayoutCorrection = correctedSd?.layout_correction;
+    const layoutInit = savedLayoutCorrection != null
+      ? JSON.stringify(savedLayoutCorrection, null, 2)
+      : hasLayout ? "" : (EMPTY_TEMPLATES.layout ?? "");
     return {
       text:      "",
-      layout:    hasLayout    ? "" : (EMPTY_TEMPLATES.layout    ?? ""),
+      layout:    layoutInit,
       regions:   hasRegions   ? "" : (EMPTY_TEMPLATES.regions   ?? ""),
       structure: hasStructure ? "" : (EMPTY_TEMPLATES.structure ?? ""),
       json:      hasJson      ? "" : (EMPTY_TEMPLATES.json      ?? ""),
