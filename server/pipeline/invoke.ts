@@ -208,10 +208,14 @@ async function buildProviderCall(
   if (finalModel) body.model = finalModel;
   else delete body.model;
 
-  // Anthropic extended thinking is incompatible with an assistant prefill turn.
+  // Extended thinking / reasoning models are incompatible with an assistant prefill turn.
   // Strip the trailing `{"role":"assistant","content":"{"}` when thinking is enabled;
   // the post-processing step already handles prepending "{" to responses that don't start with it.
-  const isThinkingEnabled = "enable_thinking" in body || "thinking" in body;
+  // Also covers server-side reasoning models (e.g. nemotron-*-reasoning-*) that don't expose the
+  // flag in the request body but still reject assistant prefill with the same error.
+  const modelId = typeof body.model === "string" ? body.model : "";
+  const isThinkingEnabled = "enable_thinking" in body || "thinking" in body
+    || /\breasoning\b/i.test(modelId);
   if (isThinkingEnabled) {
     const msgs = body.messages as any[];
     if (msgs.length > 0 && msgs[msgs.length - 1].role === "assistant" && msgs[msgs.length - 1].content === "{") {
@@ -295,6 +299,25 @@ async function dispatchToProvider(
       if (!res.ok) {
         const retryText = await res.text().catch(() => "");
         const errMsg = `[${stage}] Provider ${provider.name} HTTP ${res.status}: ${retryText.slice(0, 1000)} (after dropping response_format)`;
+        logFailure(errMsg);
+        throw new Error(errMsg);
+      }
+    } else if (res.status === 400 && /enable_thinking/i.test(errText)) {
+      // Reasoning model with server-side thinking enabled rejected the assistant prefill.
+      // Retry without the trailing assistant turn (same recovery the proactive check does).
+      const msgs = body.messages as any[];
+      const lastIsAssistant = msgs.length > 0 && msgs[msgs.length - 1]?.role === "assistant";
+      if (lastIsAssistant) {
+        console.warn(`[invoke] ${stage} provider ${provider.name} rejected assistant prefill (thinking model); retrying without it.`);
+        res = await postChat({ ...body, messages: msgs.slice(0, -1) });
+        if (!res.ok) {
+          const retryText = await res.text().catch(() => "");
+          const errMsg = `[${stage}] Provider ${provider.name} HTTP ${res.status}: ${retryText.slice(0, 1000)} (after dropping assistant prefill)`;
+          logFailure(errMsg);
+          throw new Error(errMsg);
+        }
+      } else {
+        const errMsg = `[${stage}] Provider ${provider.name} HTTP ${res.status}: ${errText.slice(0, 1000)}`;
         logFailure(errMsg);
         throw new Error(errMsg);
       }
