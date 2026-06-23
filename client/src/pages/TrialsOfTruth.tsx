@@ -80,7 +80,7 @@ type TabId = "text" | "layout" | "regions" | "structure" | "json" | "document" |
 // Empty JSON templates shown when a section has no source data.
 // Pre-populate the correction field so reviewers have a starting structure.
 const EMPTY_TEMPLATES: Partial<Record<TabId, string>> = {
-  layout:    JSON.stringify({ layout_type: "", columns: 1, notes: "" }, null, 2),
+  layout:    JSON.stringify({ layout_type: "body_text", columns: 2, has_table: true, has_image_or_art: true, has_list: false }, null, 2),
   regions:   JSON.stringify([], null, 2),
   structure: JSON.stringify({ chapter: "", section: "", subsection: "", headings: [], page_summary: "" }, null, 2),
   json:      JSON.stringify({ layout_type: "", content_blocks: [], page_summary: "" }, null, 2),
@@ -1166,22 +1166,30 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
     );
   };
   const saveActiveAndRetryOcr = () => {
-    if (activeTab !== "layout" && activeTab !== "regions") return;
     const pageId = item.page?.id ?? item.pageId;
-    saveCorrectionMut.mutate(
-      { pageId, field: activeTab, value: corrections[activeTab] },
-      {
-        onSuccess: () => {
-          // Keep the correction value visible (card dismissed by retryMut.onSuccess → onResolved)
-          retryMut.mutate({
-            pageId,
-            hitlId: item.id,
-            stages: ["ocr_extraction"],
-            savedCorrectionFields: [activeTab],
-          });
+    const canSave = (activeTab === "layout" || activeTab === "regions") && corrections[activeTab]?.trim();
+    if (canSave) {
+      saveCorrectionMut.mutate(
+        { pageId, field: activeTab as "layout" | "regions", value: corrections[activeTab as "layout" | "regions"] },
+        {
+          onSuccess: () => {
+            retryMut.mutate({
+              pageId,
+              hitlId: item.id,
+              stages: ["ocr_extraction"],
+              savedCorrectionFields: [activeTab as "layout" | "regions"],
+            });
+          },
         },
-      },
-    );
+      );
+    } else {
+      retryMut.mutate({
+        pageId,
+        hitlId: item.id,
+        stages: ["ocr_extraction"],
+        savedCorrectionFields: [],
+      });
+    }
   };
 
   // When the reviewer switches to the Layout or Regions tab they are manually
@@ -1483,14 +1491,14 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
                       ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving...</>
                       : <><Save className="w-3.5 h-3.5" /> Save</>}
                   </Button>
-                  {(activeTab === "layout" || activeTab === "regions") && (
-                    <Button size="sm" variant="outline" className="gap-1.5"
-                      onClick={saveActiveAndRetryOcr} disabled={isPending || saveCorrectionMut.isPending}>
-                      {saveCorrectionMut.isPending || retryMut.isPending
-                        ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Applying...</>
-                        : <><RefreshCw className="w-3.5 h-3.5" /> Save + OCR</>}
-                    </Button>
-                  )}
+                  <Button size="sm" variant="outline" className="gap-1.5"
+                    onClick={saveActiveAndRetryOcr} disabled={isPending || saveCorrectionMut.isPending}>
+                    {saveCorrectionMut.isPending || retryMut.isPending
+                      ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Applying...</>
+                      : (activeTab === "layout" || activeTab === "regions") && corrections[activeTab]?.trim()
+                        ? <><RefreshCw className="w-3.5 h-3.5" /> Save + OCR</>
+                        : <><RefreshCw className="w-3.5 h-3.5" /> Retry OCR</>}
+                  </Button>
                 </>
               )}
             </div>
