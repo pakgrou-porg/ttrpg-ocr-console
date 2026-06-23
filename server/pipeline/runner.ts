@@ -11,6 +11,7 @@ import {
   createDocumentPage, updateDocumentPage,
   createOcrResult, updateOcrResult, createHitlItem, updateHitlItem,
   createHitlRetryAttempt, updateHitlRetryAttempt,
+  getHitlRetryAttemptsByPageId,
   getPageById, getDocumentById,
   getPagesByDocumentId,
   getOcrResultByPageId,
@@ -2354,8 +2355,18 @@ export async function retryPageStages(
         if (stageErrors[stage]) parts.push(`${stage}: ${stageErrors[stage].slice(0, 160)}`);
       }
       if (ocrConfidence < HITL_CONFIDENCE_THRESHOLD) parts.push(`confidence ${ocrConfidence}%`);
-      // Reset to "queued" so the item is visible again in the review console.
-      await updateHitlItem(hitlId, { status: "queued", resolutionNotes: parts.join(" — ") });
+
+      // After enough retries without meeting the threshold, escalate instead of re-queuing
+      // so the page doesn't loop indefinitely in the console.
+      const MAX_REQUEUE_RETRIES = 5;
+      const priorAttempts = await getHitlRetryAttemptsByPageId(pageId).catch(() => [] as any[]);
+      if (priorAttempts.length >= MAX_REQUEUE_RETRIES) {
+        parts.unshift(`Auto-escalated after ${priorAttempts.length} retries without improvement`);
+        await updateHitlItem(hitlId, { status: "escalated", resolutionNotes: parts.join(" — ") });
+      } else {
+        // Reset to "queued" so the item is visible again in the review console.
+        await updateHitlItem(hitlId, { status: "queued", resolutionNotes: parts.join(" — ") });
+      }
     }
   }
 
