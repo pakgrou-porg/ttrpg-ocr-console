@@ -2097,7 +2097,37 @@ export function enqueuePageRetry(
   hitlId: number | undefined,
   metadata: RetryPageMetadata,
 ): void {
-  retryTaskQueue.push(() => retryPageStages(pageId, stages, hitlId, metadata).then(() => undefined));
+  // Create a pending_queue record immediately so the retry is visible in OverseeScribes
+  // before the in-memory task queue picks it up.
+  const pendingIdPromise = createHitlRetryAttempt({
+    hitlItemId: hitlId ?? null,
+    pageId,
+    requestedStages: stages,
+    savedCorrectionFields: metadata.savedCorrectionFields ?? [],
+    usedReviewedLayout: false,
+    usedReviewedRegions: false,
+    usedReviewedStructure: false,
+    status: "pending_queue",
+    confidence: null,
+    stagesFailed: [],
+    stageErrors: {},
+    modelTrace: {},
+    previousConfidence: null,
+    confidenceDelta: null,
+    previousRegionCount: null,
+    regionsBefore: null,
+    previousLayoutType: null,
+    ocrResultId: null,
+    createdBy: metadata.reviewerUserId ?? null,
+  } as any).then(r => r.id).catch(err => {
+    console.warn(`[Pipeline] pending_queue insert failed for page ${pageId}:`, err?.message);
+    return null as number | null;
+  });
+  retryTaskQueue.push(() =>
+    pendingIdPromise
+      .then(existingId => retryPageStages(pageId, stages, hitlId, metadata, existingId))
+      .then(() => undefined)
+  );
   console.log(`[Pipeline] Page ${pageId} retry queued (queue depth: ${retryTaskQueue.length})`);
   drainRetryQueue();
 }
@@ -2107,6 +2137,7 @@ export async function retryPageStages(
   stages: RetryStage[],
   hitlId?: number,
   metadata: RetryPageMetadata = {},
+  existingAttemptId?: number | null,
 ): Promise<{ confidence: number; stagesFailed: string[]; stageErrors: Record<string, string> }> {
   const page = await getPageById(pageId);
   if (!page) throw new Error(`Page ${pageId} not found`);
@@ -2159,30 +2190,48 @@ export async function retryPageStages(
   const previousRegionCount = regionsBefore?.length ?? null;
   const previousLayoutType = page.layoutType ?? null;
 
-  let retryAttemptId: number | null = null;
+  let retryAttemptId: number | null = existingAttemptId ?? null;
   try {
-    const attempt = await createHitlRetryAttempt({
-      hitlItemId: hitlId ?? null,
-      pageId,
-      requestedStages: stages,
-      savedCorrectionFields,
-      usedReviewedLayout,
-      usedReviewedRegions,
-      usedReviewedStructure,
-      status: "running",
-      confidence: null,
-      stagesFailed: [],
-      stageErrors: {},
-      modelTrace: {},
-      ocrResultId: retryOcrResultId,
-      createdBy: metadata.reviewerUserId ?? null,
-      previousConfidence,
-      confidenceDelta: null,
-      previousRegionCount,
-      regionsBefore,
-      previousLayoutType,
-    } as any);
-    retryAttemptId = attempt.id;
+    if (existingAttemptId) {
+      // Upgrade the pending_queue record created by enqueuePageRetry to running
+      await updateHitlRetryAttempt(existingAttemptId, {
+        hitlItemId: hitlId ?? null,
+        status: "running",
+        savedCorrectionFields,
+        usedReviewedLayout,
+        usedReviewedRegions,
+        usedReviewedStructure,
+        ocrResultId: retryOcrResultId,
+        createdBy: metadata.reviewerUserId ?? null,
+        previousConfidence,
+        previousRegionCount,
+        regionsBefore,
+        previousLayoutType,
+      } as any);
+    } else {
+      const attempt = await createHitlRetryAttempt({
+        hitlItemId: hitlId ?? null,
+        pageId,
+        requestedStages: stages,
+        savedCorrectionFields,
+        usedReviewedLayout,
+        usedReviewedRegions,
+        usedReviewedStructure,
+        status: "running",
+        confidence: null,
+        stagesFailed: [],
+        stageErrors: {},
+        modelTrace: {},
+        ocrResultId: retryOcrResultId,
+        createdBy: metadata.reviewerUserId ?? null,
+        previousConfidence,
+        confidenceDelta: null,
+        previousRegionCount,
+        regionsBefore,
+        previousLayoutType,
+      } as any);
+      retryAttemptId = attempt.id;
+    }
   } catch (err: any) {
     console.warn(`[Pipeline] Page ${pageId} retry tracking start failed: ${err?.message ?? String(err)}`);
   }

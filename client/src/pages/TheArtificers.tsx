@@ -18,6 +18,7 @@ import {
   Eye, RefreshCw, AlertCircle, BarChart2, RotateCcw,
 } from "lucide-react";
 import { PipelineVisualization } from "@/components/PipelineVisualization";
+import TheAssignments from "./TheAssignments";
 
 // ─── Provider Presets ─────────────────────────────────────────────────────────
 
@@ -901,11 +902,14 @@ export default function TheArtificers() {
         </DialogContent>
       </Dialog>
 
-      {/* Tabs: Providers list + Pipeline Map */}
+      {/* Tabs: Providers list + Assignments + Pipeline Map */}
       <Tabs defaultValue="providers" className="space-y-4">
-        <TabsList className="grid w-full max-w-sm grid-cols-2">
+        <TabsList className="grid w-full max-w-lg grid-cols-3">
           <TabsTrigger value="providers" className="gap-2">
             <Cpu className="h-4 w-4" /> Artificers
+          </TabsTrigger>
+          <TabsTrigger value="assignments" className="gap-2">
+            <GitBranch className="h-4 w-4" /> Assignments
           </TabsTrigger>
           <TabsTrigger value="pipeline" className="gap-2" onClick={() => refetchTopology()}>
             <GitBranch className="h-4 w-4" /> Pipeline Map
@@ -1186,18 +1190,38 @@ export default function TheArtificers() {
                       {/* Token usage stats */}
                       {(() => {
                         const stats = tokenStats?.find(s => s.provider_id === provider.id);
-                        if (!stats || stats.total_calls === 0) return null;
                         const fmtTokens = (n: number) => n >= 1_000_000 ? `${(n/1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n/1000).toFixed(0)}K` : String(n);
+                        const hasData = stats && stats.total_calls > 0;
                         return (
-                          <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-muted-foreground border-t border-border/30 pt-2 mt-1">
-                            <span className="flex items-center gap-1">
-                              <BarChart2 className="h-3 w-3 text-violet-400" />
-                              <span className="font-medium text-foreground">{stats.total_calls.toLocaleString()}</span> calls
-                            </span>
-                            <span><span className="font-medium text-foreground">{fmtTokens(stats.total_tokens)}</span> tokens</span>
-                            <span><span className={`font-medium ${stats.success_rate >= 90 ? "text-green-400" : stats.success_rate >= 70 ? "text-amber-400" : "text-red-400"}`}>{stats.success_rate.toFixed(0)}%</span> success</span>
-                            <span>avg <span className="font-medium text-foreground">{stats.avg_duration_ms.toLocaleString()}ms</span></span>
-                            {stats.fallback_count > 0 && <span className="text-amber-400">{stats.fallback_count} fallbacks</span>}
+                          <div className="border-t border-border/30 pt-2 mt-1">
+                            {hasData ? (
+                              <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-muted-foreground">
+                                <span className="flex items-center gap-1">
+                                  <BarChart2 className="h-3 w-3 text-violet-400" />
+                                  <span className="font-medium text-foreground">{stats.total_calls.toLocaleString()}</span> calls
+                                </span>
+                                <span><span className="font-medium text-foreground">{fmtTokens(stats.total_tokens)}</span> tokens</span>
+                                <span><span className={`font-medium ${stats.success_rate >= 90 ? "text-green-400" : stats.success_rate >= 70 ? "text-amber-400" : "text-red-400"}`}>{stats.success_rate.toFixed(0)}%</span> success</span>
+                                <span>avg <span className="font-medium text-foreground">{stats.avg_duration_ms.toLocaleString()}ms</span></span>
+                                {stats.fallback_count > 0 && <span className="text-amber-400">{stats.fallback_count} fallbacks</span>}
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-5 px-1.5 text-[10px] text-muted-foreground ml-auto"
+                                  onClick={() => resetProviderMutation.mutate({ providerId: provider.id })}
+                                  disabled={resetProviderMutation.isPending}
+                                  title="Reset stats for this Artificer"
+                                >
+                                  {resetProviderMutation.isPending ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <RotateCcw className="h-2.5 w-2.5" />}
+                                  Reset
+                                </Button>
+                              </div>
+                            ) : (
+                              <p className="text-[11px] text-muted-foreground/50 flex items-center gap-1">
+                                <BarChart2 className="h-3 w-3" />
+                                No usage data recorded yet for this Artificer.
+                              </p>
+                            )}
                           </div>
                         );
                       })()}
@@ -1227,6 +1251,11 @@ export default function TheArtificers() {
               })}
             </div>
           )}
+        </TabsContent>
+
+        {/* ── Assignments Tab ───────────────────────────────────────── */}
+        <TabsContent value="assignments">
+          <TheAssignments />
         </TabsContent>
 
         {/* ── Pipeline Map Tab ──────────────────────────────────────── */}

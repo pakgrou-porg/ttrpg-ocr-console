@@ -611,7 +611,7 @@ interface PipelineVisualizationProps {
   isLoading?: boolean;
 }
 
-export function PipelineVisualization({ topology, isLoading }: PipelineVisualizationProps) {
+function PipelineVisualizationInner({ topology }: { topology: TopologyStage[] }) {
   const { nodes: initialNodes, edges: initialEdges } = useMemo(
     () => buildNodesAndEdges(topology),
     [topology]
@@ -620,19 +620,6 @@ export function PipelineVisualization({ topology, isLoading }: PipelineVisualiza
   const [nodes, , onNodesChange] = useNodesState(initialNodes);
   const [edges, , onEdgesChange] = useEdgesState(initialEdges);
 
-  const onInit = useCallback(() => {}, []);
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-full text-slate-400">
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-          <span className="text-sm">Weaving the pipeline threads…</span>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="w-full h-full" style={{ background: "transparent" }}>
       <ReactFlow
@@ -640,7 +627,6 @@ export function PipelineVisualization({ topology, isLoading }: PipelineVisualiza
         edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
-        onInit={onInit}
         nodeTypes={nodeTypes}
         fitView
         fitViewOptions={{ padding: 0.15 }}
@@ -696,4 +682,22 @@ export function PipelineVisualization({ topology, isLoading }: PipelineVisualiza
       </div>
     </div>
   );
+}
+
+export function PipelineVisualization({ topology, isLoading }: PipelineVisualizationProps) {
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-full text-slate-400">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+          <span className="text-sm">Weaving the pipeline threads…</span>
+        </div>
+      </div>
+    );
+  }
+  // Key derived from topology so ReactFlow remounts (re-initialises node positions) when
+  // inscriptions are assigned or topology refreshes.  Without this, useNodesState keeps
+  // its first-render snapshot and the layout stays stale after data loads.
+  const topologyKey = topology.map(t => `${t.stage}:${t.inscription?.id ?? ""}`).join("|") || "empty";
+  return <PipelineVisualizationInner key={topologyKey} topology={topology} />;
 }

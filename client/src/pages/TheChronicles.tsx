@@ -1818,13 +1818,31 @@ export default function TheChronicles() {
   const [editTarget, setEditTarget] = useState<SummaryRecord | null>(null);
   const [approving, setApproving] = useState<number | null>(null);
   const [collapseLevel, setCollapseLevel] = useState<number | null>(null);
+  const [gameSystemFilter, setGameSystemFilter] = useState("");
+  const [selectedGameSystem, setSelectedGameSystem] = useState<string | null>(null);
 
   const { data: docs = [] } = trpc.library.listDocuments.useQuery(undefined);
+
+  const uniqueGameSystems = useMemo(() => {
+    const seen = new Set<string>();
+    for (const d of docs) {
+      if ((d.totalPages ?? 0) === 0) continue;
+      if (d.gameSystem) seen.add(d.gameSystem);
+    }
+    return Array.from(seen).sort();
+  }, [docs]);
+
+  const filteredGameSystems = useMemo(() => {
+    const q = gameSystemFilter.trim().toLowerCase();
+    if (!q) return uniqueGameSystems;
+    return uniqueGameSystems.filter(s => s.toLowerCase().includes(q));
+  }, [uniqueGameSystems, gameSystemFilter]);
 
   const groupMap = useMemo(() => {
     const map = new Map<string, { label: string; ids: number[] }>();
     for (const d of docs) {
       if ((d.totalPages ?? 0) === 0) continue;
+      if (selectedGameSystem && d.gameSystem !== selectedGameSystem) continue;
       const base = d.title ?? d.filename ?? `Document #${d.id}`;
       const meta = [d.gameSystem, d.edition].filter(Boolean).join(" · ");
       const label = meta ? `${base} [${meta}]` : base;
@@ -1833,7 +1851,7 @@ export default function TheChronicles() {
       else { map.set(label, { label, ids: [d.id] }); }
     }
     return map;
-  }, [docs]);
+  }, [docs, selectedGameSystem]);
 
   const selectedDocIds = selectedLabel ? (groupMap.get(selectedLabel)?.ids ?? []) : [];
 
@@ -1913,12 +1931,65 @@ export default function TheChronicles() {
         )}
       </div>
 
+      {/* Game System primary filter */}
+      {uniqueGameSystems.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <Input
+              placeholder="Filter by game version / system…"
+              value={gameSystemFilter}
+              onChange={e => setGameSystemFilter(e.target.value)}
+              className="max-w-xs h-8 text-sm"
+            />
+            {selectedGameSystem && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 text-xs gap-1 text-muted-foreground"
+                onClick={() => { setSelectedGameSystem(null); setSelectedLabel(null); }}
+              >
+                <RotateCcw className="w-3 h-3" /> Clear filter
+              </Button>
+            )}
+            <span className="text-xs text-muted-foreground ml-auto">
+              {uniqueGameSystems.length} game system{uniqueGameSystems.length !== 1 ? "s" : ""}
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
+            {filteredGameSystems.map(gs => (
+              <button
+                key={gs}
+                onClick={() => {
+                  setSelectedGameSystem(gs === selectedGameSystem ? null : gs);
+                  setSelectedLabel(null);
+                }}
+                className={`px-2.5 py-1 rounded-full text-xs border transition-colors ${
+                  gs === selectedGameSystem
+                    ? "bg-primary/20 border-primary/60 text-primary font-medium"
+                    : "bg-muted/30 border-border/40 text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                }`}
+              >
+                {gs}
+              </button>
+            ))}
+            {filteredGameSystems.length === 0 && gameSystemFilter && (
+              <span className="text-xs text-muted-foreground py-1">No game systems match "{gameSystemFilter}"</span>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Document selector */}
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
             <BookOpen className="w-4 h-4 text-primary" />
             Select a Document
+            {selectedGameSystem && (
+              <span className="text-xs font-normal text-primary bg-primary/10 border border-primary/30 px-2 py-0.5 rounded-full">
+                {selectedGameSystem}
+              </span>
+            )}
             <span className="ml-auto text-xs font-normal text-muted-foreground">
               {groupMap.size} document{groupMap.size !== 1 ? "s" : ""}
             </span>
