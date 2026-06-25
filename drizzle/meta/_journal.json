@@ -148,6 +148,13 @@
       "when": 1781222400000,
       "tag": "0020_page_parts",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1750870800000,
+      "tag": "0021_bbox_quality_metrics",
+      "breakpoints": true
     }
   ]
 }
