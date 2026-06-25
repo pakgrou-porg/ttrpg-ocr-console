@@ -2718,21 +2718,31 @@ function nativeTextSimilarity(
   const tokOcr    = tokenize(ocr);
   if (tokNative.length === 0 || tokOcr.length === 0) return { similarity: 0, sizeRatio: 0 };
 
-  // Set-based F1 on unique vocabulary
-  const uniqNative = Array.from(new Set(tokNative));
-  const setOcr     = new Set(tokOcr);
-  const intersection = uniqNative.filter(t => setOcr.has(t)).length;
-  const precision = intersection / setOcr.size;
-  const recall    = intersection / uniqNative.length;
+  // Multiset (bag-of-words) F1 — each word can be matched at most once per side.
+  // This catches both directions: an incomplete OCR that captured only a fraction of
+  // the native text gets a low recall score even when its extracted words all appear
+  // in the native text, because the unmatched native words penalise recall.
+  const nativeCounts = new Map<string, number>();
+  for (const w of tokNative) nativeCounts.set(w, (nativeCounts.get(w) ?? 0) + 1);
+  const ocrCounts = new Map<string, number>();
+  for (const w of tokOcr) ocrCounts.set(w, (ocrCounts.get(w) ?? 0) + 1);
+
+  let matched = 0;
+  for (const [w, cnt] of ocrCounts) {
+    matched += Math.min(cnt, nativeCounts.get(w) ?? 0);
+  }
+
+  const precision = matched / tokOcr.length;
+  const recall    = matched / tokNative.length;
   const f1 = precision + recall === 0
     ? 0
     : 2 * precision * recall / (precision + recall);
 
-  // Size ratio (raw token counts — not deduplicated)
+  // Size ratio (raw token counts) — penalises when payload sizes diverge significantly
   const sizeRatio = Math.min(tokNative.length, tokOcr.length) /
                     Math.max(tokNative.length, tokOcr.length);
 
-  // Blended score: penalise when payload sizes diverge significantly
+  // Blended score: √(sizeRatio) as a soft length-mismatch penalty
   const similarity = Math.round(f1 * Math.sqrt(sizeRatio) * 100) / 100;
   return { similarity, sizeRatio: Math.round(sizeRatio * 100) / 100 };
 }

@@ -19,7 +19,6 @@ import IncantationsRunes from "@/pages/IncantationsRunes";
 import PersonalSanctum from "@/pages/PersonalSanctum";
 import TheConclave from "@/pages/TheConclave";
 import TheArtificers from "@/pages/TheArtificers";
-import TheAssignments from "@/pages/TheAssignments";
 import TheVaultNexus from "@/pages/TheVaultNexus";
 import TheChronicles from "@/pages/TheChronicles";
 import ArchivistsDesk from "@/pages/ArchivistsDesk";
@@ -92,12 +91,7 @@ function Router() {
             <TheArtificers />
           </AdminGate>
         </Route>
-        <Route path="/inner-sanctum/the-assignments">
-          <AdminGate>
-            <TheAssignments />
-          </AdminGate>
-        </Route>
-        <Route path="/inner-sanctum/vault-nexus">
+<Route path="/inner-sanctum/vault-nexus">
           <AdminGate>
             <TheVaultNexus />
           </AdminGate>

@@ -486,6 +486,10 @@ export default function ArchivistsDesk() {
     onSuccess: () => { toast.success("Token stats reset."); refetchTokenStats(); },
     onError: (err) => toast.error(`Reset failed: ${err.message}`),
   });
+  const resetProviderMutation = trpc.metrics.resetProvider.useMutation({
+    onSuccess: () => { toast.success("Provider stats reset."); refetchTokenStats(); },
+    onError: (err) => toast.error(`Reset failed: ${err.message}`),
+  });
 
   const bboxRescanMutation = trpc.pipeline.enqueueBboxRescan.useMutation({
     onSuccess: (data) => {
@@ -671,66 +675,89 @@ export default function ArchivistsDesk() {
       {/* Artificer Performance — full width */}
       <ArtificerPerformance rows={stageMetrics as StageMetricRow[] | undefined} />
 
-      {/* Token Usage by Provider */}
-      {tokenStats && tokenStats.some(s => s.total_calls > 0) && (
-        <Card className="bg-card/50 backdrop-blur-sm border-border/50">
-          <CardHeader className="pb-2 pt-3 px-4 border-b border-border/50">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-sm flex items-center gap-2">
-                <BarChart2 className="w-4 h-4 text-violet-400" />
-                Token Usage by Artificer
-                <span className="text-xs font-normal text-muted-foreground">
-                  {resetTimeData?.resetAt
-                    ? `since ${new Date(resetTimeData.resetAt).toLocaleDateString()}`
-                    : "(all-time)"}
-                </span>
-              </CardTitle>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 gap-1.5 text-xs"
-                onClick={() => resetMetricsMutation.mutate()}
-                disabled={resetMetricsMutation.isPending}
-              >
-                {resetMetricsMutation.isPending
-                  ? <Loader2 className="h-3 w-3 animate-spin" />
-                  : <RotateCcw className="h-3 w-3" />}
-                Reset All
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="p-4">
-            {/* Column headers */}
-            <div className="grid grid-cols-[minmax(0,1fr)_5rem_5rem_5rem_4rem_4rem] gap-x-3 text-[10px] text-muted-foreground/60 uppercase tracking-wide pb-2 border-b border-border/30 mb-2">
-              <span>Provider</span>
-              <span className="text-right">Calls</span>
-              <span className="text-right">Tokens</span>
-              <span className="text-right">Avg ms</span>
-              <span className="text-right">Success</span>
-              <span className="text-right">Fallbacks</span>
-            </div>
-            <div className="space-y-1.5">
-              {tokenStats.filter(s => s.total_calls > 0).map(s => {
-                const fmtTokens = (n: number) => n >= 1_000_000 ? `${(n/1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n/1000).toFixed(0)}K` : String(n);
-                return (
-                  <div key={s.provider_id ?? s.provider_name} className="grid grid-cols-[minmax(0,1fr)_5rem_5rem_5rem_4rem_4rem] gap-x-3 items-center text-sm">
-                    <span className="truncate text-sm font-medium">{s.provider_name ?? "(unknown)"}</span>
-                    <span className="text-right tabular-nums">{s.total_calls.toLocaleString()}</span>
-                    <span className="text-right tabular-nums">{fmtTokens(s.total_tokens)}</span>
-                    <span className="text-right tabular-nums">{s.avg_duration_ms.toLocaleString()}</span>
-                    <span className={`text-right tabular-nums font-medium ${s.success_rate >= 90 ? "text-green-400" : s.success_rate >= 70 ? "text-amber-400" : "text-red-400"}`}>
-                      {s.success_rate.toFixed(0)}%
-                    </span>
-                    <span className={`text-right tabular-nums ${s.fallback_count > 0 ? "text-amber-400" : "text-muted-foreground"}`}>
-                      {s.fallback_count}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      {/* Token Usage by Provider — always rendered so reset is accessible even with no data */}
+      <Card className="bg-card/50 backdrop-blur-sm border-border/50">
+        <CardHeader className="pb-2 pt-3 px-4 border-b border-border/50">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <BarChart2 className="w-4 h-4 text-violet-400" />
+              Token Usage by Artificer
+              <span className="text-xs font-normal text-muted-foreground">
+                {resetTimeData?.resetAt
+                  ? `since ${new Date(resetTimeData.resetAt).toLocaleDateString()}`
+                  : "(all-time)"}
+              </span>
+            </CardTitle>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1.5 text-xs"
+              onClick={() => resetMetricsMutation.mutate()}
+              disabled={resetMetricsMutation.isPending}
+            >
+              {resetMetricsMutation.isPending
+                ? <Loader2 className="h-3 w-3 animate-spin" />
+                : <RotateCcw className="h-3 w-3" />}
+              Reset All
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="p-4">
+          {(tokenStats ?? []).filter(s => s.total_calls > 0).length === 0 ? (
+            <p className="text-xs text-muted-foreground/60 py-2">
+              No usage data recorded{resetTimeData?.resetAt ? ` since ${new Date(resetTimeData.resetAt).toLocaleDateString()}` : ""}. Data is captured when the pipeline runs LLM stages.
+              {resetTimeData?.resetAt && (
+                <button
+                  className="ml-2 underline text-muted-foreground hover:text-foreground"
+                  onClick={() => resetMetricsMutation.mutate()}
+                >
+                  Clear reset timestamp to see all-time data.
+                </button>
+              )}
+            </p>
+          ) : (
+            <>
+              {/* Column headers */}
+              <div className="grid grid-cols-[minmax(0,1fr)_5rem_5rem_5rem_4rem_4rem_2rem] gap-x-3 text-[10px] text-muted-foreground/60 uppercase tracking-wide pb-2 border-b border-border/30 mb-2">
+                <span>Provider</span>
+                <span className="text-right">Calls</span>
+                <span className="text-right">Tokens</span>
+                <span className="text-right">Avg ms</span>
+                <span className="text-right">Success</span>
+                <span className="text-right">Fallbacks</span>
+                <span />
+              </div>
+              <div className="space-y-1.5">
+                {(tokenStats ?? []).filter(s => s.total_calls > 0).map(s => {
+                  const fmtTokens = (n: number) => n >= 1_000_000 ? `${(n/1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n/1000).toFixed(0)}K` : String(n);
+                  return (
+                    <div key={s.provider_id ?? s.provider_name} className="grid grid-cols-[minmax(0,1fr)_5rem_5rem_5rem_4rem_4rem_2rem] gap-x-3 items-center text-sm">
+                      <span className="truncate text-sm font-medium">{s.provider_name ?? "(unknown)"}</span>
+                      <span className="text-right tabular-nums">{s.total_calls.toLocaleString()}</span>
+                      <span className="text-right tabular-nums">{fmtTokens(s.total_tokens)}</span>
+                      <span className="text-right tabular-nums">{s.avg_duration_ms.toLocaleString()}</span>
+                      <span className={`text-right tabular-nums font-medium ${s.success_rate >= 90 ? "text-green-400" : s.success_rate >= 70 ? "text-amber-400" : "text-red-400"}`}>
+                        {s.success_rate.toFixed(0)}%
+                      </span>
+                      <span className={`text-right tabular-nums ${s.fallback_count > 0 ? "text-amber-400" : "text-muted-foreground"}`}>
+                        {s.fallback_count}
+                      </span>
+                      <button
+                        title="Reset stats for this provider"
+                        className="text-muted-foreground/40 hover:text-muted-foreground"
+                        onClick={() => s.provider_id != null && resetProviderMutation.mutate({ providerId: s.provider_id })}
+                        disabled={s.provider_id == null || resetProviderMutation.isPending}
+                      >
+                        <RotateCcw className="h-3 w-3" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

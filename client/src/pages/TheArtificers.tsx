@@ -918,15 +918,17 @@ export default function TheArtificers() {
 
         {/* ── Artificers (Provider List) Tab ─────────────────────────── */}
         <TabsContent value="providers" className="space-y-4">
-          {/* Token stats reset row */}
-          {(tokenStats?.some(s => s.total_calls > 0)) && (
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
+          {/* Token stats reset row — always visible */}
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
               <span className="flex items-center gap-1.5">
                 <BarChart2 className="h-3.5 w-3.5 text-violet-400" />
                 Token usage
                 {resetTimeData?.resetAt
                   ? <> since {new Date(resetTimeData.resetAt).toLocaleDateString()}</>
                   : <> (all-time)</>}
+                {!tokenStats?.some(s => s.total_calls > 0) && (
+                  <span className="text-muted-foreground/50 ml-1">— no data yet</span>
+                )}
               </span>
               <Button
                 variant="outline"
@@ -938,8 +940,7 @@ export default function TheArtificers() {
                 {resetMetricsMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
                 Reset All
               </Button>
-            </div>
-          )}
+          </div>
           {isLoading ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-8 w-8 animate-spin text-purple-400" />

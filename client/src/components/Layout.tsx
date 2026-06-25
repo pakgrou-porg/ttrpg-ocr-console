@@ -4,7 +4,7 @@ import {
   BookOpen, Settings, Activity, Edit3, Moon, Sun, Search,
   HelpCircle, BarChart2, Database, Terminal, ChevronDown,
   ChevronRight, User, Scroll, Shield, LogOut, UserCircle,
-  Cpu, GitBranch, ClipboardCheck, ClipboardList, ChevronLeft, ScrollText,
+  Cpu, ClipboardCheck, ClipboardList, ChevronLeft, ScrollText,
 } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { Button } from "@/components/ui/button";
@@ -63,7 +63,6 @@ const innerSanctumChildren: NavItem[] = [
   { href: "/inner-sanctum/trials-of-truth", label: "Trials of Truth", icon: ClipboardList, minRole: "reviewer" },
   { href: "/inner-sanctum/incantations-runes", label: "Incantations & Runes", icon: Terminal },
   { href: "/inner-sanctum/the-artificers", label: "The Artificers", icon: Cpu, minRole: "admin" },
-  { href: "/inner-sanctum/the-assignments", label: "The Assignments", icon: GitBranch, minRole: "admin" },
   { href: "/inner-sanctum/vault-nexus", label: "The Vault Nexus", icon: Database, minRole: "admin" },
   { href: "/inner-sanctum/the-chronicles", label: "The Chronicles", icon: ScrollText, minRole: "admin" },
   { href: "/inner-sanctum/the-conclave", label: "The Conclave", icon: Shield, minRole: "admin" },
