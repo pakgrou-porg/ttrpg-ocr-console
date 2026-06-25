@@ -115,6 +115,7 @@
     },
     "overrides": {
       "tailwindcss>nanoid": "3.3.7"
-    }
+    },
+    "onlyBuiltDependencies": ["sharp"]
   }
 }

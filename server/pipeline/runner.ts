@@ -1,6 +1,7 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { readFile, mkdir, readdir } from "fs/promises";
+import sharp from "sharp";
 import { join, basename } from "path";
 import { pipelineConfig } from "./config";
 import type { BinarizeConfig } from "./config";
@@ -832,6 +833,12 @@ const HITL_CONFIDENCE_THRESHOLD = pipelineConfig.pipeline.hitlConfidenceThreshol
 
 /** F1 score below this triggers HITL for pages that have a native PDF text layer. */
 const NATIVE_SIMILARITY_THRESHOLD = 0.75;
+/** Fraction of total bbox area that is overlapping — above this → HITL flag. */
+const BBOX_OVERLAP_THRESHOLD = 0.30;
+/** Fraction of non-whitespace pixels covered by bboxes — below this (on non-blank pages) → HITL flag. */
+const BBOX_COVERAGE_THRESHOLD = 0.40;
+/** Brightness threshold for "whitespace" pixel (0–255 greyscale). */
+const WHITESPACE_BRIGHTNESS = 240;
 
 /** Content-block types that are page furniture, not body content. Suppressed in cleanText/markdown. */
 const NOISE_BLOCK_TYPES = new Set(["page_number"]);
@@ -1546,6 +1553,9 @@ async function _runJob(jobId: number): Promise<number | null> {
     let ocrConfidence = 0;
     let confidenceFromModel: number | null = null; // null = model didn't provide a score
     let nativeSimilarity: number | null = null;
+    let bboxOverlapRatio: number | null = null;
+    let pageWhitespaceRatio: number | null = null;
+    let bboxCoverageRatio: number | null = null;
     let ocrResultId: number | null = null;
     let currentRawText: string | null = null; // set when OCR succeeds; used by content_break_detect
     // Captured for pageJsonOutput assembly at the end of per-page processing
@@ -1617,6 +1627,26 @@ async function _runJob(jobId: number): Promise<number | null> {
       stagesFailed.push("bbox_detection");
       stageErrors["bbox_detection"] = bboxSettled.reason?.message ?? String(bboxSettled.reason);
       console.warn(`[Pipeline] Job ${jobId} p${pageNum} bbox_detection: ${bboxSettled.reason?.message}`);
+    }
+
+    // ── bbox quality metrics ────────────────────────────────────────────────
+    // Computed from bbox geometry alone (overlap) and the page image (whitespace,
+    // coverage). Non-fatal: a failure skips these fields but does not block OCR.
+    if (regions.length > 0) {
+      try {
+        bboxOverlapRatio = computeBboxOverlapRatio(regions);
+        const imgMetrics = await computePageImageMetrics(pagePath, regions);
+        pageWhitespaceRatio = imgMetrics.whitespaceRatio;
+        bboxCoverageRatio   = imgMetrics.bboxCoverageRatio;
+        console.log(
+          `[Pipeline] Job ${jobId} p${pageNum} bbox_metrics: ` +
+          `overlap=${Math.round(bboxOverlapRatio * 100)}% ` +
+          `whitespace=${Math.round(imgMetrics.whitespaceRatio * 100)}% ` +
+          `coverage=${Math.round(imgMetrics.bboxCoverageRatio * 100)}%`,
+        );
+      } catch (err: any) {
+        console.warn(`[Pipeline] Job ${jobId} p${pageNum} bbox_metrics failed (non-fatal): ${err.message}`);
+      }
     }
 
     // Lazily load the original full-colour image when the page contains visual
@@ -1717,6 +1747,9 @@ async function _runJob(jobId: number): Promise<number | null> {
         normalisedText: normaliseText(buildCleanText(data)),
         confidence: ocrConfidence,
         nativeSimilarity,
+        bboxOverlapRatio,
+        pageWhitespaceRatio,
+        bboxCoverageRatio,
         status: "pass1_complete",
         pass1Model: r.model,
         auditLog: [{ timestamp: new Date().toISOString(), action: "pass1", model: r.model }],
@@ -1934,20 +1967,31 @@ async function _runJob(jobId: number): Promise<number | null> {
       }),
     });
 
-    // Queue for HITL review: stage failure, low model confidence (only when the
-    // model actually returned a score), or significant native-text divergence.
-    // Multi-column and mixed layouts: native extraction order is inherently less
-    // reliable even with reading-order mode, so we store the score for display
-    // but don't use it to trigger HITL (too many false positives).
+    // Queue for HITL review.  Priority order of signals:
+    //   1. Stage failures (always → HITL)
+    //   2. Low model confidence — primary quality gate
+    //   3. High bbox overlap — region detection produced overlapping/redundant boxes
+    //   4. Poor bbox coverage — significant page content is outside all bboxes
+    //      (suppressed when page is mostly whitespace: covers/dividers have no regions)
+    //   5. Native-text divergence — informational; retained as a secondary flag but
+    //      no longer the primary trigger (native PDF text can be corrupted by font
+    //      encoding bugs in old typeset documents, making it an unreliable reference)
     const isMultiColumnLayout = ["two_column", "three_column", "mixed"].includes(
       layoutData.layout_type as string,
     ) || (layoutData.columns as number ?? 1) >= 2
       || detectedDocColumns >= 2;
+
+    const lowConfidence   = confidenceFromModel !== null && ocrConfidence < HITL_CONFIDENCE_THRESHOLD;
+    const highBboxOverlap = bboxOverlapRatio !== null && bboxOverlapRatio > BBOX_OVERLAP_THRESHOLD;
+    // Only flag poor coverage when the page has meaningful content (not a blank/cover page)
+    const pageHasContent  = pageWhitespaceRatio === null || pageWhitespaceRatio < 0.85;
+    const poorBboxCoverage = bboxCoverageRatio !== null && pageHasContent && bboxCoverageRatio < BBOX_COVERAGE_THRESHOLD;
+    // Native similarity is kept as informational only — don't trigger HITL on it alone
     const poorNativeAlignment = !isMultiColumnLayout
       && nativeSimilarity !== null
       && nativeSimilarity < NATIVE_SIMILARITY_THRESHOLD;
-    const lowConfidence = confidenceFromModel !== null && ocrConfidence < HITL_CONFIDENCE_THRESHOLD;
-    const needsHitl = stagesFailed.length > 0 || lowConfidence || poorNativeAlignment;
+
+    const needsHitl = stagesFailed.length > 0 || lowConfidence || highBboxOverlap || poorBboxCoverage;
     if (needsHitl) {
       const reasonParts: string[] = [`Page ${pageNum} of ${totalDocPages}`];
       if (stagesFailed.length > 0) {
@@ -1959,6 +2003,8 @@ async function _runJob(jobId: number): Promise<number | null> {
         reasonParts.push(`failed stages: ${failDetail}`);
       }
       if (lowConfidence) reasonParts.push(`low confidence: ${ocrConfidence}%`);
+      if (highBboxOverlap) reasonParts.push(`high bbox overlap: ${Math.round(bboxOverlapRatio! * 100)}%`);
+      if (poorBboxCoverage) reasonParts.push(`poor bbox coverage: ${Math.round(bboxCoverageRatio! * 100)}% of content covered`);
       if (poorNativeAlignment) reasonParts.push(`native text divergence: ${Math.round(nativeSimilarity! * 100)}% similarity`);
       // Detect whether all stage failures are due to provider exhaustion (all
       // configured LLM providers failed/circuit-broke).  These pages produced no
@@ -1969,7 +2015,9 @@ async function _runJob(jobId: number): Promise<number | null> {
         && stagesFailed.every(s => stageErrors[s]?.includes("All configured providers failed"));
       const resolvedCategory = isProviderExhaustion ? "provider_exhausted"
         : stagesFailed.length > 0 ? "stage_failure"
-        : poorNativeAlignment ? "native_text_divergence"
+        : lowConfidence ? "low_confidence"
+        : highBboxOverlap ? "bbox_quality"
+        : poorBboxCoverage ? "bbox_quality"
         : "low_confidence";
 
       const hitlItem = await createHitlItem({
@@ -1979,7 +2027,7 @@ async function _runJob(jobId: number): Promise<number | null> {
         flagCategory: resolvedCategory,
         priority: stagesFailed.includes("ocr_extraction")
           || (confidenceFromModel !== null && ocrConfidence < 50)
-          || (poorNativeAlignment && nativeSimilarity! < 0.5) ? "high" : "medium",
+          || (poorBboxCoverage && bboxCoverageRatio! < 0.2) ? "high" : "medium",
       });
       // Auto-retry pages that had OCR stage failures — covers transient LLM errors
       // (timeouts, malformed JSON) without operator intervention.
@@ -2680,11 +2728,81 @@ function normaliseNativeText(s: string): string {
 }
 
 /**
- * Token-level F1 similarity between native PDF text and OCR output (0–1).
- * Normalises both sides first (healing line-break artifacts), then tokenises
- * on word boundaries, deduplicates each side, and measures precision/recall.
- * Returns 0 when either input produces no tokens.
+ * Fraction (0–1) of total bbox area that overlaps with at least one other bbox.
+ * Computed as: sum of all pairwise intersection areas / sum of individual bbox areas.
+ * Returns 0 when fewer than 2 regions are present or all areas are zero.
  */
+function computeBboxOverlapRatio(regions: Array<{ bbox: { x: number; y: number; w: number; h: number } }>): number {
+  if (regions.length < 2) return 0;
+  let totalArea = 0;
+  let pairwiseIntersection = 0;
+  for (const r of regions) totalArea += r.bbox.w * r.bbox.h;
+  if (totalArea === 0) return 0;
+  for (let i = 0; i < regions.length; i++) {
+    for (let j = i + 1; j < regions.length; j++) {
+      const a = regions[i].bbox, b = regions[j].bbox;
+      const ix = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
+      const iy = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+      pairwiseIntersection += ix * iy;
+    }
+  }
+  return Math.round(Math.min(1, pairwiseIntersection / totalArea) * 1000) / 1000;
+}
+
+/**
+ * Image-based page quality signals computed with sharp.
+ *
+ * - whitespaceRatio: fraction of pixels brighter than WHITESPACE_BRIGHTNESS.
+ *   High → mostly-blank page (cover, chapter divider, etc.).
+ *
+ * - bboxCoverageRatio: fraction of non-whitespace (content) pixels that fall
+ *   inside at least one bbox.  Low → region detection missed significant content.
+ *
+ * The image is downsampled to a fixed 300×400 grid before analysis so the cost
+ * is constant regardless of the source DPI.
+ */
+async function computePageImageMetrics(
+  imagePath: string,
+  regions: Array<{ bbox: { x: number; y: number; w: number; h: number } }>,
+): Promise<{ whitespaceRatio: number; bboxCoverageRatio: number }> {
+  const GRID_W = 300, GRID_H = 400;
+  const { data } = await sharp(imagePath)
+    .greyscale()
+    .resize(GRID_W, GRID_H, { fit: "fill" })
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  // Pre-build a coverage mask: for each grid cell, is it inside any bbox?
+  // Bboxes are in percentage space (0–100); grid cell (px, py) maps to
+  // (px / GRID_W * 100, py / GRID_H * 100).
+  const coverageMask = new Uint8Array(GRID_W * GRID_H); // 0 = not covered
+  for (const r of regions) {
+    const xStart = Math.max(0, Math.floor(r.bbox.x / 100 * GRID_W));
+    const xEnd   = Math.min(GRID_W, Math.ceil((r.bbox.x + r.bbox.w) / 100 * GRID_W));
+    const yStart = Math.max(0, Math.floor(r.bbox.y / 100 * GRID_H));
+    const yEnd   = Math.min(GRID_H, Math.ceil((r.bbox.y + r.bbox.h) / 100 * GRID_H));
+    for (let py = yStart; py < yEnd; py++)
+      for (let px = xStart; px < xEnd; px++)
+        coverageMask[py * GRID_W + px] = 1;
+  }
+
+  let whitespaceCount = 0, contentCount = 0, contentInBbox = 0;
+  for (let idx = 0; idx < GRID_W * GRID_H; idx++) {
+    if (data[idx] > WHITESPACE_BRIGHTNESS) {
+      whitespaceCount++;
+    } else {
+      contentCount++;
+      if (coverageMask[idx]) contentInBbox++;
+    }
+  }
+
+  const total = GRID_W * GRID_H;
+  return {
+    whitespaceRatio:   Math.round((whitespaceCount / total) * 1000) / 1000,
+    bboxCoverageRatio: contentCount > 0 ? Math.round((contentInBbox / contentCount) * 1000) / 1000 : 1,
+  };
+}
+
 /**
  * Compute a blended similarity score between the native PDF text layer and the
  * OCR output for a single page.
@@ -2723,14 +2841,12 @@ function nativeTextSimilarity(
   // the native text gets a low recall score even when its extracted words all appear
   // in the native text, because the unmatched native words penalise recall.
   const nativeCounts = new Map<string, number>();
-  for (const w of tokNative) nativeCounts.set(w, (nativeCounts.get(w) ?? 0) + 1);
+  tokNative.forEach(w => nativeCounts.set(w, (nativeCounts.get(w) ?? 0) + 1));
   const ocrCounts = new Map<string, number>();
-  for (const w of tokOcr) ocrCounts.set(w, (ocrCounts.get(w) ?? 0) + 1);
+  tokOcr.forEach(w => ocrCounts.set(w, (ocrCounts.get(w) ?? 0) + 1));
 
   let matched = 0;
-  for (const [w, cnt] of ocrCounts) {
-    matched += Math.min(cnt, nativeCounts.get(w) ?? 0);
-  }
+  ocrCounts.forEach((cnt, w) => { matched += Math.min(cnt, nativeCounts.get(w) ?? 0); });
 
   const precision = matched / tokOcr.length;
   const recall    = matched / tokNative.length;

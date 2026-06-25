@@ -551,6 +551,15 @@ export const ocrResults = pgTable("ocr_results", {
   /** Token-level F1 similarity (0–1) between OCR rawText and the native PDF text layer.
    *  Null when no embedded text layer was present on this page. */
   nativeSimilarity: real("native_similarity"),
+  /** Fraction (0–1) of total bbox area that overlaps with at least one other bbox.
+   *  Higher values indicate over-lapping or redundant region detection. */
+  bboxOverlapRatio: real("bbox_overlap_ratio"),
+  /** Fraction (0–1) of page pixels that are "whitespace" (brightness > threshold).
+   *  High values indicate mostly-blank pages (covers, chapter dividers, etc.). */
+  pageWhitespaceRatio: real("page_whitespace_ratio"),
+  /** Fraction (0–1) of non-whitespace (content) pixels that fall inside a bbox.
+   *  Low values indicate the region detection missed significant page content. */
+  bboxCoverageRatio: real("bbox_coverage_ratio"),
   structuredData: jsonb("structured_data").$type<Record<string, unknown>>(),
   layoutMetadata: jsonb("layout_metadata").$type<Record<string, unknown>>(),
   confidence: integer("confidence").default(0),
@@ -618,6 +627,7 @@ export const HITL_FLAG_CATEGORIES = [
   "continuity_error",
   "stage_failure",
   "native_text_divergence",
+  "bbox_quality",
   "manual_flag",
   // Infrastructure failure: all configured LLM providers were unreachable or
   // circuit-broken. No OCR output was produced. Retry en masse when providers recover;
