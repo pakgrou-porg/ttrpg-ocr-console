@@ -733,6 +733,16 @@ function RegionsOverview({
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [isBulkFlagging, setIsBulkFlagging] = useState(false);
   const [selectedPageId, setSelectedPageId] = useState<number | null>(null);
+  const [jumpValue, setJumpValue] = useState("");
+
+  const handleJump = (e: React.FormEvent) => {
+    e.preventDefault();
+    const n = parseInt(jumpValue, 10);
+    if (!isNaN(n) && n >= 1) {
+      onOffsetChange(Math.floor((n - 1) / LIMIT) * LIMIT);
+      setJumpValue("");
+    }
+  };
 
   const utils = trpc.useUtils();
 
@@ -896,11 +906,26 @@ function RegionsOverview({
 
       {/* Pagination */}
       {total > LIMIT && (
-        <div className="flex items-center justify-between pt-1">
+        <div className="flex items-center gap-2 flex-wrap pt-1">
           <span className="text-xs text-muted-foreground">
             Showing {offset + 1}–{Math.min(offset + LIMIT, total)} of {total} pages
           </span>
-          <div className="flex gap-2">
+          <form onSubmit={handleJump} className="flex items-center gap-1 ml-auto">
+            <span className="text-xs text-muted-foreground">Go to page</span>
+            <Input
+              type="number"
+              min={1}
+              max={total}
+              value={jumpValue}
+              onChange={e => setJumpValue(e.target.value)}
+              placeholder="#"
+              className="h-7 w-20 text-xs text-center [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+            />
+            <Button type="submit" size="sm" variant="outline" className="h-7 px-2.5 text-xs" disabled={!jumpValue}>
+              Go
+            </Button>
+          </form>
+          <div className="flex gap-1.5">
             <Button size="sm" variant="outline" onClick={() => setOffset(Math.max(0, offset - LIMIT))} disabled={offset === 0} className="h-7 gap-1">
               <ChevronLeft className="w-3.5 h-3.5" />Prev
             </Button>
@@ -1028,7 +1053,17 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
   const [offset, setOffset] = useState(0);
   const [selectedPageId, setSelectedPageId] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<"thumbnails" | "regions">("thumbnails");
+  const [jumpValue, setJumpValue] = useState("");
   const LIMIT = 20;
+
+  const handleJump = (e: React.FormEvent) => {
+    e.preventDefault();
+    const n = parseInt(jumpValue, 10);
+    if (!isNaN(n) && n >= 1) {
+      setOffset(Math.floor((n - 1) / LIMIT) * LIMIT);
+      setJumpValue("");
+    }
+  };
 
   /** Trigger a browser file download from a Blob. Appends/removes a temporary
    *  anchor so the click works in all browsers, and delays URL revocation so
@@ -1185,9 +1220,26 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
 
       {/* Persistent navigation — shown in both Thumbnails and Regions Overview */}
       {total > LIMIT && (
-        <div className="flex items-center justify-between">
-          <span className="text-xs text-muted-foreground">Showing {offset + 1}–{Math.min(offset + LIMIT, total)} of {total} pages</span>
-          <div className="flex gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs text-muted-foreground">
+            Showing {offset + 1}–{Math.min(offset + LIMIT, total)} of {total} pages
+          </span>
+          <form onSubmit={handleJump} className="flex items-center gap-1 ml-auto">
+            <span className="text-xs text-muted-foreground">Go to page</span>
+            <Input
+              type="number"
+              min={1}
+              max={total}
+              value={jumpValue}
+              onChange={e => setJumpValue(e.target.value)}
+              placeholder="#"
+              className="h-7 w-20 text-xs text-center [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+            />
+            <Button type="submit" size="sm" variant="outline" className="h-7 px-2.5 text-xs" disabled={!jumpValue}>
+              Go
+            </Button>
+          </form>
+          <div className="flex gap-1.5">
             <Button size="sm" variant="outline" onClick={() => setOffset(Math.max(0, offset - LIMIT))} disabled={offset === 0} className="h-7 gap-1">
               <ChevronLeft className="w-3.5 h-3.5" />Prev
             </Button>
@@ -1257,9 +1309,26 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
 
           {/* Pagination — bottom */}
           {total > LIMIT && (
-            <div className="flex items-center justify-between pt-1">
-              <span className="text-xs text-muted-foreground">Showing {offset + 1}–{Math.min(offset + LIMIT, total)} of {total} pages</span>
-              <div className="flex gap-2">
+            <div className="flex items-center gap-2 flex-wrap pt-1">
+              <span className="text-xs text-muted-foreground">
+                Showing {offset + 1}–{Math.min(offset + LIMIT, total)} of {total} pages
+              </span>
+              <form onSubmit={handleJump} className="flex items-center gap-1 ml-auto">
+                <span className="text-xs text-muted-foreground">Go to page</span>
+                <Input
+                  type="number"
+                  min={1}
+                  max={total}
+                  value={jumpValue}
+                  onChange={e => setJumpValue(e.target.value)}
+                  placeholder="#"
+                  className="h-7 w-20 text-xs text-center [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                />
+                <Button type="submit" size="sm" variant="outline" className="h-7 px-2.5 text-xs" disabled={!jumpValue}>
+                  Go
+                </Button>
+              </form>
+              <div className="flex gap-1.5">
                 <Button size="sm" variant="outline" onClick={() => setOffset(Math.max(0, offset - LIMIT))} disabled={offset === 0} className="h-7 gap-1">
                   <ChevronLeft className="w-3.5 h-3.5" />Prev
                 </Button>
