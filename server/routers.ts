@@ -1798,7 +1798,7 @@ export const appRouter = router({
         if (pages.length === 0) return { pages: [], total };
         const pageIds = pages.map(p => p.id);
         const [ocrs, latestRetryMap, fallbackPageIds, hitlReasonMap] = await Promise.all([
-          getOcrResultsByPageIds(pageIds),
+          getOcrResultsByPageIds(pageIds).catch(() => [] as Awaited<ReturnType<typeof getOcrResultsByPageIds>>),
           getLatestRetryStatusByPageIds(pageIds),
           getPageIdsWithFallback(pageIds),
           getLatestHitlReasonByPageIds(pageIds),
@@ -1982,7 +1982,7 @@ export const appRouter = router({
         if (pages.length === 0) return { pages: [], total };
         const pageIds = pages.map(p => p.id);
         const [ocrs, latestRetryMap, fallbackPageIds, hitlReasonMap] = await Promise.all([
-          getOcrResultsByPageIds(pageIds),
+          getOcrResultsByPageIds(pageIds).catch(() => [] as Awaited<ReturnType<typeof getOcrResultsByPageIds>>),
           getLatestRetryStatusByPageIds(pageIds),
           getPageIdsWithFallback(pageIds),
           getLatestHitlReasonByPageIds(pageIds),
@@ -2192,7 +2192,7 @@ export const appRouter = router({
         const docs = await getDocumentsByIds(documentIds);
         const docMap = new Map(docs.map(d => [d.id, d]));
 
-        const ocrByPage = await getOcrResultsByPageIds(pageIds);
+        const ocrByPage = await getOcrResultsByPageIds(pageIds).catch(() => [] as Awaited<ReturnType<typeof getOcrResultsByPageIds>>);
         const ocrMap = new Map(ocrByPage.map(r => [r.pageId, r]));
         const retryAttempts = await getHitlRetryAttemptsByPageIds(pageIds);
         const retryMap = new Map<number, typeof retryAttempts>();
@@ -2594,7 +2594,7 @@ export const appRouter = router({
         const docs = await getDocumentsByIds(documentIds);
         const docMap = new Map(docs.map(d => [d.id, d]));
 
-        const ocrByPage = await getOcrResultsByPageIds(pageIds);
+        const ocrByPage = await getOcrResultsByPageIds(pageIds).catch(() => [] as Awaited<ReturnType<typeof getOcrResultsByPageIds>>);
         const ocrMap = new Map(ocrByPage.map(r => [r.pageId, r]));
 
         return items.flatMap(item => {
@@ -2678,7 +2678,7 @@ export const appRouter = router({
         const docs = await getDocumentsByIds([...new Set(pages.map(p => p.documentId))]);
         const docMap = new Map(docs.map(d => [d.id, d]));
         const pageIds = pages.map(p => p.id);
-        const ocrByPage = await getOcrResultsByPageIds(pageIds);
+        const ocrByPage = await getOcrResultsByPageIds(pageIds).catch(() => [] as Awaited<ReturnType<typeof getOcrResultsByPageIds>>);
         const ocrMap = new Map(ocrByPage.map(r => [r.pageId, r]));
         const retryAttempts = await getHitlRetryAttemptsByPageIds(pageIds);
         const retryMap = new Map<number, typeof retryAttempts>();

@@ -855,7 +855,7 @@ function RegionsOverview({
 
   const utils = trpc.useUtils();
 
-  const { data, isLoading } = trpc.library.listPages.useQuery(
+  const { data, isLoading, error } = trpc.library.listPages.useQuery(
     { documentId, offset, limit: LIMIT },
     { enabled: documentId > 0 },
   );
@@ -942,6 +942,14 @@ function RegionsOverview({
     return (
       <div className="flex items-center justify-center py-16 text-muted-foreground gap-2">
         <Loader2 className="w-4 h-4 animate-spin" />Loading pages…
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="py-10 text-center text-destructive/70">
+        <p className="text-sm font-medium">Failed to load pages</p>
+        <p className="text-xs mt-1 opacity-70">{error.message}</p>
       </div>
     );
   }
@@ -1267,7 +1275,7 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
     }
   };
 
-  const { data, isLoading } = trpc.library.listPages.useQuery(
+  const { data, isLoading, error: pagesError } = trpc.library.listPages.useQuery(
     { documentId, offset, limit: LIMIT },
     { enabled: documentId > 0 },
   );
@@ -1364,6 +1372,11 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
       ) : isLoading ? (
         <div className="flex items-center justify-center py-10 text-muted-foreground gap-2">
           <Loader2 className="w-4 h-4 animate-spin" />Loading pages…
+        </div>
+      ) : pagesError ? (
+        <div className="py-10 text-center text-destructive/70">
+          <p className="text-sm font-medium">Failed to load pages</p>
+          <p className="text-xs mt-1 opacity-70">{pagesError.message}</p>
         </div>
       ) : pages.length === 0 ? (
         <div className="py-10 text-center text-muted-foreground">

@@ -1595,7 +1595,7 @@ export default function TrialsOfTruth() {
   // dropdown always shows all docs that have HITL items of any kind.
   const { data: hitlDocs = [] } = trpc.hitl.listDocuments.useQuery(undefined);
 
-  const { data: items, isLoading, refetch } = trpc.hitl.list.useQuery({
+  const { data: items, isLoading, error, refetch } = trpc.hitl.list.useQuery({
     status: statusFilter,
     excludeCategory: categoryGroup === "review" ? "provider_exhausted" : undefined,
     flagCategory:    categoryGroup === "infrastructure" ? "provider_exhausted" : undefined,
@@ -1876,6 +1876,11 @@ export default function TrialsOfTruth() {
       {isLoading ? (
         <div className="flex items-center gap-2 text-muted-foreground">
           <Loader2 className="w-4 h-4 animate-spin" /> Loading…
+        </div>
+      ) : error ? (
+        <div className="py-10 text-center text-destructive/70">
+          <p className="text-sm font-medium">Failed to load queue items</p>
+          <p className="text-xs mt-1 opacity-70">{error.message}</p>
         </div>
       ) : items?.length === 0 ? (
         <div className="text-center py-16 text-muted-foreground">
