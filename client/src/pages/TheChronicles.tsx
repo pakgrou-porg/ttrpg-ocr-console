@@ -286,7 +286,7 @@ function HitlSection({
 // ── Page detail dialog ────────────────────────────────────────────────────────
 
 function PageDetailDialog({ pageId, open, onClose, onNext }: { pageId: number; open: boolean; onClose: () => void; onNext?: () => void }) {
-  const [detailTab, setDetailTab] = useState<"image" | "ocr" | "regions" | "json" | "history">("image");
+  const [detailTab, setDetailTab] = useState<"image" | "layout" | "ocr" | "regions" | "json" | "history">("image");
   const [selectedRegionIdx, setSelectedRegionIdx] = useState<number | null>(null);
   const [showOverlays, setShowOverlays] = useState(true);
   // Incremented after each manual rotation to bust the browser's image cache
@@ -316,6 +316,12 @@ function PageDetailDialog({ pageId, open, onClose, onNext }: { pageId: number; o
   const sd = ocr?.structuredData as any;
   const regions = Array.isArray(data?.contentRegions) ? (data!.contentRegions as any[]) : [];
   const retryAttempts = data?.retryAttempts ?? [];
+  const pageJson = (data as any)?.pageJsonOutput as Record<string, any> | null | undefined;
+  const layoutSection = pageJson?.layout as Record<string, any> | null | undefined;
+  const stagesFailed: string[] = Array.isArray(pageJson?.stages_failed) ? pageJson!.stages_failed : [];
+  const stagesCompleted: string[] = Array.isArray(pageJson?.stages_completed) ? pageJson!.stages_completed : [];
+  const layoutFailed = stagesFailed.includes("layout_analysis");
+  const layoutDone = stagesCompleted.includes("layout_analysis");
 
   // Clicking a region in the list → jump to image tab and highlight it
   const selectRegion = (i: number | null) => {
@@ -378,6 +384,10 @@ function PageDetailDialog({ pageId, open, onClose, onNext }: { pageId: number; o
         <Tabs value={detailTab} onValueChange={v => setDetailTab(v as any)} className="flex-1 overflow-hidden flex flex-col min-h-0">
           <TabsList className="flex-shrink-0 w-full justify-start">
             <TabsTrigger value="image" className="gap-1.5"><Eye className="w-3.5 h-3.5" />Image</TabsTrigger>
+            <TabsTrigger value="layout" className="gap-1.5 relative">
+              <LayoutGrid className="w-3.5 h-3.5" />Layout
+              {layoutFailed && <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-red-500" />}
+            </TabsTrigger>
             <TabsTrigger value="ocr" className="gap-1.5"><AlignLeft className="w-3.5 h-3.5" />OCR Text</TabsTrigger>
             <TabsTrigger value="regions" className="gap-1.5">
               <Grid3x3 className="w-3.5 h-3.5" />Regions ({regions.length})
@@ -469,6 +479,105 @@ function PageDetailDialog({ pageId, open, onClose, onNext }: { pageId: number; o
                   </div>
                 ) : (
                   <p className="text-center text-muted-foreground py-8">No image available.</p>
+                )}
+              </TabsContent>
+
+              {/* ── Layout tab ──────────────────────────────────────────── */}
+              <TabsContent value="layout" className="flex-1 overflow-auto mt-0 pt-3">
+                {layoutFailed ? (
+                  <div className="flex flex-col items-center justify-center py-12 gap-2 text-red-400">
+                    <span className="text-sm font-medium">Layout analysis failed</span>
+                    <span className="text-xs text-muted-foreground">Retry the layout_analysis stage from the HITL section below.</span>
+                  </div>
+                ) : !layoutDone && !layoutSection ? (
+                  <div className="flex flex-col items-center justify-center py-12 gap-2 text-muted-foreground">
+                    <LayoutGrid className="w-8 h-8 opacity-30" />
+                    <span className="text-sm">Layout analysis has not run yet.</span>
+                  </div>
+                ) : (
+                  <div className="space-y-5">
+                    {/* Primary layout type */}
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-muted-foreground uppercase tracking-wide w-24 flex-shrink-0">Type</span>
+                      <span className="font-mono text-sm bg-muted px-2.5 py-1 rounded border border-border/40">
+                        {layoutSection?.layout_type ?? data?.layoutType ?? "—"}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {layoutSection?.columns != null && layoutSection.columns > 1
+                          ? `${layoutSection.columns} columns`
+                          : layoutSection?.columns === 1 ? "single column" : ""}
+                      </span>
+                    </div>
+
+                    {/* Boolean flags grid */}
+                    {layoutSection && (
+                      <div>
+                        <p className="text-xs text-muted-foreground uppercase tracking-wide mb-2">Detected Attributes</p>
+                        <div className="flex flex-wrap gap-2">
+                          {(["has_text", "has_tabular", "has_visual", "has_list", "has_decorative"] as const).map(flag => {
+                            const val = layoutSection[flag];
+                            if (val == null) return null;
+                            return (
+                              <span
+                                key={flag}
+                                className={`text-xs font-mono px-2 py-1 rounded border ${
+                                  val
+                                    ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
+                                    : "bg-muted/30 text-muted-foreground/50 border-border/20 line-through"
+                                }`}
+                              >
+                                {flag.replace("has_", "")}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Content types */}
+                    {Array.isArray(layoutSection?.content_types) && layoutSection!.content_types.length > 0 && (
+                      <div>
+                        <p className="text-xs text-muted-foreground uppercase tracking-wide mb-2">Content Types</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {(layoutSection!.content_types as string[]).map(t => (
+                            <span key={t} className={`text-[11px] font-mono px-2 py-0.5 rounded ${regionPillClass(t)}`}>{t}</span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Heading levels */}
+                    {Array.isArray(layoutSection?.heading_levels) && layoutSection!.heading_levels.length > 0 && (
+                      <div>
+                        <p className="text-xs text-muted-foreground uppercase tracking-wide mb-2">Heading Levels</p>
+                        <div className="flex gap-1.5">
+                          {(layoutSection!.heading_levels as number[]).map(l => (
+                            <span key={l} className="text-xs font-mono px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">H{l}</span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Stage status */}
+                    <div>
+                      <p className="text-xs text-muted-foreground uppercase tracking-wide mb-2">Stage Status</p>
+                      <div className="flex flex-wrap gap-2">
+                        {["layout_analysis", "bbox_detection", "ocr_extraction"].map(stage => {
+                          const done = stagesCompleted.includes(stage);
+                          const failed = stagesFailed.includes(stage);
+                          return (
+                            <span key={stage} className={`text-[11px] font-mono px-2 py-1 rounded border ${
+                              failed ? "bg-red-500/15 text-red-300 border-red-500/30"
+                              : done ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
+                              : "bg-muted/30 text-muted-foreground/50 border-border/20"
+                            }`}>
+                              {failed ? "✕" : done ? "✓" : "–"} {stage.replace(/_/g, " ")}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
                 )}
               </TabsContent>
 
