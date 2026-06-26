@@ -3128,6 +3128,16 @@ export const appRouter = router({
         return { success: true, resetAt: new Date().toISOString() };
       }),
 
+    /** Remove all metrics reset timestamps so provider stats show all-time data again. */
+    clearReset: adminProcedure.mutation(async ({ ctx }) => {
+      const config = await getAllSystemConfig();
+      const resetKeys = config
+        .map(c => c.key)
+        .filter(k => k === "metrics_reset_at" || k.startsWith("metrics_reset_at_provider_"));
+      await Promise.all(resetKeys.map(k => deleteSystemConfig(k)));
+      return { success: true };
+    }),
+
     /** Return the stored reset timestamp (null if never reset). */
     resetTime: protectedProcedure.query(async () => {
       const config = await getAllSystemConfig();

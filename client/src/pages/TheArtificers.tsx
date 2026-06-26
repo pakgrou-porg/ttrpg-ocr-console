@@ -673,6 +673,10 @@ export default function TheArtificers() {
     onSuccess: () => { toast.success("Token stats reset for all Artificers."); refetchTokenStats(); },
     onError: (e) => toast.error(e.message),
   });
+  const clearResetMutation = trpc.metrics.clearReset.useMutation({
+    onSuccess: () => { toast.success("Reset timestamp cleared — showing all-time data."); refetchTokenStats(); },
+    onError: (e) => toast.error(e.message),
+  });
   const resetProviderMutation = trpc.metrics.resetProvider.useMutation({
     onSuccess: (_data, vars) => {
       const name = providers?.find(p => p.id === vars.providerId)?.displayName

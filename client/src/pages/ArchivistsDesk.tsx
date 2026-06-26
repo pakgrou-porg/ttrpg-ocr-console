@@ -480,11 +480,15 @@ export default function ArchivistsDesk() {
   const { data: jStats }        = trpc.jobs.stats.useQuery(undefined, { refetchInterval: 15000 });
   const { data: stageMetrics }  = trpc.pipeline.stageMetrics.useQuery(undefined, { refetchInterval: 30000 });
   const { data: categoryStats, refetch: refetchCategoryStats } = trpc.hitl.categoryStats.useQuery(undefined, { refetchInterval: 30000 });
-  const { data: tokenStats, refetch: refetchTokenStats } = trpc.metrics.providerStatsSinceReset.useQuery(undefined, { refetchInterval: 60000 });
+  const { data: tokenStats, error: tokenStatsError, refetch: refetchTokenStats } = trpc.metrics.providerStatsSinceReset.useQuery(undefined, { refetchInterval: 60000 });
   const { data: resetTimeData } = trpc.metrics.resetTime.useQuery();
   const resetMetricsMutation = trpc.metrics.reset.useMutation({
     onSuccess: () => { toast.success("Token stats reset."); refetchTokenStats(); },
     onError: (err) => toast.error(`Reset failed: ${err.message}`),
+  });
+  const clearResetMutation = trpc.metrics.clearReset.useMutation({
+    onSuccess: () => { toast.success("Reset timestamp cleared — showing all-time data."); refetchTokenStats(); },
+    onError: (err) => toast.error(`Clear failed: ${err.message}`),
   });
   const resetProviderMutation = trpc.metrics.resetProvider.useMutation({
     onSuccess: () => { toast.success("Provider stats reset."); refetchTokenStats(); },
@@ -703,13 +707,17 @@ export default function ArchivistsDesk() {
           </div>
         </CardHeader>
         <CardContent className="p-4">
-          {(tokenStats ?? []).filter(s => s.total_calls > 0).length === 0 ? (
+          {tokenStatsError ? (
+            <p className="text-xs text-destructive/70 py-2">
+              Failed to load token stats: {tokenStatsError.message}
+            </p>
+          ) : (tokenStats ?? []).filter(s => s.total_calls > 0).length === 0 ? (
             <p className="text-xs text-muted-foreground/60 py-2">
               No usage data recorded{resetTimeData?.resetAt ? ` since ${new Date(resetTimeData.resetAt).toLocaleDateString()}` : ""}. Data is captured when the pipeline runs LLM stages.
               {resetTimeData?.resetAt && (
                 <button
                   className="ml-2 underline text-muted-foreground hover:text-foreground"
-                  onClick={() => resetMetricsMutation.mutate()}
+                  onClick={() => clearResetMutation.mutate()}
                 >
                   Clear reset timestamp to see all-time data.
                 </button>
