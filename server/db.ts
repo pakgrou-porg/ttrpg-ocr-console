@@ -2464,7 +2464,12 @@ export async function exportDocumentBundle(
 export async function importDocumentBundle(
   documentId: number,
   bundle: DocumentBundle,
-  options?: { overwriteImages?: boolean },
+  options?: {
+    overwriteImages?: boolean;
+    /** "replace" (default): delete and re-insert OCR + summaries from bundle.
+     *  "fill": skip pages that already have OCR; skip summaries if any exist. */
+    mode?: "replace" | "fill";
+  },
 ): Promise<{ pagesUpdated: number; pagesCreated: number; ocrUpserted: number; summariesCreated: number }> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -2474,6 +2479,7 @@ export async function importDocumentBundle(
   }
 
   const overwriteImages = options?.overwriteImages ?? false;
+  const fillMode = (options?.mode ?? "replace") === "fill";
   const docDir = path.join(BUNDLE_WORKSPACE, `doc-${documentId}`, "pages");
 
   // Load existing pages so we can match by (pageNumber, partIndex)
@@ -2544,8 +2550,11 @@ export async function importDocumentBundle(
     }).where(eq(documentPages.id, existing.id));
     pagesUpdated++;
 
-    // ── Replace OCR result ──────────────────────────────────────────────────
-    if (bp.ocr) {
+    // ── Replace OCR result (skip in fill mode if one already exists) ────────
+    const existingOcr = fillMode
+      ? (await db.select({ id: ocrResults.id }).from(ocrResults).where(eq(ocrResults.pageId, existing.id)).limit(1))[0]
+      : null;
+    if (bp.ocr && !existingOcr) {
       await db.delete(ocrResults).where(eq(ocrResults.pageId, existing.id));
       await db.insert(ocrResults).values({
         pageId:                  existing.id,
@@ -2566,7 +2575,13 @@ export async function importDocumentBundle(
     }
   }
 
-  // ── Replace content summaries ─────────────────────────────────────────────
+  // ── Replace content summaries (skip entirely in fill mode if any exist) ──
+  const existingSummaryCount = fillMode
+    ? (await db.select({ id: contentSummaries.id }).from(contentSummaries).where(eq(contentSummaries.documentId, documentId)).limit(1)).length
+    : 0;
+  if (existingSummaryCount > 0) {
+    return { pagesUpdated, pagesCreated, ocrUpserted, summariesCreated: 0 };
+  }
   await db.delete(contentSummaries).where(eq(contentSummaries.documentId, documentId));
 
   // Build a pageNumber → primary page id map (partIndex 0 preferred for FK)

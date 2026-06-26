@@ -12,7 +12,7 @@ import { uploadRouter } from "../uploadRoutes";
 import { uploadIngestRouter } from "../uploadIngestRoute";
 import { sdk } from "./sdk";
 import { recoverQueuedJobs } from "../pipeline/runner";
-import { exportDocumentBundle, getPagesByDocumentId } from "../db";
+import { exportDocumentBundle, getPagesByDocumentId, getOcrResultsByPageIds } from "../db";
 import { readFile } from "fs/promises";
 
 function isPortAvailable(port: number): Promise<boolean> {
@@ -37,8 +37,9 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 async function startServer() {
   const app = express();
   const server = createServer(app);
-  // P1: Global body limit is 1 MB for JSON/urlencoded requests.
-  // File uploads use the /api/upload/* routes which have their own multer limits.
+  // tRPC path gets a large body limit to support bundle imports (can be tens of MB).
+  // All other routes keep the default 1 MB guard.
+  app.use("/api/trpc", express.json({ limit: "128mb" }));
   app.use(express.json({ limit: "1mb" }));
   app.use(express.urlencoded({ limit: "1mb", extended: true }));
   // Direct Google login (/api/auth/login, /api/auth/login/callback)
@@ -130,6 +131,93 @@ async function startServer() {
         res.status(500).json({ error: err?.message ?? "Export failed." });
       } else {
         res.end(); // headers already sent — just close the connection
+      }
+    }
+  });
+
+  // Unsloth JSONL download — streams one record per page to avoid OOM on large documents.
+  // Each record may embed a base64 page image; loading them concurrently would spike RAM.
+  app.get("/api/download/unsloth/:documentId", async (req, res) => {
+    try {
+      await sdk.authenticateRequest(req as any);
+    } catch {
+      res.status(401).json({ error: "Unauthorized." });
+      return;
+    }
+    const documentId = parseInt(req.params.documentId, 10);
+    if (!documentId || isNaN(documentId)) {
+      res.status(400).json({ error: "Invalid documentId." });
+      return;
+    }
+    try {
+      const pages = await getPagesByDocumentId(documentId);
+      if (pages.length === 0) { res.status(404).json({ error: "No pages found." }); return; }
+
+      const pageIds = pages.map(p => p.id);
+      const ocrs = await getOcrResultsByPageIds(pageIds).catch(() => []);
+      const ocrMap = new Map(ocrs.map(r => [r.pageId, r]));
+
+      // Pre-check: is there anything to export?
+      const hasData = pages.some(p => {
+        const ocr = ocrMap.get(p.id);
+        const regions = Array.isArray(p.contentRegions) ? p.contentRegions as any[] : [];
+        return (ocr?.rawText) || regions.length > 0;
+      });
+      if (!hasData) { res.status(204).end(); return; }
+
+      res.setHeader("Content-Type", "application/jsonl");
+      res.setHeader("Content-Disposition", `attachment; filename="document-${documentId}-unsloth.jsonl"`);
+
+      const writeChunk = (chunk: string): Promise<void> =>
+        new Promise(resolve => { if (!res.write(chunk)) res.once("drain", resolve); else resolve(); });
+
+      for (const page of pages) {
+        const ocr = ocrMap.get(page.id);
+        const regions = Array.isArray(page.contentRegions) ? (page.contentRegions as any[]) : [];
+        if (!ocr && regions.length === 0) continue;
+
+        let assistantContent = "";
+        if (regions.length > 0) {
+          for (const r of regions) {
+            const { x = 0, y = 0, w = 0, h = 0 } = r.bbox ?? {};
+            const regionType = (r.type ?? r.regionType ?? "unknown").toLowerCase();
+            const text = (r.text ?? r.content ?? "").trim();
+            assistantContent += `<extra_id_0>${regionType}<extra_id_1>${Math.round(x * 10)} ${Math.round(y * 10)} ${Math.round((x + w) * 10)} ${Math.round((y + h) * 10)}<extra_id_2>${text}<extra_id_3>`;
+          }
+        } else if (ocr?.rawText) {
+          assistantContent = `<extra_id_0>page<extra_id_1>0 0 1000 1000<extra_id_2>${ocr.rawText.trim()}<extra_id_3>`;
+        }
+        if (!assistantContent) continue;
+
+        let imageEntry: { type: string; image: string } | null = null;
+        if (page.rawPngUrl) {
+          try {
+            const bytes = await readFile(page.rawPngUrl);
+            imageEntry = { type: "image", image: `data:image/png;base64,${bytes.toString("base64")}` };
+          } catch { /* file missing */ }
+        }
+
+        const record = {
+          messages: [
+            {
+              role: "user",
+              content: [
+                ...(imageEntry ? [imageEntry] : []),
+                { type: "text", text: "Identify and extract all text regions from this document page. For each region, output its semantic type, bounding box, and text content." },
+              ],
+            },
+            { role: "assistant", content: assistantContent },
+          ],
+          metadata: { documentId, pageId: page.id, pageNumber: page.pageNumber, layoutType: page.layoutType ?? null, confidence: page.ocrConfidence ?? null },
+        };
+        await writeChunk(JSON.stringify(record) + "\n");
+      }
+      res.end();
+    } catch (err: any) {
+      if (!res.headersSent) {
+        res.status(500).json({ error: err?.message ?? "Export failed." });
+      } else {
+        res.end();
       }
     }
   });

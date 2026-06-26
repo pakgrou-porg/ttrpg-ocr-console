@@ -2145,6 +2145,7 @@ export const appRouter = router({
       .input(z.object({
         documentId:      z.number().int(),
         overwriteImages: z.boolean().default(false),
+        mode:            z.enum(["replace", "fill"]).default("replace"),
         bundle:          z.any(),
       }))
       .mutation(async ({ ctx, input }) => {
@@ -2152,7 +2153,7 @@ export const appRouter = router({
         return importDocumentBundle(
           input.documentId,
           input.bundle as DocumentBundle,
-          { overwriteImages: input.overwriteImages },
+          { overwriteImages: input.overwriteImages, mode: input.mode },
         );
       }),
   }),

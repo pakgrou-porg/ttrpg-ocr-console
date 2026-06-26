@@ -1197,17 +1197,23 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
     setTimeout(() => URL.revokeObjectURL(url), 2000);
   };
 
-  const exportMutation = trpc.library.exportUnsloth.useMutation({
-    onSuccess: (data) => {
-      if (!data.jsonl) { toast.error("No exportable data found."); return; }
-      triggerDownload(
-        new Blob([data.jsonl], { type: "application/jsonl" }),
-        `document-${documentId}-unsloth.jsonl`,
-      );
-      toast.success(`Exported ${data.lineCount} training examples.`);
-    },
-    onError: (err) => toast.error(err.message),
-  });
+  const [isExportingJsonl, setIsExportingJsonl] = useState(false);
+
+  const handleExportJsonl = async () => {
+    if (!documentId) return;
+    setIsExportingJsonl(true);
+    try {
+      const resp = await fetch(`/api/download/unsloth/${documentId}`);
+      if (resp.status === 204) { toast.error("No exportable data found."); return; }
+      if (!resp.ok) { const e = await resp.json().catch(() => ({})) as any; toast.error(e?.error ?? "JSONL export failed."); return; }
+      triggerDownload(await resp.blob(), `document-${documentId}-unsloth.jsonl`);
+      toast.success("Unsloth JSONL exported.");
+    } catch (e: any) {
+      toast.error(e?.message ?? "JSONL export failed.");
+    } finally {
+      setIsExportingJsonl(false);
+    }
+  };
 
   // ── Bundle export state ──────────────────────────────────────────────────────
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
@@ -1239,6 +1245,7 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importOverwriteImages, setImportOverwriteImages] = useState(false);
   const [importBundleHasImages, setImportBundleHasImages] = useState(false);
+  const [importMode, setImportMode] = useState<"replace" | "fill">("replace");
   const importFileRef = useRef<HTMLInputElement>(null);
 
   const importBundleMutation = trpc.library.importBundle.useMutation({
@@ -1255,6 +1262,7 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
       setImportFile(null);
       setImportBundleHasImages(false);
       setImportOverwriteImages(false);
+      setImportMode("replace");
     },
     onError: (err) => toast.error(err.message),
   });
@@ -1275,7 +1283,7 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
     try {
       const text = await importFile.text();
       const bundle = JSON.parse(text);
-      importBundleMutation.mutate({ documentId, overwriteImages: importOverwriteImages, bundle });
+      importBundleMutation.mutate({ documentId, overwriteImages: importOverwriteImages, mode: importMode, bundle });
     } catch {
       toast.error("Invalid bundle file — could not parse JSON.");
     }
@@ -1306,8 +1314,8 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
 
         {/* Export / Import buttons */}
         <Button size="sm" variant="outline" className="gap-1.5 text-xs"
-          onClick={() => exportMutation.mutate({ documentId })} disabled={exportMutation.isPending || documentId === 0}>
-          {exportMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
+          onClick={handleExportJsonl} disabled={isExportingJsonl || documentId === 0}>
+          {isExportingJsonl ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
           Export Unsloth JSONL
         </Button>
         <Button size="sm" variant="outline" className="gap-1.5 text-xs"
@@ -1586,32 +1594,36 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
               />
             </div>
 
+            {/* Import mode */}
+            <div className="space-y-1.5">
+              <Label className="text-xs">Import Mode</Label>
+              <div className="grid grid-cols-2 gap-2">
+                {(["replace", "fill"] as const).map(m => (
+                  <button key={m} onClick={() => setImportMode(m)}
+                    className={`flex flex-col items-start gap-0.5 rounded-md border px-3 py-2 text-left text-xs transition-colors ${importMode === m ? "border-violet-500/60 bg-violet-500/10 text-foreground" : "border-border/50 text-muted-foreground hover:bg-muted/30"}`}>
+                    <span className="font-medium text-sm">{m === "replace" ? "Replace all" : "Fill missing"}</span>
+                    <span className="opacity-70">{m === "replace" ? "Overwrite all existing OCR and summaries" : "Only add data where nothing exists yet"}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
             {/* Overwrite images toggle — only shown when bundle contains images */}
             {importBundleHasImages && (
-              <div className="flex items-start gap-3 rounded-md border border-border/50 px-4 py-3">
-                <input
-                  id="import-overwrite-images"
-                  type="checkbox"
-                  checked={importOverwriteImages}
+              <div className="flex items-start gap-3 rounded-md border border-border/50 px-3 py-2.5">
+                <input id="import-overwrite-images" type="checkbox" checked={importOverwriteImages}
                   onChange={(e) => setImportOverwriteImages(e.target.checked)}
-                  className="mt-0.5 h-4 w-4 cursor-pointer accent-violet-500"
-                />
-                <div className="flex flex-col gap-0.5">
-                  <label htmlFor="import-overwrite-images" className="text-sm font-medium cursor-pointer select-none">
-                    Overwrite existing page images
-                  </label>
-                  <p className="text-xs text-muted-foreground">
-                    The bundle contains embedded page images. If a page already has an image in
-                    the workspace, overwrite it with the bundle version. Leave unchecked to only
-                    write images for pages that don't yet exist locally.
-                  </p>
+                  className="mt-0.5 h-4 w-4 cursor-pointer accent-violet-500" />
+                <div>
+                  <label htmlFor="import-overwrite-images" className="text-sm font-medium cursor-pointer select-none">Overwrite existing page images</label>
+                  <p className="text-xs text-muted-foreground mt-0.5">Bundle contains embedded images — overwrite workspace copies if they exist.</p>
                 </div>
               </div>
             )}
 
-            {importFile && (
+            {importFile && importMode === "replace" && (
               <div className="rounded-md bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-xs text-amber-300">
-                This will overwrite all OCR results and content summaries for document #{documentId}.
+                This will delete and replace all OCR results and summaries for document #{documentId}.
                 {importBundleHasImages && " Page images from the bundle will be written to the workspace."}
               </div>
             )}
@@ -1620,7 +1632,7 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="outline" size="sm" onClick={() => {
               setImportDialogOpen(false); setImportFile(null);
-              setImportBundleHasImages(false); setImportOverwriteImages(false);
+              setImportBundleHasImages(false); setImportOverwriteImages(false); setImportMode("replace");
             }}>
               Cancel
             </Button>
@@ -2022,12 +2034,17 @@ export default function TheChronicles() {
   const [mainExportDialogOpen, setMainExportDialogOpen] = useState(false);
   const [mainExportIncludeImages, setMainExportIncludeImages] = useState(false);
   const [mainIsExportingBundle, setMainIsExportingBundle] = useState(false);
+  const [mainIsExportingJsonl, setMainIsExportingJsonl] = useState(false);
   const [mainImportDialogOpen, setMainImportDialogOpen] = useState(false);
   const [mainImportFile, setMainImportFile] = useState<File | null>(null);
   const [mainImportOverwriteImages, setMainImportOverwriteImages] = useState(false);
   const [mainImportBundleHasImages, setMainImportBundleHasImages] = useState(false);
   const [mainImportGameSystem, setMainImportGameSystem] = useState("");
   const [mainImportEdition, setMainImportEdition] = useState("");
+  const [mainImportTitle, setMainImportTitle] = useState("");
+  const [mainImportPublisher, setMainImportPublisher] = useState("");
+  const [mainImportTargetMode, setMainImportTargetMode] = useState<"new" | "existing">("new");
+  const [mainImportMode, setMainImportMode] = useState<"replace" | "fill">("replace");
   const mainImportFileRef = useRef<HTMLInputElement>(null);
 
   const { data: docs = [] } = trpc.library.listDocuments.useQuery(undefined);
@@ -2094,19 +2111,30 @@ export default function TheChronicles() {
 
   // ── Main-page export/import mutations & handlers ──────────────────────────────
 
-  const mainExportUnslothMutation = trpc.library.exportUnsloth.useMutation({
-    onSuccess: (data) => {
-      const docId = selectedDocIds[0] ?? 0;
-      if (!data.jsonl) { toast.error("No exportable data found."); return; }
-      const url = URL.createObjectURL(new Blob([data.jsonl], { type: "application/jsonl" }));
-      const a = document.createElement("a");
-      a.href = url; a.download = `document-${docId}-unsloth.jsonl`; a.style.display = "none";
-      document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 2000);
-      toast.success(`Exported ${data.lineCount} training examples.`);
-    },
-    onError: (err) => toast.error(err.message),
-  });
+  const triggerBlobDownload = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = filename; a.style.display = "none";
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  };
+
+  const handleMainExportJsonl = async () => {
+    const docId = selectedDocIds[0];
+    if (!docId) return;
+    setMainIsExportingJsonl(true);
+    try {
+      const resp = await fetch(`/api/download/unsloth/${docId}`);
+      if (resp.status === 204) { toast.error("No exportable data found for this document."); return; }
+      if (!resp.ok) { const e = await resp.json().catch(() => ({})) as any; toast.error(e?.error ?? "JSONL export failed."); return; }
+      triggerBlobDownload(await resp.blob(), `document-${docId}-unsloth.jsonl`);
+      toast.success("Unsloth JSONL exported.");
+    } catch (e: any) {
+      toast.error(e?.message ?? "JSONL export failed.");
+    } finally {
+      setMainIsExportingJsonl(false);
+    }
+  };
 
   const handleMainExportBundle = async () => {
     const docId = selectedDocIds[0];
@@ -2115,18 +2143,8 @@ export default function TheChronicles() {
     setMainExportDialogOpen(false);
     try {
       const resp = await fetch(`/api/download/bundle/${docId}?images=${mainExportIncludeImages}`);
-      if (!resp.ok) {
-        const errData = await resp.json().catch(() => ({})) as any;
-        toast.error(errData?.error ?? "Bundle export failed.");
-        return;
-      }
-      const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url; a.download = `document-${docId}-bundle${mainExportIncludeImages ? "-with-images" : ""}.json`;
-      a.style.display = "none";
-      document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      if (!resp.ok) { const e = await resp.json().catch(() => ({})) as any; toast.error(e?.error ?? "Bundle export failed."); return; }
+      triggerBlobDownload(await resp.blob(), `document-${docId}-bundle${mainExportIncludeImages ? "-with-images" : ""}.json`);
       toast.success("Bundle exported.");
     } catch (e: any) {
       toast.error(e?.message ?? "Bundle export failed.");
@@ -2135,8 +2153,10 @@ export default function TheChronicles() {
     }
   };
 
+  const mainCreateDocumentMutation = trpc.library.createDocument.useMutation();
+
   const mainImportBundleMutation = trpc.library.importBundle.useMutation({
-    onSuccess: async (result) => {
+    onSuccess: (result) => {
       const r = result as any;
       const parts = [
         `${r.pagesUpdated} pages updated`,
@@ -2144,30 +2164,25 @@ export default function TheChronicles() {
         `${r.ocrUpserted} OCR records`,
         `${r.summariesCreated} summaries`,
       ].filter(Boolean).join(", ");
-      // Apply game version if provided
-      const docId = selectedDocIds[0];
-      if (docId && (mainImportGameSystem.trim() || mainImportEdition.trim())) {
-        await mainUpdateDocumentMutation.mutateAsync({
-          id: docId,
-          gameSystem: mainImportGameSystem.trim() || undefined,
-          edition: mainImportEdition.trim() || undefined,
-        });
-      }
       toast.success(`Bundle imported — ${parts}.`);
-      setMainImportDialogOpen(false);
-      setMainImportFile(null);
-      setMainImportBundleHasImages(false);
-      setMainImportOverwriteImages(false);
-      setMainImportGameSystem("");
-      setMainImportEdition("");
+      resetImportDialog();
       utils.library.listDocuments.invalidate();
+      utils.summaries.listByDocumentIds.invalidate();
     },
     onError: (err) => toast.error(err.message),
   });
 
-  const mainUpdateDocumentMutation = trpc.library.updateDocument.useMutation({
-    onError: (err) => toast.error(`Game version update failed: ${err.message}`),
-  });
+  const resetImportDialog = () => {
+    setMainImportDialogOpen(false);
+    setMainImportFile(null);
+    setMainImportBundleHasImages(false);
+    setMainImportOverwriteImages(false);
+    setMainImportGameSystem("");
+    setMainImportEdition("");
+    setMainImportTitle("");
+    setMainImportPublisher("");
+    setMainImportMode("replace");
+  };
 
   const handleMainImportFileChange = async (file: File | null) => {
     setMainImportFile(file);
@@ -2180,12 +2195,34 @@ export default function TheChronicles() {
   };
 
   const handleMainImportBundle = async () => {
-    const docId = selectedDocIds[0];
-    if (!mainImportFile || !docId) return;
+    if (!mainImportFile) return;
     try {
       const text = await mainImportFile.text();
       const bundle = JSON.parse(text);
-      mainImportBundleMutation.mutate({ documentId: docId, bundle, overwriteImages: mainImportOverwriteImages });
+
+      let docId: number;
+      if (mainImportTargetMode === "new") {
+        const name = mainImportTitle.trim() || bundle.document?.filename || bundle.document?.title || "Imported Bundle";
+        const newDoc = await mainCreateDocumentMutation.mutateAsync({
+          filename: name,
+          title: mainImportTitle.trim() || bundle.document?.title || undefined,
+          gameSystem: mainImportGameSystem.trim() || bundle.document?.gameSystem || undefined,
+          edition: mainImportEdition.trim() || bundle.document?.edition || undefined,
+          publisher: mainImportPublisher.trim() || bundle.document?.publisher || undefined,
+          totalPages: bundle.pages?.length ?? 0,
+        });
+        docId = newDoc.id;
+      } else {
+        docId = selectedDocIds[0];
+        if (!docId) { toast.error("No document selected."); return; }
+      }
+
+      mainImportBundleMutation.mutate({
+        documentId: docId,
+        bundle,
+        overwriteImages: mainImportOverwriteImages,
+        mode: mainImportTargetMode === "new" ? "replace" : mainImportMode,
+      });
     } catch {
       toast.error("Failed to parse bundle file. Make sure it is a valid JSON bundle.");
     }
@@ -2290,18 +2327,25 @@ export default function TheChronicles() {
       {/* Document selector */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            <BookOpen className="w-4 h-4 text-primary" />
-            Select a Document
-            {selectedGameSystem && (
-              <span className="text-xs font-normal text-primary bg-primary/10 border border-primary/30 px-2 py-0.5 rounded-full">
-                {selectedGameSystem}
+          <div className="flex items-center justify-between gap-2">
+            <CardTitle className="text-base flex items-center gap-2">
+              <BookOpen className="w-4 h-4 text-primary" />
+              Select a Document
+              {selectedGameSystem && (
+                <span className="text-xs font-normal text-primary bg-primary/10 border border-primary/30 px-2 py-0.5 rounded-full">
+                  {selectedGameSystem}
+                </span>
+              )}
+              <span className="text-xs font-normal text-muted-foreground">
+                {groupMap.size} document{groupMap.size !== 1 ? "s" : ""}
               </span>
-            )}
-            <span className="ml-auto text-xs font-normal text-muted-foreground">
-              {groupMap.size} document{groupMap.size !== 1 ? "s" : ""}
-            </span>
-          </CardTitle>
+            </CardTitle>
+            <Button size="sm" variant="outline" className="gap-1.5 text-xs flex-shrink-0"
+              onClick={() => { setMainImportTargetMode(selectedDocIds.length > 0 ? "existing" : "new"); setMainImportDialogOpen(true); }}>
+              <Upload className="w-3.5 h-3.5" />
+              Import Bundle
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           <Popover open={selectorOpen} onOpenChange={setSelectorOpen}>
@@ -2383,9 +2427,9 @@ export default function TheChronicles() {
             {selectedDocIds.length > 0 && (
               <div className="flex items-center gap-1.5">
                 <Button size="sm" variant="outline" className="gap-1.5 text-xs"
-                  onClick={() => mainExportUnslothMutation.mutate({ documentId: selectedDocIds[0] })}
-                  disabled={mainExportUnslothMutation.isPending}>
-                  {mainExportUnslothMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
+                  onClick={handleMainExportJsonl}
+                  disabled={mainIsExportingJsonl}>
+                  {mainIsExportingJsonl ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
                   Export JSONL
                 </Button>
                 <Button size="sm" variant="outline" className="gap-1.5 text-xs"
@@ -2394,12 +2438,6 @@ export default function TheChronicles() {
                   title="Export a portable pipeline results bundle">
                   {mainIsExportingBundle ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Package className="w-3.5 h-3.5" />}
                   Export Bundle
-                </Button>
-                <Button size="sm" variant="outline" className="gap-1.5 text-xs"
-                  onClick={() => setMainImportDialogOpen(true)}
-                  title="Import a pipeline results bundle into the selected document">
-                  <Upload className="w-3.5 h-3.5" />
-                  Import Bundle
                 </Button>
               </div>
             )}
@@ -2583,109 +2621,129 @@ export default function TheChronicles() {
       </Dialog>
 
       {/* ── Main-page Import Bundle dialog ──────────────────────────────────── */}
-      <Dialog open={mainImportDialogOpen} onOpenChange={(open) => {
-        if (!open) {
-          setMainImportDialogOpen(false); setMainImportFile(null);
-          setMainImportBundleHasImages(false); setMainImportOverwriteImages(false);
-          setMainImportGameSystem(""); setMainImportEdition("");
-        }
-      }}>
-        <DialogContent className="max-w-md">
+      <Dialog open={mainImportDialogOpen} onOpenChange={(open) => { if (!open) resetImportDialog(); }}>
+        <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Upload className="h-5 w-5 text-violet-400" />
               Import Pipeline Bundle
             </DialogTitle>
             <DialogDescription>
-              Select a <code className="text-xs bg-muted px-1 rounded">-bundle.json</code> file
-              to import into <strong>{selectedLabel}</strong>. Existing OCR results and summaries will be replaced.
+              Import a <code className="text-xs bg-muted px-1 rounded">-bundle.json</code> file
+              exported from this or another system. You can create a new document or import into an existing one.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 py-2">
+
+          <div className="space-y-4 py-1">
+            {/* File picker */}
             <div
-              className="flex flex-col items-center justify-center gap-2 rounded-md border-2 border-dashed border-border/60 p-6 text-sm text-muted-foreground cursor-pointer hover:border-primary/40 hover:bg-muted/20 transition-colors"
+              className="flex flex-col items-center justify-center gap-2 rounded-md border-2 border-dashed border-border/60 p-5 text-sm text-muted-foreground cursor-pointer hover:border-primary/40 hover:bg-muted/20 transition-colors"
               onClick={() => mainImportFileRef.current?.click()}
             >
-              <Package className="h-8 w-8 opacity-40" />
+              <Package className="h-7 w-7 opacity-40" />
               {mainImportFile
                 ? <span className="text-foreground font-medium">{mainImportFile.name}</span>
                 : <span>Click to select a bundle JSON file</span>}
-              <input
-                ref={mainImportFileRef}
-                type="file"
-                accept=".json,application/json"
-                className="hidden"
-                onChange={(e) => handleMainImportFileChange(e.target.files?.[0] ?? null)}
-              />
+              <input ref={mainImportFileRef} type="file" accept=".json,application/json" className="hidden"
+                onChange={(e) => handleMainImportFileChange(e.target.files?.[0] ?? null)} />
             </div>
 
-            {/* Game version fields */}
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="main-import-game-system" className="text-xs">Game / System</Label>
-                <Input
-                  id="main-import-game-system"
-                  placeholder="e.g. D&D 5e"
-                  value={mainImportGameSystem}
-                  onChange={(e) => setMainImportGameSystem(e.target.value)}
-                  className="h-8 text-sm"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="main-import-edition" className="text-xs">Edition / Version</Label>
-                <Input
-                  id="main-import-edition"
-                  placeholder="e.g. 2024"
-                  value={mainImportEdition}
-                  onChange={(e) => setMainImportEdition(e.target.value)}
-                  className="h-8 text-sm"
-                />
+            {/* ── Target ── */}
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Target</p>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => setMainImportTargetMode("new")}
+                  className={`flex flex-col items-start gap-0.5 rounded-md border px-3 py-2.5 text-left text-sm transition-colors ${mainImportTargetMode === "new" ? "border-violet-500/60 bg-violet-500/10 text-foreground" : "border-border/50 text-muted-foreground hover:bg-muted/30"}`}
+                >
+                  <span className="font-medium">Create new document</span>
+                  <span className="text-xs opacity-70">A fresh entry in the library</span>
+                </button>
+                <button
+                  onClick={() => selectedDocIds.length > 0 && setMainImportTargetMode("existing")}
+                  disabled={selectedDocIds.length === 0}
+                  className={`flex flex-col items-start gap-0.5 rounded-md border px-3 py-2.5 text-left text-sm transition-colors ${mainImportTargetMode === "existing" ? "border-violet-500/60 bg-violet-500/10 text-foreground" : "border-border/50 text-muted-foreground hover:bg-muted/30"} disabled:opacity-40 disabled:cursor-not-allowed`}
+                >
+                  <span className="font-medium">Import into selected</span>
+                  <span className="text-xs opacity-70 truncate w-full">{selectedLabel ?? "— no document selected —"}</span>
+                </button>
               </div>
             </div>
 
-            {mainImportBundleHasImages && (
-              <div className="flex items-start gap-3 rounded-md border border-border/50 px-4 py-3">
-                <input
-                  id="main-import-overwrite-images"
-                  type="checkbox"
-                  checked={mainImportOverwriteImages}
-                  onChange={(e) => setMainImportOverwriteImages(e.target.checked)}
-                  className="mt-0.5 h-4 w-4 cursor-pointer accent-violet-500"
-                />
-                <div className="flex flex-col gap-0.5">
-                  <label htmlFor="main-import-overwrite-images" className="text-sm font-medium cursor-pointer select-none">
-                    Overwrite existing page images
-                  </label>
-                  <p className="text-xs text-muted-foreground">
-                    The bundle contains embedded page images. Overwrite existing workspace images.
-                  </p>
+            {/* ── New document fields ── */}
+            {mainImportTargetMode === "new" && (
+              <div className="rounded-md border border-border/40 p-3 space-y-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="mi-title" className="text-xs">Document Name</Label>
+                  <Input id="mi-title" placeholder="Auto-detect from bundle" value={mainImportTitle}
+                    onChange={(e) => setMainImportTitle(e.target.value)} className="h-8 text-sm" />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="mi-gs" className="text-xs">Game / System</Label>
+                    <Input id="mi-gs" placeholder="e.g. D&D 5e" value={mainImportGameSystem}
+                      onChange={(e) => setMainImportGameSystem(e.target.value)} className="h-8 text-sm" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="mi-ed" className="text-xs">Edition / Version</Label>
+                    <Input id="mi-ed" placeholder="e.g. 2024" value={mainImportEdition}
+                      onChange={(e) => setMainImportEdition(e.target.value)} className="h-8 text-sm" />
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="mi-pub" className="text-xs">Publisher</Label>
+                  <Input id="mi-pub" placeholder="e.g. Wizards of the Coast" value={mainImportPublisher}
+                    onChange={(e) => setMainImportPublisher(e.target.value)} className="h-8 text-sm" />
                 </div>
               </div>
             )}
 
-            {mainImportFile && (
+            {/* ── Existing document: import mode ── */}
+            {mainImportTargetMode === "existing" && (
+              <div className="space-y-1.5">
+                <Label className="text-xs">Import Mode</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  {(["replace", "fill"] as const).map(m => (
+                    <button key={m} onClick={() => setMainImportMode(m)}
+                      className={`flex flex-col items-start gap-0.5 rounded-md border px-3 py-2 text-left text-xs transition-colors ${mainImportMode === m ? "border-violet-500/60 bg-violet-500/10 text-foreground" : "border-border/50 text-muted-foreground hover:bg-muted/30"}`}>
+                      <span className="font-medium text-sm">{m === "replace" ? "Replace all" : "Fill missing"}</span>
+                      <span className="opacity-70">{m === "replace" ? "Overwrite all existing OCR and summaries" : "Only add data where nothing exists yet"}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* ── Image handling ── */}
+            {mainImportBundleHasImages && (
+              <div className="flex items-start gap-3 rounded-md border border-border/50 px-3 py-2.5">
+                <input id="mi-img" type="checkbox" checked={mainImportOverwriteImages}
+                  onChange={(e) => setMainImportOverwriteImages(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 cursor-pointer accent-violet-500" />
+                <div>
+                  <label htmlFor="mi-img" className="text-sm font-medium cursor-pointer select-none">Overwrite existing page images</label>
+                  <p className="text-xs text-muted-foreground mt-0.5">Bundle contains embedded images — overwrite workspace copies if they exist.</p>
+                </div>
+              </div>
+            )}
+
+            {/* ── Warning ── */}
+            {mainImportFile && mainImportTargetMode === "existing" && mainImportMode === "replace" && (
               <div className="rounded-md bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-xs text-amber-300">
-                This will overwrite all OCR results and summaries for the selected document.
+                This will delete and replace all OCR results and summaries for <strong>{selectedLabel}</strong>.
                 {mainImportBundleHasImages && " Page images from the bundle will be written to the workspace."}
               </div>
             )}
           </div>
+
           <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" size="sm" onClick={() => {
-              setMainImportDialogOpen(false); setMainImportFile(null);
-              setMainImportBundleHasImages(false); setMainImportOverwriteImages(false);
-              setMainImportGameSystem(""); setMainImportEdition("");
-            }}>
-              Cancel
-            </Button>
-            <Button
-              size="sm"
-              onClick={handleMainImportBundle}
-              disabled={!mainImportFile || mainImportBundleMutation.isPending}
-              className="gap-1.5"
-            >
-              {mainImportBundleMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-              Import
+            <Button variant="outline" size="sm" onClick={resetImportDialog}>Cancel</Button>
+            <Button size="sm" onClick={handleMainImportBundle}
+              disabled={!mainImportFile || mainImportBundleMutation.isPending || mainCreateDocumentMutation.isPending}
+              className="gap-1.5">
+              {(mainImportBundleMutation.isPending || mainCreateDocumentMutation.isPending)
+                ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+              {mainImportTargetMode === "new" ? "Create & Import" : "Import"}
             </Button>
           </div>
         </DialogContent>
