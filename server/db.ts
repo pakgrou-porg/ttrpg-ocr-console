@@ -2351,7 +2351,7 @@ export async function exportDocumentBundle(
 
   const pages = await getPagesByDocumentId(documentId);
   const pageIds = pages.map(p => p.id);
-  const ocrs = pageIds.length > 0 ? await getOcrResultsByPageIds(pageIds) : [];
+  const ocrs = pageIds.length > 0 ? await getOcrResultsByPageIds(pageIds).catch(() => []) : [];
   const ocrByPageId = new Map(ocrs.map(o => [o.pageId, o]));
 
   const summaryRows = await db.select().from(contentSummaries)

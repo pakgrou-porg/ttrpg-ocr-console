@@ -1212,21 +1212,27 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
   // ── Bundle export state ──────────────────────────────────────────────────────
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [exportIncludeImages, setExportIncludeImages] = useState(false);
+  const [isExportingBundle, setIsExportingBundle] = useState(false);
 
-  const exportBundleMutation = trpc.library.exportBundle.useMutation({
-    onSuccess: (data) => {
-      const d = data as any;
-      const suffix = d.includes_images ? "-with-images" : "";
-      const json = JSON.stringify(data, null, 2);
-      triggerDownload(
-        new Blob([json], { type: "application/json" }),
-        `document-${documentId}-bundle${suffix}.json`,
-      );
-      toast.success(`Bundle exported — ${d.pages?.length ?? 0} pages${d.includes_images ? " with images" : ""}.`);
-      setExportDialogOpen(false);
-    },
-    onError: (err) => toast.error(err.message),
-  });
+  const handleExportBundle = async (docId: number, includeImages: boolean) => {
+    setIsExportingBundle(true);
+    setExportDialogOpen(false);
+    try {
+      const resp = await fetch(`/api/download/bundle/${docId}?images=${includeImages}`);
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({})) as any;
+        toast.error(errData?.error ?? "Bundle export failed.");
+        return;
+      }
+      const blob = await resp.blob();
+      triggerDownload(blob, `document-${docId}-bundle${includeImages ? "-with-images" : ""}.json`);
+      toast.success("Bundle exported.");
+    } catch (e: any) {
+      toast.error(e?.message ?? "Bundle export failed.");
+    } finally {
+      setIsExportingBundle(false);
+    }
+  };
 
   // ── Bundle import state ──────────────────────────────────────────────────────
   const [importDialogOpen, setImportDialogOpen] = useState(false);
@@ -1532,11 +1538,11 @@ function PageBrowser({ documentIds }: { documentIds: number[] }) {
             </Button>
             <Button
               size="sm"
-              onClick={() => exportBundleMutation.mutate({ documentId, includeImages: exportIncludeImages })}
-              disabled={exportBundleMutation.isPending}
+              onClick={() => handleExportBundle(documentId, exportIncludeImages)}
+              disabled={isExportingBundle}
               className="gap-1.5"
             >
-              {exportBundleMutation.isPending
+              {isExportingBundle
                 ? <Loader2 className="h-4 w-4 animate-spin" />
                 : <Package className="h-4 w-4" />}
               Export
@@ -2012,6 +2018,18 @@ export default function TheChronicles() {
   const [gameSystemFilter, setGameSystemFilter] = useState("");
   const [selectedGameSystem, setSelectedGameSystem] = useState<string | null>(null);
 
+  // ── Main-page export/import state ────────────────────────────────────────────
+  const [mainExportDialogOpen, setMainExportDialogOpen] = useState(false);
+  const [mainExportIncludeImages, setMainExportIncludeImages] = useState(false);
+  const [mainIsExportingBundle, setMainIsExportingBundle] = useState(false);
+  const [mainImportDialogOpen, setMainImportDialogOpen] = useState(false);
+  const [mainImportFile, setMainImportFile] = useState<File | null>(null);
+  const [mainImportOverwriteImages, setMainImportOverwriteImages] = useState(false);
+  const [mainImportBundleHasImages, setMainImportBundleHasImages] = useState(false);
+  const [mainImportGameSystem, setMainImportGameSystem] = useState("");
+  const [mainImportEdition, setMainImportEdition] = useState("");
+  const mainImportFileRef = useRef<HTMLInputElement>(null);
+
   const { data: docs = [] } = trpc.library.listDocuments.useQuery(undefined);
 
   const uniqueGameSystems = useMemo(() => {
@@ -2073,6 +2091,105 @@ export default function TheChronicles() {
     },
     onError: (err) => toast.error(err.message),
   });
+
+  // ── Main-page export/import mutations & handlers ──────────────────────────────
+
+  const mainExportUnslothMutation = trpc.library.exportUnsloth.useMutation({
+    onSuccess: (data) => {
+      const docId = selectedDocIds[0] ?? 0;
+      if (!data.jsonl) { toast.error("No exportable data found."); return; }
+      const url = URL.createObjectURL(new Blob([data.jsonl], { type: "application/jsonl" }));
+      const a = document.createElement("a");
+      a.href = url; a.download = `document-${docId}-unsloth.jsonl`; a.style.display = "none";
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      toast.success(`Exported ${data.lineCount} training examples.`);
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const handleMainExportBundle = async () => {
+    const docId = selectedDocIds[0];
+    if (!docId) return;
+    setMainIsExportingBundle(true);
+    setMainExportDialogOpen(false);
+    try {
+      const resp = await fetch(`/api/download/bundle/${docId}?images=${mainExportIncludeImages}`);
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({})) as any;
+        toast.error(errData?.error ?? "Bundle export failed.");
+        return;
+      }
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `document-${docId}-bundle${mainExportIncludeImages ? "-with-images" : ""}.json`;
+      a.style.display = "none";
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      toast.success("Bundle exported.");
+    } catch (e: any) {
+      toast.error(e?.message ?? "Bundle export failed.");
+    } finally {
+      setMainIsExportingBundle(false);
+    }
+  };
+
+  const mainImportBundleMutation = trpc.library.importBundle.useMutation({
+    onSuccess: async (result) => {
+      const r = result as any;
+      const parts = [
+        `${r.pagesUpdated} pages updated`,
+        r.pagesCreated > 0 ? `${r.pagesCreated} created` : null,
+        `${r.ocrUpserted} OCR records`,
+        `${r.summariesCreated} summaries`,
+      ].filter(Boolean).join(", ");
+      // Apply game version if provided
+      const docId = selectedDocIds[0];
+      if (docId && (mainImportGameSystem.trim() || mainImportEdition.trim())) {
+        await mainUpdateDocumentMutation.mutateAsync({
+          id: docId,
+          gameSystem: mainImportGameSystem.trim() || undefined,
+          edition: mainImportEdition.trim() || undefined,
+        });
+      }
+      toast.success(`Bundle imported — ${parts}.`);
+      setMainImportDialogOpen(false);
+      setMainImportFile(null);
+      setMainImportBundleHasImages(false);
+      setMainImportOverwriteImages(false);
+      setMainImportGameSystem("");
+      setMainImportEdition("");
+      utils.library.listDocuments.invalidate();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const mainUpdateDocumentMutation = trpc.library.updateDocument.useMutation({
+    onError: (err) => toast.error(`Game version update failed: ${err.message}`),
+  });
+
+  const handleMainImportFileChange = async (file: File | null) => {
+    setMainImportFile(file);
+    setMainImportBundleHasImages(false);
+    if (!file) return;
+    try {
+      const head = await file.slice(0, 512).text();
+      setMainImportBundleHasImages(/"includes_images"\s*:\s*true/.test(head));
+    } catch { /* ignore */ }
+  };
+
+  const handleMainImportBundle = async () => {
+    const docId = selectedDocIds[0];
+    if (!mainImportFile || !docId) return;
+    try {
+      const text = await mainImportFile.text();
+      const bundle = JSON.parse(text);
+      mainImportBundleMutation.mutate({ documentId: docId, bundle, overwriteImages: mainImportOverwriteImages });
+    } catch {
+      toast.error("Failed to parse bundle file. Make sure it is a valid JSON bundle.");
+    }
+  };
 
   const handleApproveAll = async () => {
     if (!selectedDocIds.length) return;
@@ -2250,17 +2367,43 @@ export default function TheChronicles() {
       {/* Content tabs */}
       {selectedLabel !== null && (
         <Tabs defaultValue="summaries">
-          <TabsList>
-            <TabsTrigger value="summaries" className="gap-1.5">
-              <Layers className="w-3.5 h-3.5" />Summaries
-            </TabsTrigger>
-            <TabsTrigger value="flow" className="gap-1.5">
-              <AlignLeft className="w-3.5 h-3.5" />Content Flow
-            </TabsTrigger>
-            <TabsTrigger value="pages" className="gap-1.5">
-              <FileImage className="w-3.5 h-3.5" />Pages
-            </TabsTrigger>
-          </TabsList>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <TabsList>
+              <TabsTrigger value="summaries" className="gap-1.5">
+                <Layers className="w-3.5 h-3.5" />Summaries
+              </TabsTrigger>
+              <TabsTrigger value="flow" className="gap-1.5">
+                <AlignLeft className="w-3.5 h-3.5" />Content Flow
+              </TabsTrigger>
+              <TabsTrigger value="pages" className="gap-1.5">
+                <FileImage className="w-3.5 h-3.5" />Pages
+              </TabsTrigger>
+            </TabsList>
+
+            {selectedDocIds.length > 0 && (
+              <div className="flex items-center gap-1.5">
+                <Button size="sm" variant="outline" className="gap-1.5 text-xs"
+                  onClick={() => mainExportUnslothMutation.mutate({ documentId: selectedDocIds[0] })}
+                  disabled={mainExportUnslothMutation.isPending}>
+                  {mainExportUnslothMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
+                  Export JSONL
+                </Button>
+                <Button size="sm" variant="outline" className="gap-1.5 text-xs"
+                  onClick={() => { setMainExportIncludeImages(false); setMainExportDialogOpen(true); }}
+                  disabled={mainIsExportingBundle}
+                  title="Export a portable pipeline results bundle">
+                  {mainIsExportingBundle ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Package className="w-3.5 h-3.5" />}
+                  Export Bundle
+                </Button>
+                <Button size="sm" variant="outline" className="gap-1.5 text-xs"
+                  onClick={() => setMainImportDialogOpen(true)}
+                  title="Import a pipeline results bundle into the selected document">
+                  <Upload className="w-3.5 h-3.5" />
+                  Import Bundle
+                </Button>
+              </div>
+            )}
+          </div>
 
           <TabsContent value="summaries">
             <Card>
@@ -2390,6 +2533,163 @@ export default function TheChronicles() {
       {editTarget !== null && (
         <EditDialog node={editTarget} open={true} onClose={() => setEditTarget(null)} />
       )}
+
+      {/* ── Main-page Export Bundle dialog ──────────────────────────────────── */}
+      <Dialog open={mainExportDialogOpen} onOpenChange={setMainExportDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Package className="h-5 w-5 text-emerald-400" />
+              Export Pipeline Bundle
+            </DialogTitle>
+            <DialogDescription>
+              Exports a portable snapshot of all pipeline results — page layout, OCR text,
+              regions, and content summaries — as a single JSON file.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="flex items-start gap-3 rounded-md border border-border/50 px-4 py-3">
+              <input
+                id="main-export-include-images"
+                type="checkbox"
+                checked={mainExportIncludeImages}
+                onChange={(e) => setMainExportIncludeImages(e.target.checked)}
+                className="mt-0.5 h-4 w-4 cursor-pointer accent-emerald-500"
+              />
+              <div className="flex flex-col gap-0.5">
+                <label htmlFor="main-export-include-images" className="text-sm font-medium cursor-pointer select-none">
+                  Include page images (base-64)
+                </label>
+                <p className="text-xs text-muted-foreground">
+                  Embeds each page PNG as base-64. <strong className="text-amber-400">Warning:</strong> can
+                  significantly increase file size (100 MB+ for multi-page documents).
+                </p>
+              </div>
+            </div>
+            {mainExportIncludeImages && (
+              <div className="rounded-md bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-xs text-amber-300">
+                Large documents may take several seconds and produce very large files.
+              </div>
+            )}
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" size="sm" onClick={() => setMainExportDialogOpen(false)}>Cancel</Button>
+            <Button size="sm" onClick={handleMainExportBundle} disabled={mainIsExportingBundle} className="gap-1.5">
+              {mainIsExportingBundle ? <Loader2 className="h-4 w-4 animate-spin" /> : <Package className="h-4 w-4" />}
+              Export
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Main-page Import Bundle dialog ──────────────────────────────────── */}
+      <Dialog open={mainImportDialogOpen} onOpenChange={(open) => {
+        if (!open) {
+          setMainImportDialogOpen(false); setMainImportFile(null);
+          setMainImportBundleHasImages(false); setMainImportOverwriteImages(false);
+          setMainImportGameSystem(""); setMainImportEdition("");
+        }
+      }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Upload className="h-5 w-5 text-violet-400" />
+              Import Pipeline Bundle
+            </DialogTitle>
+            <DialogDescription>
+              Select a <code className="text-xs bg-muted px-1 rounded">-bundle.json</code> file
+              to import into <strong>{selectedLabel}</strong>. Existing OCR results and summaries will be replaced.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div
+              className="flex flex-col items-center justify-center gap-2 rounded-md border-2 border-dashed border-border/60 p-6 text-sm text-muted-foreground cursor-pointer hover:border-primary/40 hover:bg-muted/20 transition-colors"
+              onClick={() => mainImportFileRef.current?.click()}
+            >
+              <Package className="h-8 w-8 opacity-40" />
+              {mainImportFile
+                ? <span className="text-foreground font-medium">{mainImportFile.name}</span>
+                : <span>Click to select a bundle JSON file</span>}
+              <input
+                ref={mainImportFileRef}
+                type="file"
+                accept=".json,application/json"
+                className="hidden"
+                onChange={(e) => handleMainImportFileChange(e.target.files?.[0] ?? null)}
+              />
+            </div>
+
+            {/* Game version fields */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="main-import-game-system" className="text-xs">Game / System</Label>
+                <Input
+                  id="main-import-game-system"
+                  placeholder="e.g. D&D 5e"
+                  value={mainImportGameSystem}
+                  onChange={(e) => setMainImportGameSystem(e.target.value)}
+                  className="h-8 text-sm"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="main-import-edition" className="text-xs">Edition / Version</Label>
+                <Input
+                  id="main-import-edition"
+                  placeholder="e.g. 2024"
+                  value={mainImportEdition}
+                  onChange={(e) => setMainImportEdition(e.target.value)}
+                  className="h-8 text-sm"
+                />
+              </div>
+            </div>
+
+            {mainImportBundleHasImages && (
+              <div className="flex items-start gap-3 rounded-md border border-border/50 px-4 py-3">
+                <input
+                  id="main-import-overwrite-images"
+                  type="checkbox"
+                  checked={mainImportOverwriteImages}
+                  onChange={(e) => setMainImportOverwriteImages(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 cursor-pointer accent-violet-500"
+                />
+                <div className="flex flex-col gap-0.5">
+                  <label htmlFor="main-import-overwrite-images" className="text-sm font-medium cursor-pointer select-none">
+                    Overwrite existing page images
+                  </label>
+                  <p className="text-xs text-muted-foreground">
+                    The bundle contains embedded page images. Overwrite existing workspace images.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {mainImportFile && (
+              <div className="rounded-md bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-xs text-amber-300">
+                This will overwrite all OCR results and summaries for the selected document.
+                {mainImportBundleHasImages && " Page images from the bundle will be written to the workspace."}
+              </div>
+            )}
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" size="sm" onClick={() => {
+              setMainImportDialogOpen(false); setMainImportFile(null);
+              setMainImportBundleHasImages(false); setMainImportOverwriteImages(false);
+              setMainImportGameSystem(""); setMainImportEdition("");
+            }}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleMainImportBundle}
+              disabled={!mainImportFile || mainImportBundleMutation.isPending}
+              className="gap-1.5"
+            >
+              {mainImportBundleMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+              Import
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

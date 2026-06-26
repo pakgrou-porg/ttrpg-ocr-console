@@ -12,6 +12,7 @@ import { uploadRouter } from "../uploadRoutes";
 import { uploadIngestRouter } from "../uploadIngestRoute";
 import { sdk } from "./sdk";
 import { recoverQueuedJobs } from "../pipeline/runner";
+import { exportDocumentBundle } from "../db";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -63,6 +64,31 @@ async function startServer() {
       res.setHeader("Cache-Control", "no-cache");
     },
   }));
+  // Direct bundle download — bypasses tRPC to avoid client-side JSON.stringify size limits
+  app.get("/api/download/bundle/:documentId", async (req, res) => {
+    try {
+      await sdk.authenticateRequest(req as any);
+    } catch {
+      res.status(401).json({ error: "Unauthorized." });
+      return;
+    }
+    const documentId = parseInt(req.params.documentId, 10);
+    if (!documentId || isNaN(documentId)) {
+      res.status(400).json({ error: "Invalid documentId." });
+      return;
+    }
+    const includeImages = req.query.images === "true";
+    try {
+      const bundle = await exportDocumentBundle(documentId, { includeImages });
+      const suffix = includeImages ? "-with-images" : "";
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Content-Disposition", `attachment; filename="document-${documentId}-bundle${suffix}.json"`);
+      res.send(JSON.stringify(bundle, null, 2));
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message ?? "Export failed." });
+    }
+  });
+
   // File upload REST endpoints
   app.use(uploadRouter);
   app.use(uploadIngestRouter);

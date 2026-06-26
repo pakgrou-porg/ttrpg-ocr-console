@@ -2956,7 +2956,7 @@ export async function exportDocumentAsUnsloth(documentId: number): Promise<strin
   const pageIds = pages.map(p => p.id);
   if (pageIds.length === 0) return "";
 
-  const ocrs = await getOcrResultsByPageIds(pageIds);
+  const ocrs = await getOcrResultsByPageIds(pageIds).catch(() => []);
   const ocrMap = new Map(ocrs.map(r => [r.pageId, r]));
 
   const lines: string[] = [];
