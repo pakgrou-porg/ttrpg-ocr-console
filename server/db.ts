@@ -2376,7 +2376,10 @@ export async function exportDocumentBundle(
 
   const includeImages = options?.includeImages ?? false;
 
-  const bundlePages: BundlePage[] = await Promise.all(pages.map(async p => {
+  // Build page metadata synchronously, then load images sequentially (not concurrently)
+  // so that 300+ page documents with images don't spike all PNG files into memory at once.
+  const bundlePages: BundlePage[] = [];
+  for (const p of pages) {
     const ocr = ocrByPageId.get(p.id) ?? null;
 
     let imageBase64: string | undefined;
@@ -2389,7 +2392,7 @@ export async function exportDocumentBundle(
       }
     }
 
-    return {
+    bundlePages.push({
       pageNumber:        p.pageNumber,
       partIndex:         p.partIndex,
       printedPageLabel:  p.printedPageLabel ?? null,
@@ -2422,8 +2425,8 @@ export async function exportDocumentBundle(
         correctedText:           ocr.correctedText ?? null,
         correctedStructuredData: ocr.correctedStructuredData ?? null,
       } : null,
-    };
-  }));
+    });
+  }
 
   return {
     schema_version:    "bundle_v1",

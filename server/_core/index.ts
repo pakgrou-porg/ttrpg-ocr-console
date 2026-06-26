@@ -12,7 +12,8 @@ import { uploadRouter } from "../uploadRoutes";
 import { uploadIngestRouter } from "../uploadIngestRoute";
 import { sdk } from "./sdk";
 import { recoverQueuedJobs } from "../pipeline/runner";
-import { exportDocumentBundle } from "../db";
+import { exportDocumentBundle, getPagesByDocumentId } from "../db";
+import { readFile } from "fs/promises";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -64,7 +65,8 @@ async function startServer() {
       res.setHeader("Cache-Control", "no-cache");
     },
   }));
-  // Direct bundle download — bypasses tRPC to avoid client-side JSON.stringify size limits
+  // Direct bundle download — bypasses tRPC to avoid client-side JSON.stringify size limits.
+  // Images are streamed one page at a time so 300+ page documents don't OOM the server.
   app.get("/api/download/bundle/:documentId", async (req, res) => {
     try {
       await sdk.authenticateRequest(req as any);
@@ -79,13 +81,56 @@ async function startServer() {
     }
     const includeImages = req.query.images === "true";
     try {
-      const bundle = await exportDocumentBundle(documentId, { includeImages });
+      // Always fetch bundle WITHOUT images (fast, fits in memory).
+      const bundle = await exportDocumentBundle(documentId, { includeImages: false });
       const suffix = includeImages ? "-with-images" : "";
       res.setHeader("Content-Type", "application/json");
       res.setHeader("Content-Disposition", `attachment; filename="document-${documentId}-bundle${suffix}.json"`);
-      res.send(JSON.stringify(bundle, null, 2));
+
+      if (!includeImages) {
+        // No images: bundle is small — safe to JSON.stringify in one shot.
+        res.send(JSON.stringify(bundle, null, 2));
+        return;
+      }
+
+      // Images requested: stream JSON, encoding one page image at a time to
+      // avoid loading all PNGs into memory simultaneously.
+      const rawPages = await getPagesByDocumentId(documentId);
+      const rawPageByKey = new Map(rawPages.map(p => [`${p.pageNumber}:${p.partIndex}`, p]));
+
+      // Write chunk and wait for drain if the socket is full.
+      const writeChunk = (chunk: string): Promise<void> =>
+        new Promise(resolve => { if (!res.write(chunk)) res.once("drain", resolve); else resolve(); });
+
+      // Serialise everything except pages as the JSON "header".
+      // Slice off the trailing "}" so we can append the pages array before closing.
+      const { pages: bundlePages, ...headerMeta } = bundle;
+      const headerJson = JSON.stringify({ ...headerMeta, includes_images: true }, null, 2);
+      await writeChunk(headerJson.slice(0, -2)); // remove trailing "\n}"
+      await writeChunk(',\n  "pages": [\n');
+
+      for (let i = 0; i < bundlePages.length; i++) {
+        const bp = bundlePages[i];
+        const rawPage = rawPageByKey.get(`${bp.pageNumber}:${bp.partIndex}`);
+        let pageObj: Record<string, unknown> = bp as unknown as Record<string, unknown>;
+        if (rawPage?.rawPngUrl) {
+          try {
+            const bytes = await readFile(rawPage.rawPngUrl);
+            pageObj = { ...bp, imageBase64: bytes.toString("base64") } as Record<string, unknown>;
+          } catch { /* file missing — omit image for this page */ }
+        }
+        const comma = i < bundlePages.length - 1 ? "," : "";
+        await writeChunk(`    ${JSON.stringify(pageObj)}${comma}\n`);
+      }
+
+      await writeChunk("  ]\n}\n");
+      res.end();
     } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? "Export failed." });
+      if (!res.headersSent) {
+        res.status(500).json({ error: err?.message ?? "Export failed." });
+      } else {
+        res.end(); // headers already sent — just close the connection
+      }
     }
   });
 
