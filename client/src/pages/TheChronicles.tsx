@@ -2065,7 +2065,7 @@ export default function TheChronicles() {
   }, [uniqueGameSystems, gameSystemFilter]);
 
   const groupMap = useMemo(() => {
-    const map = new Map<string, { label: string; ids: number[] }>();
+    const map = new Map<string, { label: string; ids: number[]; filename: string }>();
     for (const d of docs) {
       if ((d.totalPages ?? 0) === 0) continue;
       if (selectedGameSystem && d.gameSystem !== selectedGameSystem) continue;
@@ -2073,15 +2073,34 @@ export default function TheChronicles() {
       const meta = [d.gameSystem, d.edition].filter(Boolean).join(" · ");
       const label = meta ? `${base} [${meta}]` : base;
       // Key by document ID so each document has its own entry — no title-based grouping
-      map.set(String(d.id), { label, ids: [d.id] });
+      map.set(String(d.id), { label, ids: [d.id], filename: d.filename ?? "" });
     }
     return map;
   }, [docs, selectedGameSystem]);
 
   // selectedLabel stores the document-ID string (the map key); this is the display text
   const selectedDisplayLabel = selectedLabel ? (groupMap.get(selectedLabel)?.label ?? null) : null;
+  const selectedDocId = selectedLabel ? parseInt(selectedLabel, 10) : null;
+  const selectedDoc = selectedDocId ? (docs.find(d => d.id === selectedDocId) ?? null) : null;
 
   const selectedDocIds = selectedLabel ? (groupMap.get(selectedLabel)?.ids ?? []) : [];
+
+  // ── Document metadata edit state ─────────────────────────────────────────────
+  const [metaTitle, setMetaTitle] = useState("");
+  const [metaGameSystem, setMetaGameSystem] = useState("");
+  const [metaEdition, setMetaEdition] = useState("");
+  const [metaDirty, setMetaDirty] = useState(false);
+
+  useEffect(() => {
+    if (!selectedDoc) {
+      setMetaTitle(""); setMetaGameSystem(""); setMetaEdition(""); setMetaDirty(false);
+      return;
+    }
+    setMetaTitle(selectedDoc.title ?? "");
+    setMetaGameSystem(selectedDoc.gameSystem ?? "");
+    setMetaEdition(selectedDoc.edition ?? "");
+    setMetaDirty(false);
+  }, [selectedLabel]); // reset when the selected document changes
 
   const { data: rawSummaries = [], isLoading, refetch } = trpc.summaries.listByDocumentIds.useQuery(
     { documentIds: selectedDocIds },
@@ -2100,6 +2119,15 @@ export default function TheChronicles() {
   });
 
   const approveAllMutation = trpc.summaries.approveAll.useMutation({
+    onError: (err) => toast.error(err.message),
+  });
+
+  const updateDocMetaMutation = trpc.library.updateDocument.useMutation({
+    onSuccess: () => {
+      toast.success("Document updated.");
+      utils.library.listDocuments.invalidate();
+      setMetaDirty(false);
+    },
     onError: (err) => toast.error(err.message),
   });
 
@@ -2369,12 +2397,17 @@ export default function TheChronicles() {
                   <CommandEmpty>No documents found.</CommandEmpty>
                   <CommandGroup>
                     {Array.from(groupMap.entries()).map(([docKey, group]) => (
-                      <CommandItem key={docKey} value={group.label} onSelect={() => {
+                      <CommandItem key={docKey} value={`${group.label} ${group.filename}`} onSelect={() => {
                         setSelectedLabel(docKey === selectedLabel ? null : docKey);
                         setSelectorOpen(false);
                       }}>
                         <Check className={`mr-2 h-4 w-4 flex-shrink-0 ${docKey === selectedLabel ? "opacity-100" : "opacity-0"}`} />
-                        <span className="flex-1 truncate">{group.label}</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="truncate">{group.label}</div>
+                          {group.filename && (
+                            <div className="text-xs text-muted-foreground/60 font-mono truncate">{group.filename}</div>
+                          )}
+                        </div>
                       </CommandItem>
                     ))}
                   </CommandGroup>
@@ -2382,6 +2415,56 @@ export default function TheChronicles() {
               </Command>
             </PopoverContent>
           </Popover>
+
+          {/* Document metadata: shown when a document is selected */}
+          {selectedDoc && (
+            <div className="mt-3 pt-3 border-t border-border/50 space-y-2">
+              <p className="text-xs text-muted-foreground/60 font-mono truncate" title={selectedDoc.filename}>
+                <span className="text-muted-foreground/40 not-mono">Source: </span>{selectedDoc.filename}
+              </p>
+              <div className="flex gap-2 items-center">
+                <Input
+                  className="h-7 text-xs flex-1"
+                  placeholder="Display name…"
+                  value={metaTitle}
+                  onChange={e => { setMetaTitle(e.target.value); setMetaDirty(true); }}
+                  onKeyDown={e => e.key === "Enter" && metaDirty && updateDocMetaMutation.mutate({
+                    id: selectedDoc.id, title: metaTitle.trim() || undefined,
+                    gameSystem: metaGameSystem.trim() || undefined, edition: metaEdition.trim() || undefined,
+                  })}
+                />
+              </div>
+              <div className="flex gap-2 items-center">
+                <Input
+                  className="h-7 text-xs flex-1"
+                  placeholder="Game system…"
+                  value={metaGameSystem}
+                  onChange={e => { setMetaGameSystem(e.target.value); setMetaDirty(true); }}
+                />
+                <Input
+                  className="h-7 text-xs w-28"
+                  placeholder="Edition…"
+                  value={metaEdition}
+                  onChange={e => { setMetaEdition(e.target.value); setMetaDirty(true); }}
+                />
+                <Button
+                  size="sm" variant="outline"
+                  className="h-7 text-xs px-3 flex-shrink-0"
+                  disabled={!metaDirty || updateDocMetaMutation.isPending}
+                  onClick={() => updateDocMetaMutation.mutate({
+                    id: selectedDoc.id,
+                    title: metaTitle.trim() || undefined,
+                    gameSystem: metaGameSystem.trim() || undefined,
+                    edition: metaEdition.trim() || undefined,
+                  })}
+                >
+                  {updateDocMetaMutation.isPending
+                    ? <Loader2 className="w-3 h-3 animate-spin" />
+                    : "Save"}
+                </Button>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 
