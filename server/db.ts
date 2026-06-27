@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, ilike, inArray, isNull, lte, ne, notInArray, or, sql } from "drizzle-orm";
+import { SQL, and, asc, desc, eq, gte, ilike, inArray, isNull, lt, lte, ne, not, notInArray, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { readFile, writeFile, mkdir } from "fs/promises";
@@ -2053,39 +2053,40 @@ export async function getLlmProviderMetricsSummary(
   if (!db) return [];
   const since = sinceOverride ?? new Date(Date.now() - days * 86_400_000);
 
-  // Build a compound WHERE clause.  Start with the global floor, then for each
-  // provider that was individually reset more recently than the global reset,
-  // exclude their earlier records.
-  let whereClause = sql`created_at >= ${since}`;
+  // Use the typed query builder for the WHERE clause to avoid sql-template
+  // composition bugs when per-provider overrides inject nested parameters.
+  let whereCondition: SQL = gte(llmTimingMetrics.createdAt, since);
   if (perProviderSince) {
     for (const [idStr, date] of Object.entries(perProviderSince)) {
       if (date > since) {
         const numId = parseInt(idStr, 10);
-        whereClause = sql`${whereClause} AND NOT (provider_id = ${numId} AND created_at < ${date})`;
+        const providerCondition = and(
+          eq(llmTimingMetrics.providerId, numId),
+          lt(llmTimingMetrics.createdAt, date),
+        );
+        if (providerCondition) whereCondition = and(whereCondition, not(providerCondition)) ?? whereCondition;
       }
     }
   }
 
-  const rows = await db.execute(sql`
-    SELECT
-      provider_id,
-      provider_name,
-      COUNT(*)::int                                             AS total_calls,
-      ROUND(AVG(duration_ms))::int                             AS avg_duration_ms,
-      MIN(duration_ms)::int                                    AS min_duration_ms,
-      MAX(duration_ms)::int                                    AS max_duration_ms,
-      SUM(tokens_used)::int                                    AS total_tokens,
-      COUNT(*) FILTER (WHERE success = false)::int             AS failure_count,
-      COUNT(*) FILTER (WHERE is_fallback = true)::int          AS fallback_count,
-      ROUND(
-        100.0 * COUNT(*) FILTER (WHERE success = true) / NULLIF(COUNT(*), 0),
-        1
-      )::float                                                 AS success_rate
-    FROM llm_timing_metrics
-    WHERE ${whereClause}
-    GROUP BY provider_id, provider_name
-    ORDER BY total_calls DESC
-  `);
+  const rows = await db
+    .select({
+      provider_id:     llmTimingMetrics.providerId,
+      provider_name:   llmTimingMetrics.providerName,
+      total_calls:     sql<number>`COUNT(*)::int`,
+      avg_duration_ms: sql<number>`ROUND(AVG(duration_ms))::int`,
+      min_duration_ms: sql<number>`MIN(duration_ms)::int`,
+      max_duration_ms: sql<number>`MAX(duration_ms)::int`,
+      total_tokens:    sql<number>`SUM(tokens_used)::bigint`,
+      failure_count:   sql<number>`(COUNT(*) FILTER (WHERE success = false))::int`,
+      fallback_count:  sql<number>`(COUNT(*) FILTER (WHERE is_fallback = true))::int`,
+      success_rate:    sql<number>`ROUND(100.0 * COUNT(*) FILTER (WHERE success = true) / NULLIF(COUNT(*), 0), 1)::float`,
+    })
+    .from(llmTimingMetrics)
+    .where(whereCondition)
+    .groupBy(llmTimingMetrics.providerId, llmTimingMetrics.providerName)
+    .orderBy(desc(sql`COUNT(*)`));
+
   return rows as unknown as Array<{
     provider_id: number | null; provider_name: string | null;
     total_calls: number; avg_duration_ms: number; min_duration_ms: number; max_duration_ms: number;
