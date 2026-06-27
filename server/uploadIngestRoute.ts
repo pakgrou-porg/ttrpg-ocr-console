@@ -7,9 +7,9 @@
  */
 
 import { randomBytes } from "crypto";
-import { mkdir, open, unlink } from "fs/promises";
+import { mkdir, open, rename, unlink } from "fs/promises";
 import { mkdirSync } from "fs";
-import { join } from "path";
+import { extname, basename, join } from "path";
 import { Router, type Request, type Response, type NextFunction } from "express";
 import multer from "multer";
 import { createIngestionJob } from "./db";
@@ -88,8 +88,19 @@ router.post(
 
       const gameSystem = (req.body.gameSystem as string | undefined)?.trim() || undefined;
 
+      // Rename the temp file to a sanitized version of the original name so that
+      // the document shows up with a meaningful title in the Chronicles if the
+      // document_intelligence stage can't extract a canonical title.
+      const ext = extname(file.originalname) || extname(file.path);
+      const safeName = basename(file.originalname, extname(file.originalname))
+        .replace(/[^\w\s.-]/g, "")   // strip shell-unsafe chars
+        .replace(/\s+/g, "_")
+        .slice(0, 120);
+      const namedPath = join(UPLOAD_DIR, `${safeName}_${randomBytes(6).toString("hex")}${ext}`);
+      await rename(file.path, namedPath);
+
       const jobId = await createIngestionJob({
-        sourceFile: file.path,
+        sourceFile: namedPath,
         gameSystem,
         totalPages: 0,
         storageProvider: "local",
@@ -99,6 +110,7 @@ router.post(
 
       return res.status(201).json({ success: true, jobId, filename: file.originalname });
     } catch (err: any) {
+      // Clean up whichever file exists — the rename may or may not have happened
       if (req.file?.path) await unlink(req.file.path).catch(() => undefined);
       console.error("[upload/ingest] Error:", err);
       return res.status(500).json({ error: "Upload failed." });

@@ -2072,12 +2072,14 @@ export default function TheChronicles() {
       const base = d.title ?? d.filename ?? `Document #${d.id}`;
       const meta = [d.gameSystem, d.edition].filter(Boolean).join(" · ");
       const label = meta ? `${base} [${meta}]` : base;
-      const existing = map.get(label);
-      if (existing) { existing.ids.push(d.id); }
-      else { map.set(label, { label, ids: [d.id] }); }
+      // Key by document ID so each document has its own entry — no title-based grouping
+      map.set(String(d.id), { label, ids: [d.id] });
     }
     return map;
   }, [docs, selectedGameSystem]);
+
+  // selectedLabel stores the document-ID string (the map key); this is the display text
+  const selectedDisplayLabel = selectedLabel ? (groupMap.get(selectedLabel)?.label ?? null) : null;
 
   const selectedDocIds = selectedLabel ? (groupMap.get(selectedLabel)?.ids ?? []) : [];
 
@@ -2353,10 +2355,8 @@ export default function TheChronicles() {
               <Button variant="outline" role="combobox" aria-expanded={selectorOpen}
                 className="w-full max-w-lg justify-between font-normal text-left h-auto min-h-9 py-2">
                 <span className="truncate flex-1">
-                  {selectedLabel
-                    ? (groupMap.get(selectedLabel)?.ids.length ?? 0) > 1
-                      ? `${selectedLabel} (${groupMap.get(selectedLabel)!.ids.length} batches)`
-                      : selectedLabel
+                  {selectedDisplayLabel
+                    ? selectedDisplayLabel
                     : <span className="text-muted-foreground">Choose a document to review…</span>}
                 </span>
                 <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
@@ -2368,15 +2368,13 @@ export default function TheChronicles() {
                 <CommandList className="max-h-72">
                   <CommandEmpty>No documents found.</CommandEmpty>
                   <CommandGroup>
-                    {Array.from(groupMap.entries()).map(([label, group]) => (
-                      <CommandItem key={label} value={label} onSelect={() => {
-                        setSelectedLabel(label === selectedLabel ? null : label);
+                    {Array.from(groupMap.entries()).map(([docKey, group]) => (
+                      <CommandItem key={docKey} value={group.label} onSelect={() => {
+                        setSelectedLabel(docKey === selectedLabel ? null : docKey);
                         setSelectorOpen(false);
                       }}>
-                        <Check className={`mr-2 h-4 w-4 flex-shrink-0 ${label === selectedLabel ? "opacity-100" : "opacity-0"}`} />
-                        <span className="flex-1 truncate">
-                          {group.ids.length > 1 ? `${label} (${group.ids.length} batches)` : label}
-                        </span>
+                        <Check className={`mr-2 h-4 w-4 flex-shrink-0 ${docKey === selectedLabel ? "opacity-100" : "opacity-0"}`} />
+                        <span className="flex-1 truncate">{group.label}</span>
                       </CommandItem>
                     ))}
                   </CommandGroup>
@@ -2450,7 +2448,7 @@ export default function TheChronicles() {
                   <div>
                     <CardTitle className="text-base flex items-center gap-2">
                       <Layers className="w-4 h-4 text-primary" />
-                      {selectedLabel} — Hierarchy
+                      {selectedDisplayLabel} — Hierarchy
                     </CardTitle>
                     {rawSummaries.length > 0 && (
                       <CardDescription>{rawSummaries.length} summary records</CardDescription>
@@ -2540,7 +2538,7 @@ export default function TheChronicles() {
               <CardHeader className="pb-3">
                 <CardTitle className="text-base flex items-center gap-2">
                   <AlignLeft className="w-4 h-4 text-primary" />
-                  {selectedLabel} — Content Flow
+                  {selectedDisplayLabel} — Content Flow
                 </CardTitle>
                 <CardDescription>
                   Reading-order content: paragraphs merged across page breaks, headers/footers/page numbers stripped.
@@ -2557,7 +2555,7 @@ export default function TheChronicles() {
               <CardHeader className="pb-3">
                 <CardTitle className="text-base flex items-center gap-2">
                   <FileImage className="w-4 h-4 text-primary" />
-                  {selectedLabel} — Pages
+                  {selectedDisplayLabel} — Pages
                 </CardTitle>
               </CardHeader>
               <CardContent>
@@ -2665,7 +2663,7 @@ export default function TheChronicles() {
                   className={`flex flex-col items-start gap-0.5 rounded-md border px-3 py-2.5 text-left text-sm transition-colors ${mainImportTargetMode === "existing" ? "border-violet-500/60 bg-violet-500/10 text-foreground" : "border-border/50 text-muted-foreground hover:bg-muted/30"} disabled:opacity-40 disabled:cursor-not-allowed`}
                 >
                   <span className="font-medium">Import into selected</span>
-                  <span className="text-xs opacity-70 truncate w-full">{selectedLabel ?? "— no document selected —"}</span>
+                  <span className="text-xs opacity-70 truncate w-full">{selectedDisplayLabel ?? "— no document selected —"}</span>
                 </button>
               </div>
             </div>
@@ -2730,7 +2728,7 @@ export default function TheChronicles() {
             {/* ── Warning ── */}
             {mainImportFile && mainImportTargetMode === "existing" && mainImportMode === "replace" && (
               <div className="rounded-md bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-xs text-amber-300">
-                This will delete and replace all OCR results and summaries for <strong>{selectedLabel}</strong>.
+                This will delete and replace all OCR results and summaries for <strong>{selectedDisplayLabel}</strong>.
                 {mainImportBundleHasImages && " Page images from the bundle will be written to the workspace."}
               </div>
             )}
