@@ -1,11 +1,13 @@
-import { useState } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Terminal, Save, RefreshCw, Wand2, Database, Zap, Search, FileSearch, ScanLine, Table2, Gavel, History, RotateCcw, GitCompare, Braces, Copy } from "lucide-react";
+import { Terminal, Save, RefreshCw, Wand2, Database, Zap, Search, FileSearch, ScanLine, Table2, Gavel, History, RotateCcw, GitCompare, Braces, Copy, GitBranch, Check, Loader2 } from "lucide-react";
+import { Link } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { getLoginUrl } from "@/const";
 
@@ -429,6 +431,32 @@ export default function IncantationsRunes() {
     { enabled: isAuthenticated },
   );
 
+  const { data: allInscriptions, refetch: refetchInscriptions } = trpc.assignments.list.useQuery(undefined, {
+    enabled: isAuthenticated,
+  });
+
+  const activeInscription = useMemo(() => {
+    const tabDef = PROMPT_TABS.find(t => t.name === activeTab);
+    if (!allInscriptions || tabDef?.category !== "pipeline") return null;
+    return allInscriptions.find(i => i.stage === activeTab) ?? null;
+  }, [allInscriptions, activeTab]);
+
+  const [assignVersion, setAssignVersion] = useState<string>("latest");
+
+  useEffect(() => {
+    if (!activeInscription) { setAssignVersion("latest"); return; }
+    const pv = (activeInscription as any).promptVersion;
+    setAssignVersion(pv != null ? String(pv) : "latest");
+  }, [activeInscription?.id, activeTab]);
+
+  const updateAssignmentMutation = trpc.assignments.update.useMutation({
+    onSuccess: () => {
+      toast.success("Stage assignment updated.");
+      refetchInscriptions();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   const seedDefaults = trpc.prompts.seedDefaults.useMutation({
     onSuccess: () => { toast.success("Default incantations inscribed into the Arkanum."); refetch(); },
     onError: (e) => toast.error("Failed to seed: " + e.message),
@@ -737,6 +765,69 @@ export default function IncantationsRunes() {
                   </div>
                 );
               })()}
+            </div>
+          )}
+
+          {/* Stage Assignment — only shown for pipeline prompts */}
+          {activeTabDef.category === "pipeline" && (
+            <div className="p-4 rounded-lg border border-border/40 bg-card/30">
+              <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
+                <GitBranch className="w-4 h-4 text-primary" />
+                Stage Assignment
+                <span className="text-xs text-muted-foreground font-normal">— which version the pipeline uses</span>
+              </h3>
+              {!activeInscription ? (
+                <p className="text-xs text-muted-foreground">
+                  Stage not yet configured in{" "}
+                  <Link href="/assignments" className="text-primary hover:underline">Stage Inscriptions</Link>.
+                  Configure it there first to assign a provider, then return here to pin a prompt version.
+                </p>
+              ) : !versionHistory || versionHistory.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  Save at least one version of this incantation before assigning it to the stage.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Select value={assignVersion} onValueChange={setAssignVersion}>
+                      <SelectTrigger className="h-8 text-xs flex-1">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="latest" className="text-xs">
+                          Latest (always v{versionHistory[0].version})
+                        </SelectItem>
+                        {versionHistory.map((v, idx) => (
+                          <SelectItem key={v.id} value={String(v.version)} className="text-xs">
+                            v{v.version}{idx === 0 ? " (current)" : ""} — {new Date(v.createdAt).toLocaleDateString()}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="gap-1.5 text-xs flex-shrink-0"
+                      onClick={() => {
+                        if (!activeInscription) return;
+                        updateAssignmentMutation.mutate({
+                          id: activeInscription.id,
+                          promptVersion: assignVersion === "latest" ? null : Number(assignVersion),
+                        });
+                      }}
+                      disabled={updateAssignmentMutation.isPending}
+                    >
+                      {updateAssignmentMutation.isPending
+                        ? <Loader2 className="w-3 h-3 animate-spin" />
+                        : <Check className="w-3 h-3" />}
+                      Set Default
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    "Latest" always uses the most recent version. Pin to a specific version to lock this stage against future prompt edits.
+                  </p>
+                </div>
+              )}
             </div>
           )}
         </div>

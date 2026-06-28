@@ -1365,6 +1365,7 @@ export const appRouter = router({
         providerMode: z.enum(["failover", "load_balance"]).optional(),
         /** Name of the system_prompts record to use for this stage (from Incantations & Runes) */
         promptName: z.string().max(128).nullable().optional(),
+        promptVersion: z.number().int().nullable().optional(),
         temperature: z.number().min(0).max(2).nullable().optional(),
         maxTokens: z.number().int().nullable().optional(),
         llmSettings: z.record(z.string(), z.unknown()).nullable().optional(),

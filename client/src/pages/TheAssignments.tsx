@@ -220,6 +220,7 @@ interface InscriptionDialogProps {
     fallbackProviderId?: number | null;
     providerMode?: string | null;
     promptName?: string | null;
+    promptVersion?: number | null;
     temperature?: number | null;
     maxTokens?: number | null;
     isActive?: boolean;
@@ -250,9 +251,9 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
   // Fetch version history for this stage's prompt so we can offer a version picker.
   const { data: versionHistory } = trpc.prompts.history.useQuery({ name: autoPromptName });
   const versions = versionHistory ?? [];
-  // Default to the latest version (index 0 = highest version number).
+  // Initialise from the saved promptVersion; null/undefined means "always use latest".
   const [selectedVersion, setSelectedVersion] = useState<string>(
-    versions.length > 0 ? String(versions[0].version) : "latest"
+    inscription?.promptVersion != null ? String(inscription.promptVersion) : "latest"
   );
 
   const [temperature, setTemperature] = useState<string>(
@@ -493,27 +494,27 @@ function InscriptionDialog({ stage, stageLabel, inscription, providers, onClose,
                 </Badge>
               )}
             </div>
-            {/* Version picker — only shown when multiple versions exist */}
-            {versions.length > 1 && (
+            {/* Version picker — shown whenever versions exist */}
+            {versions.length >= 1 && (
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">Prompt Version</Label>
-                <Select
-                  value={selectedVersion}
-                  onValueChange={setSelectedVersion}
-                >
+                <Select value={selectedVersion} onValueChange={setSelectedVersion}>
                   <SelectTrigger className="bg-muted/30 h-8 text-xs">
                     <SelectValue placeholder="Select version…" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="latest" className="text-xs">
+                      Latest (always v{versions[0].version})
+                    </SelectItem>
                     {versions.map((v, i) => (
                       <SelectItem key={v.id} value={String(v.version)} className="text-xs">
-                        v{v.version}{i === 0 ? " (latest)" : ""} — {new Date(v.createdAt).toLocaleDateString()}
+                        v{v.version}{i === 0 ? " (current)" : ""} — {new Date(v.createdAt).toLocaleDateString()}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
-                  Select an earlier version to pin this stage to a specific prompt revision.
+                  "Latest" always tracks the most recent version. Pin to a specific version to lock this stage against future prompt edits.
                 </p>
               </div>
             )}
@@ -714,6 +715,7 @@ export default function TheAssignments() {
             fallbackProviderId: editingInscription.fallbackProvider?.id ?? null,
             providerMode: (editingInscription as any).providerMode ?? "failover",
             promptName: editingInscription.promptName ?? null,
+            promptVersion: (editingInscription as any).promptVersion ?? null,
             temperature: editingInscription.temperature,
             maxTokens: editingInscription.maxTokens,
             isActive: editingInscription.isActive,
@@ -860,12 +862,17 @@ export default function TheAssignments() {
                                   </div>
                                 )}
 
-                                {/* Prompt reference badge — show friendly label, not snake_case */}
+                                {/* Prompt reference badge — show friendly label + pinned version */}
                                 {inscription.promptName && (
                                   <div className="flex items-center gap-1.5 mt-1">
                                     <BookOpen className="h-3 w-3 text-amber-400/60 flex-shrink-0" />
                                     <Badge variant="outline" className="text-[10px] border-amber-500/40 text-amber-400/80 bg-amber-950/20">
                                       {toFriendlyLabel(inscription.promptName)}
+                                    </Badge>
+                                    <Badge variant="outline" className="text-[10px] border-amber-400/30 text-amber-300/60">
+                                      {(inscription as any).promptVersion != null
+                                        ? `v${(inscription as any).promptVersion}`
+                                        : "Latest"}
                                     </Badge>
                                   </div>
                                 )}
