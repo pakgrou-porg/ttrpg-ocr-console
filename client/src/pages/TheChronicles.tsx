@@ -2024,6 +2024,8 @@ function ContentFlowPanel({ documentId }: { documentId: number }) {
 export default function TheChronicles() {
   const [selectedLabel, setSelectedLabel] = useState<string | null>(null);
   const [selectorOpen, setSelectorOpen] = useState(false);
+  const [docSearch, setDocSearch] = useState("");
+  const [docSort, setDocSort] = useState<"az" | "za" | "recent">("az");
   const [editTarget, setEditTarget] = useState<SummaryRecord | null>(null);
   const [approving, setApproving] = useState<number | null>(null);
   const [collapseLevel, setCollapseLevel] = useState<number | null>(null);
@@ -2077,6 +2079,33 @@ export default function TheChronicles() {
     }
     return map;
   }, [docs, selectedGameSystem]);
+
+  // ── Controlled document selector: filtered + sorted + capped ────────────────
+  const DOC_RENDER_LIMIT = 100;
+
+  const { filteredDocEntries, filteredDocCount, hasMoreDocs } = useMemo(() => {
+    const q = docSearch.trim().toLowerCase();
+    const all = Array.from(groupMap.entries());
+
+    const matched = q
+      ? all.filter(([, g]) =>
+          g.label.toLowerCase().includes(q) ||
+          g.filename.toLowerCase().includes(q),
+        )
+      : all;
+
+    const sorted = [...matched].sort(([keyA, a], [keyB, b]) => {
+      if (docSort === "recent") return Number(keyB) - Number(keyA);
+      const cmp = a.label.localeCompare(b.label) || a.filename.localeCompare(b.filename);
+      return docSort === "za" ? -cmp : cmp;
+    });
+
+    return {
+      filteredDocEntries: sorted.slice(0, DOC_RENDER_LIMIT),
+      filteredDocCount: sorted.length,
+      hasMoreDocs: sorted.length > DOC_RENDER_LIMIT,
+    };
+  }, [groupMap, docSearch, docSort]);
 
   // selectedLabel stores the document-ID string (the map key); this is the display text
   const selectedDisplayLabel = selectedLabel ? (groupMap.get(selectedLabel)?.label ?? null) : null;
@@ -2321,7 +2350,7 @@ export default function TheChronicles() {
                 variant="ghost"
                 size="sm"
                 className="h-8 text-xs gap-1 text-muted-foreground"
-                onClick={() => { setSelectedGameSystem(null); setSelectedLabel(null); }}
+                onClick={() => { setSelectedGameSystem(null); setSelectedLabel(null); setDocSearch(""); }}
               >
                 <RotateCcw className="w-3 h-3" /> Clear filter
               </Button>
@@ -2337,6 +2366,7 @@ export default function TheChronicles() {
                 onClick={() => {
                   setSelectedGameSystem(gs === selectedGameSystem ? null : gs);
                   setSelectedLabel(null);
+                  setDocSearch("");
                 }}
                 className={`px-2.5 py-1 rounded-full text-xs border transition-colors ${
                   gs === selectedGameSystem
@@ -2378,7 +2408,10 @@ export default function TheChronicles() {
           </div>
         </CardHeader>
         <CardContent>
-          <Popover open={selectorOpen} onOpenChange={setSelectorOpen}>
+          <Popover
+            open={selectorOpen}
+            onOpenChange={(open) => { setSelectorOpen(open); if (!open) setDocSearch(""); }}
+          >
             <PopoverTrigger asChild>
               <Button variant="outline" role="combobox" aria-expanded={selectorOpen}
                 className="w-full max-w-lg justify-between font-normal text-left h-auto min-h-9 py-2">
@@ -2390,28 +2423,74 @@ export default function TheChronicles() {
                 <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
               </Button>
             </PopoverTrigger>
-            <PopoverContent className="w-[var(--radix-popover-trigger-width)] max-w-lg p-0" align="start">
-              <Command>
-                <CommandInput placeholder="Search documents…" />
-                <CommandList className="max-h-72">
-                  <CommandEmpty>No documents found.</CommandEmpty>
-                  <CommandGroup>
-                    {Array.from(groupMap.entries()).map(([docKey, group]) => (
-                      <CommandItem key={docKey} value={`${group.label} ${group.filename}`} onSelect={() => {
-                        setSelectedLabel(docKey === selectedLabel ? null : docKey);
-                        setSelectorOpen(false);
-                      }}>
-                        <Check className={`mr-2 h-4 w-4 flex-shrink-0 ${docKey === selectedLabel ? "opacity-100" : "opacity-0"}`} />
-                        <div className="flex-1 min-w-0">
-                          <div className="truncate">{group.label}</div>
-                          {group.filename && (
-                            <div className="text-xs text-muted-foreground/60 font-mono truncate">{group.filename}</div>
-                          )}
-                        </div>
-                      </CommandItem>
+            <PopoverContent className="w-[min(var(--radix-popover-trigger-width),640px)] p-0" align="start">
+              {/* shouldFilter={false}: we control filtering ourselves so only N items are in the DOM */}
+              <Command shouldFilter={false}>
+                <div className="flex items-center border-b border-border/40">
+                  <CommandInput
+                    placeholder={`Search ${groupMap.size} document${groupMap.size !== 1 ? "s" : ""} by title or filename…`}
+                    value={docSearch}
+                    onValueChange={setDocSearch}
+                    className="flex-1"
+                  />
+                  {/* Sort toggle */}
+                  <div className="flex items-center gap-0.5 px-2 flex-shrink-0 border-l border-border/30">
+                    {(["az", "za", "recent"] as const).map(s => (
+                      <button
+                        key={s}
+                        onClick={() => setDocSort(s)}
+                        title={s === "az" ? "A → Z" : s === "za" ? "Z → A" : "Most recently added"}
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-mono transition-colors ${
+                          docSort === s
+                            ? "bg-primary/20 text-primary"
+                            : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
+                        }`}
+                      >
+                        {s === "recent" ? "New" : s.toUpperCase()}
+                      </button>
                     ))}
-                  </CommandGroup>
+                  </div>
+                </div>
+                <CommandList className="max-h-[28rem]">
+                  {filteredDocEntries.length === 0 ? (
+                    <CommandEmpty>
+                      No documents match "{docSearch}".
+                    </CommandEmpty>
+                  ) : (
+                    <CommandGroup>
+                      {filteredDocEntries.map(([docKey, group]) => (
+                        <CommandItem
+                          key={docKey}
+                          value={docKey}
+                          onSelect={() => {
+                            setSelectedLabel(docKey === selectedLabel ? null : docKey);
+                            setSelectorOpen(false);
+                            setDocSearch("");
+                          }}
+                        >
+                          <Check className={`mr-2 h-4 w-4 flex-shrink-0 ${docKey === selectedLabel ? "opacity-100" : "opacity-0"}`} />
+                          <div className="flex-1 min-w-0">
+                            <div className="truncate">{group.label}</div>
+                            {group.filename && (
+                              <div className="text-xs text-muted-foreground/60 font-mono truncate">{group.filename}</div>
+                            )}
+                          </div>
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  )}
                 </CommandList>
+                {/* Footer: count + overflow hint */}
+                <div className="px-3 py-1.5 border-t border-border/30 flex items-center justify-between text-[11px] text-muted-foreground">
+                  <span>
+                    {docSearch
+                      ? `${filteredDocCount} match${filteredDocCount !== 1 ? "es" : ""}${hasMoreDocs ? ` (showing first ${DOC_RENDER_LIMIT})` : ""}`
+                      : `${groupMap.size} document${groupMap.size !== 1 ? "s" : ""}${selectedGameSystem ? ` · ${selectedGameSystem}` : ""}`}
+                  </span>
+                  {hasMoreDocs && (
+                    <span className="text-amber-400/70 font-medium">Type to narrow results</span>
+                  )}
+                </div>
               </Command>
             </PopoverContent>
           </Popover>
