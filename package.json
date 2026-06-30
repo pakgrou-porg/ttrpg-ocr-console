@@ -1,6 +1,6 @@
 {
   "name": "ttrpg-ocr-console",
-  "version": "0.2.83",
+  "version": "0.2.84",
   "type": "module",
   "license": "MIT",
   "scripts": {

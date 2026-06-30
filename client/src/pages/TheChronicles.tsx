@@ -2628,7 +2628,7 @@ export default function TheChronicles() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <ContentFlowPanel documentId={selectedDocIds[0] ?? 0} />
+                <ContentFlowPanel key={selectedLabel ?? ""} documentId={selectedDocIds[0] ?? 0} />
               </CardContent>
             </Card>
           </TabsContent>
@@ -2642,7 +2642,7 @@ export default function TheChronicles() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <PageBrowser documentIds={groupMap.get(selectedLabel)?.ids ?? []} />
+                <PageBrowser key={selectedLabel ?? ""} documentIds={groupMap.get(selectedLabel)?.ids ?? []} />
               </CardContent>
             </Card>
           </TabsContent>
