@@ -15,10 +15,11 @@ import { toast } from "sonner";
 import {
   Cpu, Plus, Trash2, TestTube, Key, Loader2, CheckCircle2, XCircle,
   Wifi, Search, ChevronDown, ChevronUp, Zap, Edit, Info, GitBranch, Star,
-  Eye, RefreshCw, AlertCircle, BarChart2, RotateCcw,
+  Eye, RefreshCw, AlertCircle, BarChart2, RotateCcw, Terminal,
 } from "lucide-react";
 import { PipelineVisualization } from "@/components/PipelineVisualization";
 import TheAssignments from "./TheAssignments";
+import IncantationsRunes from "./IncantationsRunes";
 
 // ─── Provider Presets ─────────────────────────────────────────────────────────
 
@@ -906,11 +907,14 @@ export default function TheArtificers() {
         </DialogContent>
       </Dialog>
 
-      {/* Tabs: Providers list + Assignments + Pipeline Map */}
+      {/* Tabs: Providers list + Incantations + Assignments + Pipeline Map */}
       <Tabs defaultValue="providers" className="space-y-4">
-        <TabsList className="grid w-full max-w-lg grid-cols-3">
+        <TabsList className="grid w-full max-w-2xl grid-cols-4">
           <TabsTrigger value="providers" className="gap-2">
             <Cpu className="h-4 w-4" /> Artificers
+          </TabsTrigger>
+          <TabsTrigger value="incantations" className="gap-2">
+            <Terminal className="h-4 w-4" /> Incantations
           </TabsTrigger>
           <TabsTrigger value="assignments" className="gap-2">
             <GitBranch className="h-4 w-4" /> Assignments
@@ -1256,6 +1260,11 @@ export default function TheArtificers() {
               })}
             </div>
           )}
+        </TabsContent>
+
+        {/* ── Incantations Tab ──────────────────────────────────────── */}
+        <TabsContent value="incantations">
+          <IncantationsRunes embedded />
         </TabsContent>
 
         {/* ── Assignments Tab ───────────────────────────────────────── */}

@@ -15,7 +15,6 @@ import OverseeScribes from "@/pages/OverseeScribes";
 import DivinationOmens from "@/pages/DivinationOmens";
 import ArcaneMechanisms from "@/pages/ArcaneMechanisms";
 import SummoningRituals from "@/pages/SummoningRituals";
-import IncantationsRunes from "@/pages/IncantationsRunes";
 import PersonalSanctum from "@/pages/PersonalSanctum";
 import TheConclave from "@/pages/TheConclave";
 import TheArtificers from "@/pages/TheArtificers";
@@ -69,11 +68,6 @@ function Router() {
         <Route path="/inner-sanctum/summoning-rituals">
           <PermissionGate featureArea="summoning_rituals">
             <SummoningRituals />
-          </PermissionGate>
-        </Route>
-        <Route path="/inner-sanctum/incantations-runes">
-          <PermissionGate featureArea="incantations_runes">
-            <IncantationsRunes />
           </PermissionGate>
         </Route>
         <Route path="/inner-sanctum/trials-of-truth">

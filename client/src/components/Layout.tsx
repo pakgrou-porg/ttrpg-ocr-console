@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { Link, useLocation } from "wouter";
 import {
   BookOpen, Settings, Activity, Edit3, Moon, Sun, Search,
-  HelpCircle, BarChart2, Database, Terminal, ChevronDown,
+  HelpCircle, BarChart2, Database, ChevronDown,
   ChevronRight, User, Scroll, Shield, LogOut, UserCircle,
   Cpu, ClipboardCheck, ClipboardList, ChevronLeft, ScrollText,
 } from "lucide-react";
@@ -61,7 +61,6 @@ const innerSanctumChildren: NavItem[] = [
   { href: "/inner-sanctum/arcane-mechanisms", label: "Arcane Mechanisms", icon: Settings },
   { href: "/inner-sanctum/summoning-rituals", label: "Summoning Rituals", icon: Database },
   { href: "/inner-sanctum/trials-of-truth", label: "Trials of Truth", icon: ClipboardList, minRole: "reviewer" },
-  { href: "/inner-sanctum/incantations-runes", label: "Incantations & Runes", icon: Terminal },
   { href: "/inner-sanctum/the-artificers", label: "The Artificers", icon: Cpu, minRole: "admin" },
   { href: "/inner-sanctum/vault-nexus", label: "The Vault Nexus", icon: Database, minRole: "admin" },
   { href: "/inner-sanctum/the-chronicles", label: "The Chronicles", icon: ScrollText, minRole: "admin" },

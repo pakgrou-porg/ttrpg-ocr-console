@@ -410,7 +410,7 @@ const PROMPT_TABS: PromptTab[] = [
   },
 ];
 
-export default function IncantationsRunes() {
+export default function IncantationsRunes({ embedded }: { embedded?: boolean } = {}) {
   const { isAuthenticated } = useAuth();
   const [activeTab, setActiveTab] = useState(PROMPT_TABS[0].name);
   const [editedText, setEditedText] = useState<Record<string, string>>({});
@@ -512,30 +512,32 @@ export default function IncantationsRunes() {
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
-      <div className="flex items-start justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight mb-1 flex items-center gap-3">
-            <Terminal className="w-8 h-8 text-primary" />
-            Incantations & Runes
-          </h1>
-          <p className="text-muted-foreground">
-            Craft and refine the arcane instructions that guide all AI operations within the Kodex.
-            All prompts are stored in the Arkanum's memory and fetched at runtime.
-          </p>
+      {!embedded && (
+        <div className="flex items-start justify-between">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight mb-1 flex items-center gap-3">
+              <Terminal className="w-8 h-8 text-primary" />
+              Incantations & Runes
+            </h1>
+            <p className="text-muted-foreground">
+              Craft and refine the arcane instructions that guide all AI operations within the Kodex.
+              All prompts are stored in the Arkanum's memory and fetched at runtime.
+            </p>
+          </div>
+          {(!prompts || prompts.length === 0) && !isLoading && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-2 border-primary/40"
+              onClick={() => seedDefaults.mutate()}
+              disabled={seedDefaults.isPending}
+            >
+              <Database className="w-4 h-4" />
+              {seedDefaults.isPending ? "Inscribing..." : "Inscribe Defaults"}
+            </Button>
+          )}
         </div>
-        {(!prompts || prompts.length === 0) && !isLoading && (
-          <Button
-            variant="outline"
-            size="sm"
-            className="gap-2 border-primary/40"
-            onClick={() => seedDefaults.mutate()}
-            disabled={seedDefaults.isPending}
-          >
-            <Database className="w-4 h-4" />
-            {seedDefaults.isPending ? "Inscribing..." : "Inscribe Defaults"}
-          </Button>
-        )}
-      </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
         {/* Tab List */}
