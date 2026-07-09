@@ -35,6 +35,7 @@ import {
   exportDocumentBundle, importDocumentBundle, type DocumentBundle,
   getContentBlocksByDocumentPaginated, getContentBlocksCount,
   deleteContentBlocksByDocumentId,
+  getDocumentMetrics, getAllDocumentMetricsSummary,
 } from "./db";
 import { encryptSecret, decryptSecret, storeSecretHint, renderMaskedSecret } from "./crypto";
 import { startJob, retryPageStages, RetryStage, enqueuePageRetry, exportDocumentAsUnsloth, cancelAllActiveJobs, pauseJob, resumeJob } from "./pipeline/runner";
@@ -2156,6 +2157,20 @@ export const appRouter = router({
           input.bundle as DocumentBundle,
           { overwriteImages: input.overwriteImages, mode: input.mode },
         );
+      }),
+
+    /** Page quality metrics for a single selected document */
+    documentMetrics: protectedProcedure
+      .input(z.object({ documentId: z.number().int() }))
+      .query(async ({ ctx, input }) => {
+        assertDocumentAccess(ctx, await getDocumentById(input.documentId));
+        return getDocumentMetrics(input.documentId);
+      }),
+
+    /** Cross-document metrics summary used for the top-5 "needs attention" leaderboard */
+    allDocumentMetrics: protectedProcedure
+      .query(async () => {
+        return getAllDocumentMetricsSummary();
       }),
   }),
 

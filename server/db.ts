@@ -2627,3 +2627,112 @@ export async function importDocumentBundle(
 
   return { pagesUpdated, pagesCreated, ocrUpserted, summariesCreated: insertedIds.length };
 }
+
+// ── Document page quality metrics ──────────────────────────────────────────────
+
+export async function getDocumentMetrics(documentId: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const result = await db.execute(sql`
+    WITH page_agg AS (
+      SELECT
+        dp.id,
+        dp.layout_type IS NOT NULL                                            AS has_layout,
+        dp.content_regions IS NOT NULL                                        AS has_regions,
+        dp.ocr_completed                                                      AS ocr_complete,
+        BOOL_OR(hq.status IN ('resolved', 'skipped'))                        AS hitl_passed,
+        BOOL_OR(hq.status IN ('queued', 'in_progress', 'escalated'))         AS hitl_pending,
+        MAX(ocr.bbox_overlap_ratio)                                           AS max_overlap
+      FROM document_pages dp
+      LEFT JOIN hitl_queue  hq  ON hq.page_id  = dp.id
+      LEFT JOIN ocr_results ocr ON ocr.page_id = dp.id
+      WHERE dp.document_id = ${documentId}
+        AND dp.part_index  = 0
+      GROUP BY dp.id, dp.layout_type, dp.content_regions, dp.ocr_completed
+    )
+    SELECT
+      COUNT(*)::int                                                                            AS total,
+      COUNT(*) FILTER (WHERE has_layout)::int                                                 AS has_layout,
+      COUNT(*) FILTER (WHERE has_regions)::int                                                AS has_regions,
+      COUNT(*) FILTER (WHERE ocr_complete)::int                                               AS ocr_complete,
+      COUNT(*) FILTER (WHERE COALESCE(hitl_passed, false))::int                              AS hitl_passed,
+      COUNT(*) FILTER (WHERE COALESCE(hitl_pending, false) AND NOT COALESCE(hitl_passed, false))::int AS hitl_pending,
+      COUNT(*) FILTER (WHERE max_overlap > 0.10 AND NOT COALESCE(hitl_passed, false))::int  AS high_overlap_unresolved
+    FROM page_agg
+  `);
+  const n = (v: unknown) => (typeof v === "number" ? v : Number(v ?? 0));
+  const row = (result as unknown as Array<Record<string, unknown>>)[0] ?? {};
+  return {
+    total:                 n(row.total),
+    hasLayout:             n(row.has_layout),
+    hasRegions:            n(row.has_regions),
+    ocrComplete:           n(row.ocr_complete),
+    hitlPassed:            n(row.hitl_passed),
+    hitlPending:           n(row.hitl_pending),
+    highOverlapUnresolved: n(row.high_overlap_unresolved),
+  };
+}
+
+export async function getAllDocumentMetricsSummary() {
+  const db = await getDb();
+  if (!db) return [];
+  const result = await db.execute(sql`
+    WITH page_agg AS (
+      SELECT
+        dp.document_id,
+        dp.id,
+        dp.layout_type IS NOT NULL                                            AS has_layout,
+        dp.content_regions IS NOT NULL                                        AS has_regions,
+        dp.ocr_completed                                                      AS ocr_complete,
+        BOOL_OR(hq.status IN ('resolved', 'skipped'))                        AS hitl_passed,
+        BOOL_OR(hq.status IN ('queued', 'in_progress', 'escalated'))         AS hitl_pending,
+        MAX(ocr.bbox_overlap_ratio)                                           AS max_overlap
+      FROM document_pages dp
+      LEFT JOIN hitl_queue  hq  ON hq.page_id  = dp.id
+      LEFT JOIN ocr_results ocr ON ocr.page_id = dp.id
+      WHERE dp.part_index = 0
+      GROUP BY dp.document_id, dp.id, dp.layout_type, dp.content_regions, dp.ocr_completed
+    ),
+    doc_agg AS (
+      SELECT
+        document_id,
+        COUNT(*)::int                                                                            AS total,
+        COUNT(*) FILTER (WHERE has_layout)::int                                                 AS has_layout,
+        COUNT(*) FILTER (WHERE has_regions)::int                                                AS has_regions,
+        COUNT(*) FILTER (WHERE ocr_complete)::int                                               AS ocr_complete,
+        COUNT(*) FILTER (WHERE COALESCE(hitl_passed, false))::int                              AS hitl_passed,
+        COUNT(*) FILTER (WHERE COALESCE(hitl_pending, false) AND NOT COALESCE(hitl_passed, false))::int AS hitl_pending,
+        COUNT(*) FILTER (WHERE max_overlap > 0.10 AND NOT COALESCE(hitl_passed, false))::int  AS high_overlap_unresolved
+      FROM page_agg
+      GROUP BY document_id
+      HAVING COUNT(*) > 0
+    )
+    SELECT
+      da.document_id,
+      d.title,
+      d.filename,
+      da.total,
+      da.has_layout,
+      da.has_regions,
+      da.ocr_complete,
+      da.hitl_passed,
+      da.hitl_pending,
+      da.high_overlap_unresolved
+    FROM doc_agg da
+    JOIN documents d ON d.id = da.document_id
+    ORDER BY da.document_id
+  `);
+  const n = (v: unknown) => (typeof v === "number" ? v : Number(v ?? 0));
+  return (result as unknown as Array<Record<string, unknown>>).map(row => ({
+    documentId:            n(row.document_id),
+    title:                 (row.title as string | null) ?? null,
+    filename:              (row.filename as string | null) ?? null,
+    total:                 n(row.total),
+    hasLayout:             n(row.has_layout),
+    hasRegions:            n(row.has_regions),
+    ocrComplete:           n(row.ocr_complete),
+    hitlPassed:            n(row.hitl_passed),
+    hitlPending:           n(row.hitl_pending),
+    highOverlapUnresolved: n(row.high_overlap_unresolved),
+  }));
+}

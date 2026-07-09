@@ -16,6 +16,7 @@ import {
   BookOpen, Layers, RefreshCw, RotateCcw, RotateCw, ChevronsUpDown, ScrollText, ChevronRight, ChevronDown,
   Check, Edit, Loader2, FileImage, ChevronLeft, Eye, Code2, AlignLeft,
   History, FileText, Grid3x3, Flag, LayoutGrid, List, Package, Upload,
+  AlertTriangle, TrendingDown, BarChart3,
 } from "lucide-react";
 import { PipelineStatusBadge } from "@/components/PipelineStatusBadge";
 
@@ -2019,6 +2020,234 @@ function ContentFlowPanel({ documentId }: { documentId: number }) {
   );
 }
 
+// ── Document quality metrics panel ────────────────────────────────────────────
+
+type DocMetrics = {
+  total: number;
+  hasLayout: number;
+  hasRegions: number;
+  ocrComplete: number;
+  hitlPassed: number;
+  hitlPending: number;
+  highOverlapUnresolved: number;
+};
+
+type DocMetricRow = DocMetrics & {
+  documentId: number;
+  title: string | null;
+  filename: string | null;
+};
+
+type IssueSeverity = "ok" | "warn" | "error" | "info";
+
+const SEVERITY_STYLES: Record<IssueSeverity, { row: string; icon: string; dot: string }> = {
+  ok:    { row: "",                          icon: "text-emerald-500", dot: "bg-emerald-500" },
+  warn:  { row: "bg-amber-500/5",           icon: "text-amber-500",   dot: "bg-amber-500"   },
+  error: { row: "bg-red-500/5",             icon: "text-red-500",     dot: "bg-red-500"     },
+  info:  { row: "",                          icon: "text-sky-400",     dot: "bg-sky-400"     },
+};
+
+function IssueRow({ icon: Icon, severity, label, detail }: {
+  icon: React.ElementType;
+  severity: IssueSeverity;
+  label: string;
+  detail?: string;
+}) {
+  const s = SEVERITY_STYLES[severity];
+  return (
+    <div className={`flex items-start gap-3 px-3 py-2 rounded-md ${s.row}`}>
+      <Icon className={`w-3.5 h-3.5 mt-0.5 flex-shrink-0 ${s.icon}`} />
+      <div className="min-w-0">
+        <p className="text-xs font-medium leading-snug">{label}</p>
+        {detail && <p className="text-[11px] text-muted-foreground mt-0.5">{detail}</p>}
+      </div>
+    </div>
+  );
+}
+
+function DocumentMetricsPanel({ metrics, docTitle }: { metrics: DocMetrics; docTitle: string | null }) {
+  const { total, hasLayout, hasRegions, ocrComplete, hitlPassed, hitlPending, highOverlapUnresolved } = metrics;
+  const missingLayout  = total - hasLayout;
+  const missingRegions = total - hasRegions;
+  const ocrIncomplete  = total - ocrComplete;
+  const issueCount = [missingLayout, missingRegions, ocrIncomplete, hitlPending, highOverlapUnresolved]
+    .filter(n => n > 0).length;
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <CardTitle className="text-sm font-medium flex items-center gap-2">
+            <BarChart3 className="w-4 h-4 text-primary" />
+            {docTitle ?? "Selected Document"} — Page Health
+          </CardTitle>
+          {issueCount === 0 ? (
+            <span className="flex items-center gap-1.5 text-xs text-emerald-500 font-medium">
+              <Check className="w-3.5 h-3.5" /> All {total} pages fully processed
+            </span>
+          ) : (
+            <span className="flex items-center gap-1.5 text-xs text-amber-500 font-medium">
+              <AlertTriangle className="w-3.5 h-3.5" /> {issueCount} issue{issueCount !== 1 ? "s" : ""} across {total} pages
+            </span>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent className="pt-1">
+        <div className="space-y-0.5">
+          {missingLayout > 0
+            ? <IssueRow icon={LayoutGrid} severity="error" label={`${missingLayout} of ${total} pages are missing layout analysis`} detail="Re-run the layout stage through the pipeline to fix." />
+            : <IssueRow icon={LayoutGrid} severity="ok"    label={`Layout complete — all ${total} pages`} />}
+
+          {missingRegions > 0
+            ? <IssueRow icon={Grid3x3} severity="error" label={`${missingRegions} of ${total} pages have no detected regions`} detail="Re-run region detection. Pages without regions produce empty OCR output." />
+            : <IssueRow icon={Grid3x3} severity="ok"    label={`Region detection complete — all ${total} pages`} />}
+
+          {ocrIncomplete > 0
+            ? <IssueRow icon={FileText} severity="warn" label={`${ocrIncomplete} of ${total} pages have incomplete OCR`} detail="OCR hasn't run or failed on these pages. Check the pipeline for errors." />
+            : <IssueRow icon={FileText} severity="ok"   label={`OCR complete — all ${total} pages`} />}
+
+          {hitlPending > 0
+            ? <IssueRow icon={Flag} severity="warn" label={`${hitlPending} page${hitlPending !== 1 ? "s" : ""} are waiting in the HITL review queue`} detail="Go to the Archivist's Desk to review and resolve." />
+            : hitlPassed > 0
+              ? <IssueRow icon={Flag} severity="ok"   label={`HITL review complete — ${hitlPassed} page${hitlPassed !== 1 ? "s" : ""} resolved`} />
+              : <IssueRow icon={Flag} severity="info" label="No pages have entered HITL review" detail="The pipeline hasn't flagged any pages for manual review yet." />}
+
+          {highOverlapUnresolved > 0
+            ? <IssueRow icon={AlertTriangle} severity="warn" label={`${highOverlapUnresolved} page${highOverlapUnresolved !== 1 ? "s" : ""} have >10% bounding-box overlap and no HITL resolution`} detail="Overlapping regions indicate poor segmentation. Review these pages to correct region boundaries." />
+            : <IssueRow icon={AlertTriangle} severity="ok"   label="No unresolved bounding-box overlap issues" />}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+const ATTENTION_METRICS = [
+  { key: "missingLayout",  label: "No Layout",       getValue: (r: DocMetricRow) => r.total - r.hasLayout,    icon: LayoutGrid,    action: "Re-run layout stage" },
+  { key: "missingRegions", label: "No Regions",      getValue: (r: DocMetricRow) => r.total - r.hasRegions,   icon: Grid3x3,       action: "Re-run region detection" },
+  { key: "ocrIncomplete",  label: "OCR Incomplete",  getValue: (r: DocMetricRow) => r.total - r.ocrComplete,  icon: FileText,      action: "Re-run OCR stage" },
+  { key: "hitlPending",    label: "HITL Pending",    getValue: (r: DocMetricRow) => r.hitlPending,            icon: Flag,          action: "Go to Archivist's Desk" },
+  { key: "highOverlap",    label: "Bbox Overlap",    getValue: (r: DocMetricRow) => r.highOverlapUnresolved,  icon: AlertTriangle, action: "Review overlapping regions" },
+] as const;
+
+function NeedsAttentionPanel({
+  rows,
+  onSelectDocumentId,
+}: {
+  rows: DocMetricRow[];
+  onSelectDocumentId: (id: number) => void;
+}) {
+  const [activeMetric, setActiveMetric] = useState<string>(ATTENTION_METRICS[0].key);
+
+  const totalPages = rows.reduce((s, r) => s + r.total, 0);
+  const docsWithIssues = rows.filter(r =>
+    r.total - r.hasLayout > 0 || r.total - r.hasRegions > 0 ||
+    r.total - r.ocrComplete > 0 || r.hitlPending > 0 || r.highOverlapUnresolved > 0,
+  ).length;
+
+  // Per-metric total affected page counts for the button badges
+  const metricTotals = Object.fromEntries(
+    ATTENTION_METRICS.map(m => [m.key, rows.reduce((s, r) => s + m.getValue(r), 0)]),
+  );
+
+  const metric = ATTENTION_METRICS.find(m => m.key === activeMetric) ?? ATTENTION_METRICS[0];
+  const top5 = [...rows]
+    .map(r => ({ ...r, value: metric.getValue(r) }))
+    .filter(r => r.value > 0)
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 5);
+  const maxValue = top5[0]?.value ?? 1;
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <TrendingDown className="w-4 h-4 text-amber-500" />
+              Collection Overview
+            </CardTitle>
+            <CardDescription className="mt-1">
+              {rows.length} document{rows.length !== 1 ? "s" : ""} · {totalPages.toLocaleString()} pages ingested
+              {docsWithIssues > 0
+                ? ` · ${docsWithIssues} document${docsWithIssues !== 1 ? "s" : ""} need attention`
+                : " · collection is fully processed"}
+            </CardDescription>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {/* Metric selector with total affected counts */}
+        <div className="flex flex-wrap gap-1.5">
+          {ATTENTION_METRICS.map(m => {
+            const MetIcon = m.icon;
+            const total = metricTotals[m.key] ?? 0;
+            return (
+              <button
+                key={m.key}
+                onClick={() => setActiveMetric(m.key)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                  activeMetric === m.key
+                    ? "bg-primary text-primary-foreground"
+                    : total > 0
+                      ? "bg-amber-500/10 text-amber-500 border border-amber-500/20 hover:bg-amber-500/20"
+                      : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
+                }`}
+              >
+                <MetIcon className="w-3 h-3" />
+                {m.label}
+                {total > 0 && <span className="font-mono">{total}</span>}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Top-5 worst documents for the selected metric */}
+        {top5.length === 0 ? (
+          <p className="text-xs text-emerald-500 py-1 flex items-center gap-1.5">
+            <Check className="w-3.5 h-3.5" /> No documents need attention for this metric.
+          </p>
+        ) : (
+          <>
+            <p className="text-[11px] text-muted-foreground">
+              Showing worst {top5.length} for <span className="font-medium text-foreground">{metric.label}</span>
+              {" · "}<span className="italic">{metric.action}</span>
+              {" · Click a document to open it."}
+            </p>
+            <div className="space-y-2">
+              {top5.map((row, i) => {
+                const docLabel = row.title ?? row.filename ?? `Document ${row.documentId}`;
+                const pct = (row.value / maxValue) * 100;
+                return (
+                  <div
+                    key={row.documentId}
+                    className="flex items-center gap-3 cursor-pointer group"
+                    onClick={() => onSelectDocumentId(row.documentId)}
+                  >
+                    <span className="text-xs text-muted-foreground w-4 text-right flex-shrink-0">{i + 1}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className="text-xs font-medium truncate group-hover:text-primary transition-colors">
+                          {docLabel}
+                        </span>
+                        <span className="text-xs font-mono text-amber-500 flex-shrink-0">
+                          {row.value} of {row.total} pages
+                        </span>
+                      </div>
+                      <div className="h-1 rounded-full bg-border/40 overflow-hidden">
+                        <div className="h-full rounded-full bg-amber-500/70 transition-all" style={{ width: `${pct}%` }} />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function TheChronicles() {
@@ -2134,6 +2363,16 @@ export default function TheChronicles() {
   const { data: rawSummaries = [], isLoading, refetch } = trpc.summaries.listByDocumentIds.useQuery(
     { documentIds: selectedDocIds },
     { enabled: selectedDocIds.length > 0 },
+  );
+
+  const { data: docMetrics } = trpc.library.documentMetrics.useQuery(
+    { documentId: selectedDocId! },
+    { enabled: selectedDocId !== null, staleTime: 30_000 },
+  );
+
+  const { data: allDocMetrics } = trpc.library.allDocumentMetrics.useQuery(
+    undefined,
+    { staleTime: 5 * 60_000, refetchInterval: 5 * 60_000 },
   );
 
   const utils = trpc.useUtils();
@@ -2547,9 +2786,23 @@ export default function TheChronicles() {
         </CardContent>
       </Card>
 
-      {/* Stats bar */}
+      {/* Needs Attention leaderboard — always visible when docs are ingested */}
+      {allDocMetrics && allDocMetrics.length > 0 && (
+        <NeedsAttentionPanel
+          rows={allDocMetrics}
+          onSelectDocumentId={(id) => setSelectedLabel(String(id))}
+        />
+      )}
+
+      {/* Per-document quality metrics — shown for the selected document */}
+      {selectedDocId !== null && docMetrics && (
+        <DocumentMetricsPanel metrics={docMetrics} docTitle={selectedDisplayLabel} />
+      )}
+
+      {/* Summary generation status bar */}
       {selectedLabel !== null && rawSummaries.length > 0 && (
         <div className="flex items-center gap-4 flex-wrap">
+          <span className="text-xs text-muted-foreground font-medium">Summaries:</span>
           {Object.entries(stats).map(([status, count]) => (
             <div key={status} className="flex items-center gap-1.5">
               <StatusBadge status={status} />
