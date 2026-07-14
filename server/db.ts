@@ -2736,3 +2736,69 @@ export async function getAllDocumentMetricsSummary() {
     highOverlapUnresolved: n(row.high_overlap_unresolved),
   }));
 }
+
+/** Per-document distribution of layout types and region types — for model-tuning analysis. */
+export async function getDocumentProfileMetrics(documentId: number) {
+  const db = await getDb();
+  if (!db) return null;
+
+  const n = (v: unknown) => (typeof v === "number" ? v : Number(v ?? 0));
+
+  const [layoutRows, regionRows, overlapRows] = await Promise.all([
+    // Layout type distribution (one row per distinct type)
+    db.execute(sql`
+      SELECT layout_type, COUNT(*)::int AS count
+      FROM document_pages
+      WHERE document_id = ${documentId}
+        AND part_index  = 0
+        AND layout_type IS NOT NULL
+      GROUP BY layout_type
+      ORDER BY count DESC
+    `),
+
+    // Region type distribution — unnest the JSONB array
+    db.execute(sql`
+      SELECT
+        reg->>'regionType' AS region_type,
+        COUNT(*)::int       AS count
+      FROM document_pages dp,
+           LATERAL jsonb_array_elements(dp.content_regions) AS reg
+      WHERE dp.document_id    = ${documentId}
+        AND dp.part_index     = 0
+        AND dp.content_regions IS NOT NULL
+      GROUP BY region_type
+      ORDER BY count DESC
+    `),
+
+    // Avg and max bbox overlap per page, for overlap distribution insight
+    db.execute(sql`
+      SELECT
+        COUNT(*)::int                                                       AS pages_with_overlap_data,
+        ROUND(AVG(ocr.bbox_overlap_ratio)::numeric, 3)::float              AS avg_overlap,
+        ROUND(MAX(ocr.bbox_overlap_ratio)::numeric, 3)::float              AS max_overlap,
+        COUNT(*) FILTER (WHERE ocr.bbox_overlap_ratio > 0.10)::int         AS pages_high_overlap,
+        COUNT(*) FILTER (WHERE ocr.bbox_overlap_ratio BETWEEN 0.02 AND 0.10)::int AS pages_low_overlap
+      FROM document_pages dp
+      JOIN ocr_results ocr ON ocr.page_id = dp.id
+      WHERE dp.document_id = ${documentId}
+        AND dp.part_index  = 0
+    `),
+  ]);
+
+  const layoutDist = (layoutRows as unknown as Array<Record<string, unknown>>)
+    .map(r => ({ type: String(r.layout_type ?? "unknown"), count: n(r.count) }));
+
+  const regionDist = (regionRows as unknown as Array<Record<string, unknown>>)
+    .map(r => ({ type: String(r.region_type ?? "unknown"), count: n(r.count) }));
+
+  const ov = (overlapRows as unknown as Array<Record<string, unknown>>)[0] ?? {};
+  const overlapSummary = {
+    pagesWithData:   n(ov.pages_with_overlap_data),
+    avgOverlap:      Number(ov.avg_overlap ?? 0),
+    maxOverlap:      Number(ov.max_overlap ?? 0),
+    pagesHighOverlap: n(ov.pages_high_overlap),
+    pagesLowOverlap:  n(ov.pages_low_overlap),
+  };
+
+  return { layoutDist, regionDist, overlapSummary };
+}

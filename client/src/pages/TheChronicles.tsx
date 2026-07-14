@@ -2248,6 +2248,152 @@ function NeedsAttentionPanel({
   );
 }
 
+// ── Document profile panel (layout + region type distributions) ───────────────
+
+type DistEntry = { type: string; count: number };
+
+const LAYOUT_LABELS: Record<string, string> = {
+  single_column:    "Single Column",
+  two_column:       "Two Column",
+  three_column:     "Three Column",
+  mixed:            "Mixed",
+  full_page_image:  "Full-Page Image",
+  table_dominant:   "Table Dominant",
+  periodical_mixed: "Periodical / Mixed",
+  unknown:          "Unknown",
+};
+
+const PROFILE_REGION_BAR_COLORS: Record<string, string> = {
+  text:          "bg-sky-500",
+  table:         "bg-violet-500",
+  illustration:  "bg-emerald-500",
+  map:           "bg-teal-500",
+  graphic:       "bg-indigo-500",
+  advertisement: "bg-pink-500",
+  header:        "bg-amber-500",
+  footer:        "bg-amber-400",
+  page_number:   "bg-slate-400",
+  sidebar:       "bg-orange-500",
+  callout:       "bg-rose-500",
+  unknown:       "bg-muted-foreground",
+};
+
+function DistBar({ entries, colorFn, labelFn, unit }: {
+  entries: DistEntry[];
+  colorFn: (type: string) => string;
+  labelFn: (type: string) => string;
+  unit: string;
+}) {
+  const total = entries.reduce((s, e) => s + e.count, 0);
+  if (total === 0) return <p className="text-xs text-muted-foreground italic">No data yet.</p>;
+  const max = entries[0]?.count ?? 1;
+  return (
+    <div className="space-y-1.5">
+      {entries.map(({ type, count }) => (
+        <div key={type} className="flex items-center gap-2 min-w-0">
+          <div className="w-28 flex-shrink-0 text-xs text-muted-foreground truncate text-right" title={labelFn(type)}>
+            {labelFn(type)}
+          </div>
+          <div className="flex-1 h-4 rounded bg-border/30 overflow-hidden">
+            <div
+              className={`h-full rounded transition-all ${colorFn(type)}`}
+              style={{ width: `${(count / max) * 100}%`, opacity: 0.8 }}
+            />
+          </div>
+          <span className="text-xs font-mono text-muted-foreground w-20 flex-shrink-0">
+            {count.toLocaleString()} {unit}{count !== 1 ? "s" : ""}
+            <span className="text-[10px] opacity-60 ml-1">({Math.round((count / total) * 100)}%)</span>
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DocumentProfilePanel({ profile }: {
+  profile: {
+    layoutDist: DistEntry[];
+    regionDist: DistEntry[];
+    overlapSummary: { pagesWithData: number; avgOverlap: number; maxOverlap: number; pagesHighOverlap: number; pagesLowOverlap: number };
+  };
+}) {
+  const totalRegions = profile.regionDist.reduce((s, e) => s + e.count, 0);
+  const { overlapSummary: ov } = profile;
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm font-medium flex items-center gap-2">
+          <BarChart3 className="w-4 h-4 text-primary" />
+          Document Profile
+        </CardTitle>
+        <CardDescription>
+          Layout type distribution and region composition — use for model-tuning analysis
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+
+          {/* Layout types */}
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+              Layout Types <span className="normal-case font-normal">({profile.layoutDist.length} distinct)</span>
+            </p>
+            <DistBar
+              entries={profile.layoutDist}
+              colorFn={() => "bg-primary"}
+              labelFn={t => LAYOUT_LABELS[t] ?? t}
+              unit="page"
+            />
+          </div>
+
+          {/* Region types */}
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+              Region Types <span className="normal-case font-normal">({totalRegions.toLocaleString()} total regions)</span>
+            </p>
+            <DistBar
+              entries={profile.regionDist}
+              colorFn={t => PROFILE_REGION_BAR_COLORS[t] ?? "bg-muted-foreground"}
+              labelFn={t => t.replace(/_/g, " ")}
+              unit="region"
+            />
+          </div>
+        </div>
+
+        {/* BBox overlap summary */}
+        {ov.pagesWithData > 0 && (
+          <div className="mt-6 pt-4 border-t border-border/40">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+              Bounding-Box Overlap <span className="normal-case font-normal">({ov.pagesWithData} pages with OCR data)</span>
+            </p>
+            <div className="flex flex-wrap gap-6">
+              <div>
+                <p className="text-[11px] text-muted-foreground">Avg overlap</p>
+                <p className="text-lg font-bold tabular-nums">{(ov.avgOverlap * 100).toFixed(1)}%</p>
+              </div>
+              <div>
+                <p className="text-[11px] text-muted-foreground">Max overlap</p>
+                <p className="text-lg font-bold tabular-nums">{(ov.maxOverlap * 100).toFixed(1)}%</p>
+              </div>
+              <div>
+                <p className="text-[11px] text-muted-foreground">High overlap (&gt;10%)</p>
+                <p className={`text-lg font-bold tabular-nums ${ov.pagesHighOverlap > 0 ? "text-amber-500" : "text-emerald-500"}`}>
+                  {ov.pagesHighOverlap} pages
+                </p>
+              </div>
+              <div>
+                <p className="text-[11px] text-muted-foreground">Low overlap (2–10%)</p>
+                <p className="text-lg font-bold tabular-nums">{ov.pagesLowOverlap} pages</p>
+              </div>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function TheChronicles() {
@@ -2373,6 +2519,11 @@ export default function TheChronicles() {
   const { data: allDocMetrics } = trpc.library.allDocumentMetrics.useQuery(
     undefined,
     { staleTime: 5 * 60_000, refetchInterval: 5 * 60_000 },
+  );
+
+  const { data: docProfile } = trpc.library.documentProfile.useQuery(
+    { documentId: selectedDocId! },
+    { enabled: selectedDocId !== null, staleTime: 60_000 },
   );
 
   const utils = trpc.useUtils();
@@ -2797,6 +2948,11 @@ export default function TheChronicles() {
       {/* Per-document quality metrics — shown for the selected document */}
       {selectedDocId !== null && docMetrics && (
         <DocumentMetricsPanel metrics={docMetrics} docTitle={selectedDisplayLabel} />
+      )}
+
+      {/* Per-document profile: layout + region type distributions */}
+      {selectedDocId !== null && docProfile && (
+        <DocumentProfilePanel profile={docProfile} />
       )}
 
       {/* Summary generation status bar */}

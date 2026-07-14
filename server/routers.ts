@@ -35,7 +35,7 @@ import {
   exportDocumentBundle, importDocumentBundle, type DocumentBundle,
   getContentBlocksByDocumentPaginated, getContentBlocksCount,
   deleteContentBlocksByDocumentId,
-  getDocumentMetrics, getAllDocumentMetricsSummary,
+  getDocumentMetrics, getAllDocumentMetricsSummary, getDocumentProfileMetrics,
 } from "./db";
 import { encryptSecret, decryptSecret, storeSecretHint, renderMaskedSecret } from "./crypto";
 import { startJob, retryPageStages, RetryStage, enqueuePageRetry, exportDocumentAsUnsloth, cancelAllActiveJobs, pauseJob, resumeJob } from "./pipeline/runner";
@@ -2171,6 +2171,14 @@ export const appRouter = router({
     allDocumentMetrics: protectedProcedure
       .query(async () => {
         return getAllDocumentMetricsSummary();
+      }),
+
+    /** Layout-type and region-type distribution for a single document (model-tuning analysis) */
+    documentProfile: protectedProcedure
+      .input(z.object({ documentId: z.number().int() }))
+      .query(async ({ ctx, input }) => {
+        assertDocumentAccess(ctx, await getDocumentById(input.documentId));
+        return getDocumentProfileMetrics(input.documentId);
       }),
   }),
 
