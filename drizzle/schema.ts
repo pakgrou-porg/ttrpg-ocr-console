@@ -535,6 +535,8 @@ export const documentPages = pgTable("document_pages", {
   annotatedForTraining: boolean("annotated_for_training").notNull().default(false),
   /** train / val / test — set by Orchestra or manually; null = unassigned. */
   datasetSplit: varchar("dataset_split", { length: 8 }).$type<"train" | "val" | "test">(),
+  /** FK to layout_models.id — which fine-tuned model produced the bbox detection for this page. Null = base LLM. */
+  layoutModelId: integer("layout_model_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (t) => ({
@@ -914,3 +916,42 @@ export const documentContentBlocks = pgTable("document_content_blocks", {
 
 export type DocumentContentBlock = typeof documentContentBlocks.$inferSelect;
 export type InsertDocumentContentBlock = typeof documentContentBlocks.$inferInsert;
+
+// ─── Layout Models ────────────────────────────────────────────────────────────
+// Tracks fine-tuned layout/bbox detection models trained via Orchestra.
+// documentPages.layoutModelId FK points here when a page was processed by a
+// fine-tuned model rather than the base LLM.
+
+export const layoutModels = pgTable("layout_models", {
+  id: serial("id").primaryKey(),
+  /** Short identifier, e.g. "florence2-ttrpg-v1". Must be unique. */
+  name: varchar("name", { length: 128 }).notNull().unique(),
+  /** Human-readable display name. */
+  displayName: varchar("display_name", { length: 256 }),
+  /** Base model the fine-tune started from, e.g. "microsoft/Florence-2-base". */
+  baseModel: varchar("base_model", { length: 256 }).notNull(),
+  /** Local filesystem path or remote URI to the saved model checkpoint. */
+  checkpointPath: text("checkpoint_path"),
+  /** Hyperparameter config used for this training run. */
+  trainingConfig: jsonb("training_config").$type<Record<string, unknown>>(),
+  /** Evaluation metrics: MacroF1, MacroIoU, per-class scores, etc. */
+  metrics: jsonb("metrics").$type<{
+    macroF1?: number;
+    macroIoU?: number;
+    classWeightedPenalty?: number;
+    compositeScore?: number;
+    perClass?: Record<string, { f1: number; iou: number; recall: number; precision: number }>;
+    evalPages?: number;
+  }>(),
+  /** When the Orchestra training run completed. Null while training is in progress. */
+  trainedAt: timestamp("trained_at"),
+  /** Whether this model is currently the active inference model for new pages. */
+  isActive: boolean("is_active").notNull().default(false),
+  /** Free-form notes about this training run. */
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export type LayoutModel = typeof layoutModels.$inferSelect;
+export type InsertLayoutModel = typeof layoutModels.$inferInsert;
