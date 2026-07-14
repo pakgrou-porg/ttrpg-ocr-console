@@ -37,6 +37,8 @@ import {
   deleteContentBlocksByDocumentId,
   getDocumentMetrics, getAllDocumentMetricsSummary, getDocumentProfileMetrics,
   exportCOCODataset,
+  getAllLayoutModels, getLayoutModelById, createLayoutModel, updateLayoutModel, setActiveLayoutModel,
+  submitLayoutInference,
 } from "./db";
 import { encryptSecret, decryptSecret, storeSecretHint, renderMaskedSecret } from "./crypto";
 import { startJob, retryPageStages, RetryStage, enqueuePageRetry, exportDocumentAsUnsloth, cancelAllActiveJobs, pauseJob, resumeJob } from "./pipeline/runner";
@@ -2189,6 +2191,33 @@ export const appRouter = router({
         documentIds: z.array(z.number().int()).optional(),
       }))
       .query(async ({ input }) => exportCOCODataset(input)),
+
+    /** Accept bbox inference results from a fine-tuned model (Orchestra) and write them to a page. */
+    submitLayoutInference: adminProcedure
+      .input(z.object({
+        pageId: z.number().int(),
+        layoutModelId: z.number().int(),
+        layoutType: z.string().max(64).optional(),
+        regions: z.array(z.object({
+          sequence: z.number().int(),
+          type: z.string().max(64),
+          label: z.string().max(160).optional(),
+          bbox: z.object({
+            x: z.number(),
+            y: z.number(),
+            w: z.number(),
+            h: z.number(),
+          }),
+          confidence: z.number().int().min(0).max(100).optional(),
+        })).min(1),
+      }))
+      .mutation(async ({ input }) => {
+        const model = await getLayoutModelById(input.layoutModelId);
+        if (!model) throw new TRPCError({ code: "NOT_FOUND", message: "Layout model not found" });
+        const result = await submitLayoutInference(input);
+        if (!result) throw new TRPCError({ code: "NOT_FOUND", message: "Page not found" });
+        return result;
+      }),
   }),
 
   // ─── HITL Queue (Archivist's Desk) ────────────────────────────────────────
@@ -3305,6 +3334,86 @@ export const appRouter = router({
         assertDocumentAccess(ctx, await getDocumentById(input.documentId));
         await deleteContentBlocksByDocumentId(input.documentId);
         return { success: true };
+      }),
+  }),
+
+  // ─── Layout Models (Orchestra model registry) ──────────────────────────────
+  models: router({
+    /** List all registered layout models, newest first. */
+    list: adminProcedure
+      .query(() => getAllLayoutModels()),
+
+    /** Get a single layout model by ID. */
+    get: adminProcedure
+      .input(z.object({ id: z.number().int() }))
+      .query(async ({ input }) => {
+        const model = await getLayoutModelById(input.id);
+        if (!model) throw new TRPCError({ code: "NOT_FOUND", message: "Layout model not found" });
+        return model;
+      }),
+
+    /** Register a new fine-tuned model checkpoint. */
+    create: adminProcedure
+      .input(z.object({
+        name: z.string().min(1).max(128),
+        displayName: z.string().max(256).optional(),
+        baseModel: z.string().min(1).max(256),
+        checkpointPath: z.string().optional(),
+        trainingConfig: z.record(z.unknown()).optional(),
+        metrics: z.object({
+          macroF1:              z.number().optional(),
+          macroIoU:             z.number().optional(),
+          classWeightedPenalty: z.number().optional(),
+          compositeScore:       z.number().optional(),
+          perClass:             z.record(z.object({ f1: z.number(), iou: z.number(), recall: z.number(), precision: z.number() })).optional(),
+          evalPages:            z.number().int().optional(),
+        }).optional(),
+        trainedAt: z.string().datetime().optional(),
+        notes: z.string().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const model = await createLayoutModel({
+          ...input,
+          trainedAt: input.trainedAt ? new Date(input.trainedAt) : null,
+        });
+        if (!model) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to create layout model" });
+        return model;
+      }),
+
+    /** Update metadata or metrics on an existing model. */
+    update: adminProcedure
+      .input(z.object({
+        id: z.number().int(),
+        displayName:    z.string().max(256).optional(),
+        checkpointPath: z.string().optional(),
+        trainingConfig: z.record(z.unknown()).optional(),
+        metrics: z.object({
+          macroF1:              z.number().optional(),
+          macroIoU:             z.number().optional(),
+          classWeightedPenalty: z.number().optional(),
+          compositeScore:       z.number().optional(),
+          perClass:             z.record(z.object({ f1: z.number(), iou: z.number(), recall: z.number(), precision: z.number() })).optional(),
+          evalPages:            z.number().int().optional(),
+        }).optional(),
+        trainedAt: z.string().datetime().optional(),
+        notes: z.string().optional(),
+      }))
+      .mutation(async ({ input: { id, trainedAt, ...rest } }) => {
+        const model = await updateLayoutModel(id, {
+          ...rest,
+          ...(trainedAt && { trainedAt: new Date(trainedAt) }),
+        });
+        if (!model) throw new TRPCError({ code: "NOT_FOUND", message: "Layout model not found" });
+        return model;
+      }),
+
+    /** Mark one model as active (deactivates all others). */
+    setActive: adminProcedure
+      .input(z.object({ id: z.number().int() }))
+      .mutation(async ({ input }) => {
+        const model = await setActiveLayoutModel(input.id);
+        if (!model) throw new TRPCError({ code: "NOT_FOUND", message: "Layout model not found" });
+        return model;
       }),
   }),
 });

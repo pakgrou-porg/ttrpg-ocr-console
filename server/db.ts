@@ -28,6 +28,7 @@ import {
   providerExchangeLogs, InsertProviderExchangeLog, PROVIDER_EXCHANGE_LOG_LIMIT,
   documentContentBlocks, InsertDocumentContentBlock,
   CONTENT_REGION_TYPES,
+  layoutModels, InsertLayoutModel,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
@@ -2880,4 +2881,98 @@ export async function exportCOCODataset(opts: {
     images,
     annotations,
   };
+}
+
+// ─── Layout Models CRUD ───────────────────────────────────────────────────────
+
+export async function getAllLayoutModels() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(layoutModels).orderBy(desc(layoutModels.createdAt));
+}
+
+export async function getLayoutModelById(id: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(layoutModels).where(eq(layoutModels.id, id)).limit(1);
+  return rows[0] ?? null;
+}
+
+export async function createLayoutModel(data: InsertLayoutModel) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.insert(layoutModels).values(data).returning();
+  return rows[0] ?? null;
+}
+
+export async function updateLayoutModel(id: number, data: Partial<InsertLayoutModel>) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .update(layoutModels)
+    .set({ ...data, updatedAt: new Date() })
+    .where(eq(layoutModels.id, id))
+    .returning();
+  return rows[0] ?? null;
+}
+
+export async function setActiveLayoutModel(id: number) {
+  const db = await getDb();
+  if (!db) return null;
+  await db.update(layoutModels).set({ isActive: false, updatedAt: new Date() });
+  const rows = await db
+    .update(layoutModels)
+    .set({ isActive: true, updatedAt: new Date() })
+    .where(eq(layoutModels.id, id))
+    .returning();
+  return rows[0] ?? null;
+}
+
+// ─── Layout Inference Intake ──────────────────────────────────────────────────
+
+export async function submitLayoutInference(input: {
+  pageId: number;
+  layoutModelId: number;
+  layoutType?: string;
+  regions: Array<{
+    sequence: number;
+    type: string;
+    label?: string;
+    bbox: { x: number; y: number; w: number; h: number };
+    confidence?: number;
+  }>;
+}) {
+  const db = await getDb();
+  if (!db) return null;
+
+  const normalised = input.regions.map(r => {
+    const x = Math.min(Math.max(0, r.bbox.x), 99.9);
+    const y = Math.min(Math.max(0, r.bbox.y), 99.9);
+    const w = Math.min(Math.max(0.1, r.bbox.w), 100 - x);
+    const h = Math.min(Math.max(0.1, r.bbox.h), 100 - y);
+    const confidence =
+      typeof r.confidence === "number" && Number.isFinite(r.confidence)
+        ? Math.max(0, Math.min(100, Math.round(r.confidence)))
+        : undefined;
+    return {
+      sequence: r.sequence,
+      type: r.type,
+      label: r.label ?? r.type,
+      bbox: { x, y, w, h },
+      ...(confidence !== undefined && { confidence }),
+    };
+  });
+
+  const rows = await db
+    .update(documentPages)
+    .set({
+      contentRegions: normalised,
+      layoutModelId: input.layoutModelId,
+      ...(input.layoutType && { layoutType: input.layoutType }),
+      updatedAt: new Date(),
+    })
+    .where(eq(documentPages.id, input.pageId))
+    .returning({ id: documentPages.id });
+
+  return rows[0] ? { pageId: rows[0].id, regionsStored: normalised.length } : null;
 }
