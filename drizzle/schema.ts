@@ -529,6 +529,10 @@ export const documentPages = pgTable("document_pages", {
   parentPageId: integer("parent_page_id"),
   /** Bounding box (% of original page, 0–100) from which this part was cropped. */
   sourceRegionBbox: jsonb("source_region_bbox").$type<{ x: number; y: number; w: number; h: number } | null>(),
+  /** True when this page has been human-reviewed and is suitable as a ground-truth training sample. */
+  annotatedForTraining: boolean("annotated_for_training").notNull().default(false),
+  /** train / val / test — set by Orchestra or manually; null = unassigned. */
+  datasetSplit: varchar("dataset_split", { length: 8 }).$type<"train" | "val" | "test">(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (t) => ({
