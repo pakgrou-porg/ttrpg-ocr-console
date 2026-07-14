@@ -82,10 +82,11 @@ Identify distinct content regions in the page image and estimate each region's b
 ${STRICT_RULES}
 
 Required output schema (list every visible region):
-{"regions":[{"sequence":1,"type":"…","label":"…","bbox":{"x":0,"y":0,"w":100,"h":100}}]}
+{"regions":[{"sequence":1,"type":"…","label":"…","bbox":{"x":0,"y":0,"w":100,"h":100},"confidence":85}]}
 
 type must be one of: heading, subheading, paragraph, list, sidebar, callout, caption, table, stat_block, illustration, map, graphic, advertisement, header, footer, page_number, unknown
 bbox values are percentages of the page width/height (0–100). x,y = top-left corner; w,h = width and height.
+confidence: integer 0–100 reflecting certainty about the region type classification.
 Estimate bounding boxes as precisely as possible from the visual layout.
 sequence: 1-based reading order. For single-column pages number top-to-bottom. For multi-column pages number all regions in column 1 first (top-to-bottom), then all regions in column 2, and so on — full-width regions (spanning all columns) slot in at their vertical position relative to the columns they interrupt.`;
 
@@ -538,13 +539,20 @@ function validateBboxRegions(data: Record<string, unknown>): any[] {
     const rawType = String(region.type ?? "paragraph").trim().toLowerCase();
     const type = REGION_TYPE_ALIASES[rawType] ?? (REGION_TYPES.has(rawType) ? rawType : "paragraph");
 
+    const rawConf = region.confidence;
+    const confidence = typeof rawConf === "number" && Number.isFinite(rawConf)
+      ? Math.max(0, Math.min(100, Math.round(rawConf)))
+      : undefined;
+
+    const { confidence: _dropConf, ...restRegion } = region;
     return [{
-      ...region,
+      ...restRegion,
       type,
       label: typeof region.label === "string" && region.label.trim()
         ? region.label.trim().slice(0, 160)
         : type,
       bbox: { x, y, w: clampedW, h: clampedH },
+      ...(confidence !== undefined && { confidence }),
     }];
   });
 

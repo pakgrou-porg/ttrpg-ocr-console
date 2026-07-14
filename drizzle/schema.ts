@@ -486,9 +486,11 @@ export const documentPages = pgTable("document_pages", {
   layoutType: varchar("layout_type", { length: 64 }),
   contentRegions: jsonb("content_regions").$type<Array<{
     sequence: number;
-    regionType: string;
+    type: string;
+    regionType?: string;
     bbox: { x: number; y: number; w: number; h: number };
     confidence?: number;
+    label?: string;
     childImageUrl?: string;
     contentTypeFlags?: string[];
     isMixedBoundary?: boolean;

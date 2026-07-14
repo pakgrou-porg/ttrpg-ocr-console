@@ -2855,7 +2855,7 @@ export async function exportCOCODataset(opts: {
       height: page.imageHeight ?? 0,
     });
     for (const region of (page.contentRegions ?? [])) {
-      const catId = catIndex[region.regionType];
+      const catId = catIndex[(region as any).type ?? region.regionType];
       if (!catId) continue;
       annotations.push({
         id: annId++,
