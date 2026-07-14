@@ -27,6 +27,7 @@ import {
   contentSummaries, InsertContentSummary,
   providerExchangeLogs, InsertProviderExchangeLog, PROVIDER_EXCHANGE_LOG_LIMIT,
   documentContentBlocks, InsertDocumentContentBlock,
+  CONTENT_REGION_TYPES,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
@@ -2801,4 +2802,82 @@ export async function getDocumentProfileMetrics(documentId: number) {
   };
 
   return { layoutDist, regionDist, overlapSummary };
+}
+
+// ─── COCO JSON export ─────────────────────────────────────────────────────────
+
+export async function exportCOCODataset(opts: {
+  split?: "train" | "val" | "test";
+  documentIds?: number[];
+}) {
+  const db = await getDb();
+  if (!db) return null;
+
+  const conditions: SQL[] = [eq(documentPages.annotatedForTraining, true)];
+  if (opts.split) conditions.push(eq(documentPages.datasetSplit, opts.split));
+  if (opts.documentIds?.length) conditions.push(inArray(documentPages.documentId, opts.documentIds));
+
+  const pages = await db
+    .select({
+      id: documentPages.id,
+      documentId: documentPages.documentId,
+      pageNumber: documentPages.pageNumber,
+      imageWidth: documentPages.imageWidth,
+      imageHeight: documentPages.imageHeight,
+      rawPngUrl: documentPages.rawPngUrl,
+      contentRegions: documentPages.contentRegions,
+    })
+    .from(documentPages)
+    .where(and(...conditions))
+    .orderBy(asc(documentPages.documentId), asc(documentPages.pageNumber));
+
+  const categories = Array.from(CONTENT_REGION_TYPES).map((name, i) => ({
+    id: i + 1,
+    name,
+    supercategory: "region",
+  }));
+  const catIndex: Record<string, number> = Object.fromEntries(
+    categories.map(c => [c.name, c.id]),
+  );
+
+  const images: Array<{ id: number; file_name: string; width: number; height: number }> = [];
+  const annotations: Array<{
+    id: number; image_id: number; category_id: number;
+    bbox: [number, number, number, number]; area: number; iscrowd: 0;
+  }> = [];
+  let annId = 1;
+
+  for (const page of pages) {
+    images.push({
+      id: page.id,
+      file_name: page.rawPngUrl ?? `doc_${page.documentId}_page_${page.pageNumber}.png`,
+      width: page.imageWidth ?? 0,
+      height: page.imageHeight ?? 0,
+    });
+    for (const region of (page.contentRegions ?? [])) {
+      const catId = catIndex[region.regionType];
+      if (!catId) continue;
+      annotations.push({
+        id: annId++,
+        image_id: page.id,
+        category_id: catId,
+        bbox: [region.bbox.x, region.bbox.y, region.bbox.w, region.bbox.h],
+        area: region.bbox.w * region.bbox.h,
+        iscrowd: 0,
+      });
+    }
+  }
+
+  return {
+    info: {
+      description: "TTRPG OCR Layout Dataset",
+      version: "1.0",
+      year: new Date().getFullYear(),
+      date_created: new Date().toISOString(),
+      split: opts.split ?? "all",
+    },
+    categories,
+    images,
+    annotations,
+  };
 }

@@ -36,6 +36,7 @@ import {
   getContentBlocksByDocumentPaginated, getContentBlocksCount,
   deleteContentBlocksByDocumentId,
   getDocumentMetrics, getAllDocumentMetricsSummary, getDocumentProfileMetrics,
+  exportCOCODataset,
 } from "./db";
 import { encryptSecret, decryptSecret, storeSecretHint, renderMaskedSecret } from "./crypto";
 import { startJob, retryPageStages, RetryStage, enqueuePageRetry, exportDocumentAsUnsloth, cancelAllActiveJobs, pauseJob, resumeJob } from "./pipeline/runner";
@@ -2180,6 +2181,14 @@ export const appRouter = router({
         assertDocumentAccess(ctx, await getDocumentById(input.documentId));
         return getDocumentProfileMetrics(input.documentId);
       }),
+
+    /** Export annotated pages as a COCO JSON dataset for layout model training (Orchestra). */
+    exportCOCO: adminProcedure
+      .input(z.object({
+        split: z.enum(["train", "val", "test"]).optional(),
+        documentIds: z.array(z.number().int()).optional(),
+      }))
+      .query(async ({ input }) => exportCOCODataset(input)),
   }),
 
   // ─── HITL Queue (Archivist's Desk) ────────────────────────────────────────
