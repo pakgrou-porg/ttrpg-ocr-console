@@ -456,8 +456,16 @@ export const LAYOUT_TYPES = [
 export type LayoutType = (typeof LAYOUT_TYPES)[number];
 
 export const CONTENT_REGION_TYPES = [
-  "text", "table", "illustration", "map", "graphic", "advertisement",
-  "header", "footer", "page_number", "sidebar", "callout", "unknown",
+  // Body content
+  "text", "list", "footnote",
+  // Structural
+  "header", "subheader", "footer", "page_number",
+  // TTRPG-specific
+  "stat_block", "callout", "sidebar",
+  // Visual / tabular
+  "table", "illustration", "map", "graphic", "diagram", "advertisement",
+  // Fallback
+  "unknown",
 ] as const;
 export type ContentRegionType = (typeof CONTENT_REGION_TYPES)[number];
 
@@ -480,6 +488,7 @@ export const documentPages = pgTable("document_pages", {
     sequence: number;
     regionType: string;
     bbox: { x: number; y: number; w: number; h: number };
+    confidence?: number;
     childImageUrl?: string;
     contentTypeFlags?: string[];
     isMixedBoundary?: boolean;

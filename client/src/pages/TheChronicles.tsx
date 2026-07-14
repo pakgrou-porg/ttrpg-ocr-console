@@ -2265,16 +2265,21 @@ const LAYOUT_LABELS: Record<string, string> = {
 
 const PROFILE_REGION_BAR_COLORS: Record<string, string> = {
   text:          "bg-sky-500",
+  list:          "bg-sky-400",
+  footnote:      "bg-slate-400",
+  header:        "bg-amber-500",
+  subheader:     "bg-amber-400",
+  footer:        "bg-amber-300",
+  page_number:   "bg-slate-300",
+  stat_block:    "bg-red-500",
+  callout:       "bg-rose-500",
+  sidebar:       "bg-orange-500",
   table:         "bg-violet-500",
   illustration:  "bg-emerald-500",
   map:           "bg-teal-500",
   graphic:       "bg-indigo-500",
+  diagram:       "bg-lime-500",
   advertisement: "bg-pink-500",
-  header:        "bg-amber-500",
-  footer:        "bg-amber-400",
-  page_number:   "bg-slate-400",
-  sidebar:       "bg-orange-500",
-  callout:       "bg-rose-500",
   unknown:       "bg-muted-foreground",
 };
 

@@ -355,7 +355,7 @@ Output JSON Schema:
   "regions": [
     {
       "sequence": "integer",
-      "regionType": "enum (text | table | illustration | map | graphic | advertisement | header | footer | page_number | sidebar | callout | unknown)",
+      "regionType": "enum (text | list | footnote | header | subheader | footer | page_number | stat_block | callout | sidebar | table | illustration | map | graphic | diagram | advertisement | unknown)",
       "bbox": { "x": "integer", "y": "integer", "w": "integer", "h": "integer" },
       "contentTypeFlags": ["array of strings"],
       "isMixedBoundary": "boolean",
@@ -389,7 +389,7 @@ Output JSON Schema:
   "regions": [
     {
       "sequence": "integer",
-      "regionType": "enum (text | table | illustration | map | graphic | advertisement | header | footer | page_number | sidebar | callout | unknown)",
+      "regionType": "enum (text | list | footnote | header | subheader | footer | page_number | stat_block | callout | sidebar | table | illustration | map | graphic | diagram | advertisement | unknown)",
       "bbox": { "x": "integer", "y": "integer", "w": "integer", "h": "integer" },
       "contentTypeFlags": ["array of strings"],
       "isMixedBoundary": "boolean",
