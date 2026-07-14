@@ -2805,6 +2805,76 @@ export async function getDocumentProfileMetrics(documentId: number) {
   return { layoutDist, regionDist, overlapSummary };
 }
 
+// ─── Dataset stats ────────────────────────────────────────────────────────────
+
+export async function getDatasetStats() {
+  const db = await getDb();
+  if (!db) return null;
+
+  const [summaryRows, docRows] = await Promise.all([
+    db.execute(sql`
+      SELECT
+        COUNT(*) FILTER (WHERE annotated_for_training)::int                            AS total_annotated,
+        COUNT(*) FILTER (WHERE dataset_split = 'train')::int                           AS train,
+        COUNT(*) FILTER (WHERE dataset_split = 'val')::int                             AS val,
+        COUNT(*) FILTER (WHERE dataset_split = 'test')::int                            AS test,
+        COUNT(*) FILTER (WHERE annotated_for_training AND dataset_split IS NULL)::int  AS unassigned,
+        COUNT(*) FILTER (WHERE ocr_completed AND NOT annotated_for_training)::int      AS ocr_complete_unannotated
+      FROM document_pages
+      WHERE part_index = 0
+    `),
+    db.execute(sql`
+      WITH doc_agg AS (
+        SELECT
+          dp.document_id,
+          COUNT(*)::int                                                          AS total_pages,
+          COUNT(*) FILTER (WHERE dp.annotated_for_training)::int                AS annotated_pages,
+          COUNT(*) FILTER (WHERE dp.dataset_split = 'train')::int               AS train_pages,
+          COUNT(*) FILTER (WHERE dp.dataset_split = 'val')::int                 AS val_pages,
+          COUNT(*) FILTER (WHERE dp.dataset_split = 'test')::int                AS test_pages
+        FROM document_pages dp
+        WHERE dp.part_index = 0
+        GROUP BY dp.document_id
+        HAVING COUNT(*) FILTER (WHERE dp.annotated_for_training) > 0
+      )
+      SELECT
+        d.id    AS document_id,
+        d.title,
+        da.total_pages,
+        da.annotated_pages,
+        da.train_pages,
+        da.val_pages,
+        da.test_pages
+      FROM doc_agg da
+      JOIN documents d ON d.id = da.document_id
+      ORDER BY da.annotated_pages DESC
+    `),
+  ]);
+
+  const n = (v: unknown) => (typeof v === "number" ? v : Number(v ?? 0));
+  const s = (summaryRows as unknown as Array<Record<string, unknown>>)[0] ?? {};
+
+  return {
+    totalAnnotated: n(s.total_annotated),
+    bySplit: {
+      train:      n(s.train),
+      val:        n(s.val),
+      test:       n(s.test),
+      unassigned: n(s.unassigned),
+    },
+    ocrCompleteUnannotated: n(s.ocr_complete_unannotated),
+    byDocument: (docRows as unknown as Array<Record<string, unknown>>).map(r => ({
+      documentId:     n(r.document_id),
+      title:          String(r.title ?? `Document #${r.document_id}`),
+      totalPages:     n(r.total_pages),
+      annotatedPages: n(r.annotated_pages),
+      trainPages:     n(r.train_pages),
+      valPages:       n(r.val_pages),
+      testPages:      n(r.test_pages),
+    })),
+  };
+}
+
 // ─── COCO JSON export ─────────────────────────────────────────────────────────
 
 export async function exportCOCODataset(opts: {

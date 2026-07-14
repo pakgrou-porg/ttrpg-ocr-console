@@ -36,6 +36,7 @@ import {
   getContentBlocksByDocumentPaginated, getContentBlocksCount,
   deleteContentBlocksByDocumentId,
   getDocumentMetrics, getAllDocumentMetricsSummary, getDocumentProfileMetrics,
+  getDatasetStats,
   exportCOCODataset,
   getAllLayoutModels, getLayoutModelById, createLayoutModel, updateLayoutModel, setActiveLayoutModel,
   submitLayoutInference,
@@ -2175,6 +2176,10 @@ export const appRouter = router({
       .query(async () => {
         return getAllDocumentMetricsSummary();
       }),
+
+    /** Annotation coverage stats for the training dataset (split breakdown, per-document counts). */
+    datasetStats: protectedProcedure
+      .query(() => getDatasetStats()),
 
     /** Layout-type and region-type distribution for a single document (model-tuning analysis) */
     documentProfile: protectedProcedure

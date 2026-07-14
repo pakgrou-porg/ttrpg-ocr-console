@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from "react";
+import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,7 @@ import {
   Check, Edit, Loader2, FileImage, ChevronLeft, Eye, Code2, AlignLeft,
   History, FileText, Grid3x3, Flag, LayoutGrid, List, Package, Upload,
   AlertTriangle, TrendingDown, BarChart3,
+  Database, Download, Star,
 } from "lucide-react";
 import { PipelineStatusBadge } from "@/components/PipelineStatusBadge";
 
@@ -2399,9 +2401,200 @@ function DocumentProfilePanel({ profile }: {
   );
 }
 
+// ── Training Dataset Health panel ─────────────────────────────────────────────
+
+function TrainingDatasetPanel({ isAdmin }: { isAdmin: boolean }) {
+  const { data: stats } = trpc.library.datasetStats.useQuery(undefined, { staleTime: 5 * 60_000 });
+  const { data: models } = trpc.models.list.useQuery(undefined, {
+    staleTime: 5 * 60_000, retry: false, enabled: isAdmin,
+  });
+  const utils = trpc.useUtils();
+  const [exporting, setExporting] = useState<string | null>(null);
+
+  if (!stats || (stats.totalAnnotated === 0 && stats.ocrCompleteUnannotated === 0)) return null;
+
+  const handleExport = async (split?: "train" | "val" | "test") => {
+    const key = split ?? "all";
+    setExporting(key);
+    try {
+      const data = await utils.library.exportCOCO.fetch({ split });
+      if (!data) return;
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `ttrpg-layout-${key}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error("Export failed");
+    } finally {
+      setExporting(null);
+    }
+  };
+
+  const { train, val, test, unassigned } = stats.bySplit;
+  const splitBadges = [
+    { label: "Train",      count: train,      cls: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30" },
+    { label: "Val",        count: val,        cls: "bg-amber-500/15 text-amber-400 border-amber-500/30"       },
+    { label: "Test",       count: test,       cls: "bg-sky-500/15 text-sky-400 border-sky-500/30"             },
+    { label: "Unassigned", count: unassigned, cls: "bg-muted text-muted-foreground border-border"             },
+  ];
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2">
+            <Database className="w-4 h-4 text-primary" />
+            <CardTitle className="text-sm">Training Dataset</CardTitle>
+          </div>
+          {isAdmin && stats.totalAnnotated > 0 && (
+            <div className="flex items-center gap-1 flex-wrap">
+              {(["train", "val", "test"] as const).map(split => {
+                const count = stats.bySplit[split];
+                if (count === 0) return null;
+                return (
+                  <Button key={split} size="sm" variant="outline"
+                    className="h-7 px-2 text-xs gap-1"
+                    disabled={exporting !== null}
+                    onClick={() => handleExport(split)}
+                  >
+                    {exporting === split
+                      ? <Loader2 className="w-3 h-3 animate-spin" />
+                      : <Download className="w-3 h-3" />}
+                    {split} ({count})
+                  </Button>
+                );
+              })}
+              <Button size="sm" variant="outline"
+                className="h-7 px-2 text-xs gap-1"
+                disabled={exporting !== null}
+                onClick={() => handleExport(undefined)}
+              >
+                {exporting === "all"
+                  ? <Loader2 className="w-3 h-3 animate-spin" />
+                  : <Download className="w-3 h-3" />}
+                all ({stats.totalAnnotated})
+              </Button>
+            </div>
+          )}
+        </div>
+        <CardDescription>
+          {stats.totalAnnotated > 0
+            ? `${stats.totalAnnotated} annotated ${stats.totalAnnotated === 1 ? "page" : "pages"} · ${stats.byDocument.length} ${stats.byDocument.length === 1 ? "document" : "documents"}`
+            : "No pages annotated yet"}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        {/* Split breakdown */}
+        <div>
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Split Assignment</p>
+          <div className="flex flex-wrap gap-2">
+            {splitBadges.map(({ label, count, cls }) => (
+              <span key={label}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs font-medium ${cls}`}>
+                {label}: <strong>{count}</strong>
+              </span>
+            ))}
+          </div>
+          {stats.ocrCompleteUnannotated > 0 && (
+            <p className="text-xs text-muted-foreground mt-2">
+              {stats.ocrCompleteUnannotated.toLocaleString()} OCR-complete {stats.ocrCompleteUnannotated === 1 ? "page" : "pages"} available to annotate
+            </p>
+          )}
+        </div>
+
+        {/* Document coverage */}
+        {stats.byDocument.length > 0 && (
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Document Coverage</p>
+            <div className="space-y-2.5">
+              {stats.byDocument.map(doc => {
+                const pct = doc.totalPages > 0
+                  ? Math.round((doc.annotatedPages / doc.totalPages) * 100)
+                  : 0;
+                return (
+                  <div key={doc.documentId}>
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <span className="text-xs font-medium truncate">{doc.title}</span>
+                      <span className="text-xs text-muted-foreground shrink-0 tabular-nums">
+                        {doc.annotatedPages} / {doc.totalPages} ({pct}%)
+                      </span>
+                    </div>
+                    <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                      <div className="h-full rounded-full bg-primary transition-all"
+                        style={{ width: `${pct}%` }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Model registry — admin only */}
+        {isAdmin && (
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Model Registry</p>
+            {!models || models.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                No fine-tuned models registered. Use Orchestra to train and register the first model.
+              </p>
+            ) : (
+              <div className="space-y-1.5">
+                {models.map(m => (
+                  <div key={m.id}
+                    className={`flex items-start gap-3 rounded-md px-3 py-2 text-xs ${
+                      m.isActive ? "bg-primary/10 border border-primary/20" : "bg-muted/40"
+                    }`}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5 mb-0.5">
+                        {m.isActive && <Star className="w-3 h-3 text-amber-400 fill-amber-400 shrink-0" />}
+                        <span className="font-mono font-medium truncate">{m.name}</span>
+                        {m.isActive && (
+                          <span className="ml-auto text-[10px] text-primary font-semibold tracking-wide">ACTIVE</span>
+                        )}
+                      </div>
+                      <span className="text-muted-foreground">{m.baseModel}</span>
+                    </div>
+                    {m.metrics && (
+                      <div className="shrink-0 text-right tabular-nums space-y-0.5">
+                        {m.metrics.compositeScore != null && (
+                          <div className="font-medium">Score {m.metrics.compositeScore.toFixed(3)}</div>
+                        )}
+                        <div className="text-muted-foreground">
+                          {[
+                            m.metrics.macroF1  != null && `F1 ${m.metrics.macroF1.toFixed(2)}`,
+                            m.metrics.macroIoU != null && `IoU ${m.metrics.macroIoU.toFixed(2)}`,
+                          ].filter(Boolean).join(" · ")}
+                        </div>
+                        {m.trainedAt && (
+                          <div className="text-muted-foreground">
+                            {new Date(m.trainedAt).toLocaleDateString()}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function TheChronicles() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const [selectedLabel, setSelectedLabel] = useState<string | null>(null);
   const [selectorOpen, setSelectorOpen] = useState(false);
   const [docSearch, setDocSearch] = useState("");
@@ -2959,6 +3152,9 @@ export default function TheChronicles() {
       {selectedDocId !== null && docProfile && (
         <DocumentProfilePanel profile={docProfile} />
       )}
+
+      {/* Training dataset health — annotation coverage, splits, model registry */}
+      <TrainingDatasetPanel isAdmin={isAdmin} />
 
       {/* Summary generation status bar */}
       {selectedLabel !== null && rawSummaries.length > 0 && (
