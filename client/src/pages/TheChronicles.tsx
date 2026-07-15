@@ -17,7 +17,7 @@ import {
   BookOpen, Layers, RefreshCw, RotateCcw, RotateCw, ChevronsUpDown, ScrollText, ChevronRight, ChevronDown,
   Check, Edit, Loader2, FileImage, ChevronLeft, Eye, Code2, AlignLeft,
   History, FileText, Grid3x3, Flag, LayoutGrid, List, Package, Upload,
-  AlertTriangle, TrendingDown, BarChart3,
+  AlertTriangle, TrendingDown, BarChart3, ExternalLink,
   Database, Download, Star,
 } from "lucide-react";
 import { PipelineStatusBadge } from "@/components/PipelineStatusBadge";
@@ -2123,13 +2123,107 @@ function DocumentMetricsPanel({ metrics, docTitle }: { metrics: DocMetrics; docT
   );
 }
 
-const ATTENTION_METRICS = [
-  { key: "missingLayout",  label: "No Layout",       getValue: (r: DocMetricRow) => r.total - r.hasLayout,    icon: LayoutGrid,    action: "Re-run layout stage" },
-  { key: "missingRegions", label: "No Regions",      getValue: (r: DocMetricRow) => r.total - r.hasRegions,   icon: Grid3x3,       action: "Re-run region detection" },
-  { key: "ocrIncomplete",  label: "OCR Incomplete",  getValue: (r: DocMetricRow) => r.total - r.ocrComplete,  icon: FileText,      action: "Re-run OCR stage" },
-  { key: "hitlPending",    label: "HITL Pending",    getValue: (r: DocMetricRow) => r.hitlPending,            icon: Flag,          action: "Go to Archivist's Desk" },
-  { key: "highOverlap",    label: "Bbox Overlap",    getValue: (r: DocMetricRow) => r.highOverlapUnresolved,  icon: AlertTriangle, action: "Review overlapping regions" },
-] as const;
+type AttentionMetricKey = "missingLayout" | "missingRegions" | "ocrIncomplete" | "hitlPending" | "highOverlap";
+
+const ATTENTION_METRICS: {
+  key: AttentionMetricKey;
+  label: string;
+  getValue: (r: DocMetricRow) => number;
+  icon: React.ElementType;
+  action: string;
+  retryStages: ("layout_analysis" | "bbox_detection" | "ocr_extraction")[];
+  retryLabel: string;
+}[] = [
+  { key: "missingLayout",  label: "No Layout",      getValue: r => r.total - r.hasLayout,   icon: LayoutGrid,    action: "Re-run layout stage",      retryStages: ["layout_analysis"],           retryLabel: "Re-run Layout" },
+  { key: "missingRegions", label: "No Regions",     getValue: r => r.total - r.hasRegions,  icon: Grid3x3,       action: "Re-run region detection",  retryStages: ["bbox_detection"],            retryLabel: "Re-run Regions" },
+  { key: "ocrIncomplete",  label: "OCR Incomplete", getValue: r => r.total - r.ocrComplete, icon: FileText,      action: "Re-run OCR stage",         retryStages: ["ocr_extraction"],            retryLabel: "Re-run OCR" },
+  { key: "hitlPending",    label: "HITL Pending",   getValue: r => r.hitlPending,           icon: Flag,          action: "Go to Archivist's Desk",   retryStages: [],                            retryLabel: "" },
+  { key: "highOverlap",    label: "Bbox Overlap",   getValue: r => r.highOverlapUnresolved, icon: AlertTriangle, action: "Review overlapping regions",retryStages: ["bbox_detection"],            retryLabel: "Re-run Regions" },
+];
+
+function IssuePageList({
+  documentId,
+  issue,
+  metric,
+}: {
+  documentId: number;
+  issue: AttentionMetricKey;
+  metric: (typeof ATTENTION_METRICS)[number];
+}) {
+  const { data: pages, isLoading } = trpc.library.pagesWithIssue.useQuery(
+    { documentId, issue },
+    { staleTime: 60_000 },
+  );
+  const retryMutation  = trpc.library.batchRetryStage.useMutation({
+    onSuccess: r  => toast.success(`Queued ${r.queued} page${r.queued !== 1 ? "s" : ""} for re-processing.`),
+    onError:   err => toast.error(`Retry failed: ${err.message}`),
+  });
+  const hitlMutation = trpc.library.batchFlagForHITL.useMutation({
+    onSuccess: r  => toast.success(`${r.flagged} page${r.flagged !== 1 ? "s" : ""} sent to HITL${r.skipped > 0 ? ` (${r.skipped} already queued)` : ""}.`),
+    onError:   err => toast.error(`HITL flag failed: ${err.message}`),
+  });
+
+  if (isLoading) {
+    return (
+      <div className="pl-7 pt-1 pb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Loader2 className="w-3 h-3 animate-spin" /> Loading pages…
+      </div>
+    );
+  }
+
+  if (!pages || pages.length === 0) {
+    return (
+      <div className="pl-7 pt-1 pb-2 text-xs text-muted-foreground italic">No affected pages found.</div>
+    );
+  }
+
+  const pageIds = pages.map(p => p.id);
+
+  return (
+    <div className="pl-7 pt-1.5 pb-2 space-y-2">
+      {/* Scrollable page chip list */}
+      <div className="flex gap-1 overflow-x-auto pb-1 scrollbar-thin">
+        {pages.map(p => (
+          <span
+            key={p.id}
+            className="flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-mono bg-muted/60 text-muted-foreground border border-border/40"
+          >
+            p.{p.pageNumber}
+          </span>
+        ))}
+      </div>
+      {/* Batch actions */}
+      <div className="flex gap-1.5 flex-wrap">
+        {metric.retryStages.length > 0 && (
+          <button
+            disabled={retryMutation.isPending}
+            onClick={() => retryMutation.mutate({ pageIds, stages: metric.retryStages })}
+            className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-muted hover:bg-muted/80 text-foreground disabled:opacity-50 transition-colors"
+          >
+            <RefreshCw className="w-3 h-3" />
+            {retryMutation.isPending ? "Queuing…" : `${metric.retryLabel} (${pages.length})`}
+          </button>
+        )}
+        {issue !== "hitlPending" && (
+          <button
+            disabled={hitlMutation.isPending}
+            onClick={() =>
+              hitlMutation.mutate({
+                pageIds,
+                reason:       `Batch flagged from Collection Overview: ${metric.label}`,
+                flagCategory: "manual_flag",
+              })
+            }
+            className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-amber-500/10 hover:bg-amber-500/20 text-amber-500 border border-amber-500/20 disabled:opacity-50 transition-colors"
+          >
+            <Flag className="w-3 h-3" />
+            {hitlMutation.isPending ? "Sending…" : `Send to HITL (${pages.length})`}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function NeedsAttentionPanel({
   rows,
@@ -2138,7 +2232,8 @@ function NeedsAttentionPanel({
   rows: DocMetricRow[];
   onSelectDocumentId: (id: number) => void;
 }) {
-  const [activeMetric, setActiveMetric] = useState<string>(ATTENTION_METRICS[0].key);
+  const [activeMetric, setActiveMetric] = useState<AttentionMetricKey>(ATTENTION_METRICS[0].key);
+  const [expandedDocId, setExpandedDocId] = useState<number | null>(null);
 
   const totalPages = rows.reduce((s, r) => s + r.total, 0);
   const docsWithIssues = rows.filter(r =>
@@ -2158,6 +2253,10 @@ function NeedsAttentionPanel({
     .sort((a, b) => b.value - a.value)
     .slice(0, 5);
   const maxValue = top5[0]?.value ?? 1;
+
+  function toggleExpand(docId: number) {
+    setExpandedDocId(prev => (prev === docId ? null : docId));
+  }
 
   return (
     <Card>
@@ -2186,7 +2285,7 @@ function NeedsAttentionPanel({
             return (
               <button
                 key={m.key}
-                onClick={() => setActiveMetric(m.key)}
+                onClick={() => { setActiveMetric(m.key); setExpandedDocId(null); }}
                 className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
                   activeMetric === m.key
                     ? "bg-primary text-primary-foreground"
@@ -2213,32 +2312,45 @@ function NeedsAttentionPanel({
             <p className="text-[11px] text-muted-foreground">
               Showing worst {top5.length} for <span className="font-medium text-foreground">{metric.label}</span>
               {" · "}<span className="italic">{metric.action}</span>
-              {" · Click a document to open it."}
+              {" · Click a row to see affected pages."}
             </p>
-            <div className="space-y-2">
+            <div className="space-y-1">
               {top5.map((row, i) => {
                 const docLabel = row.title ?? row.filename ?? `Document ${row.documentId}`;
                 const pct = (row.value / maxValue) * 100;
+                const isExpanded = expandedDocId === row.documentId;
                 return (
-                  <div
-                    key={row.documentId}
-                    className="flex items-center gap-3 cursor-pointer group"
-                    onClick={() => onSelectDocumentId(row.documentId)}
-                  >
-                    <span className="text-xs text-muted-foreground w-4 text-right flex-shrink-0">{i + 1}</span>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between gap-2 mb-1">
-                        <span className="text-xs font-medium truncate group-hover:text-primary transition-colors">
-                          {docLabel}
-                        </span>
-                        <span className="text-xs font-mono text-amber-500 flex-shrink-0">
-                          {row.value} of {row.total} pages
-                        </span>
+                  <div key={row.documentId} className="rounded-md overflow-hidden">
+                    <div
+                      className="flex items-center gap-3 cursor-pointer group py-1 px-0.5 rounded-md hover:bg-muted/40 transition-colors"
+                      onClick={() => toggleExpand(row.documentId)}
+                    >
+                      <span className="text-xs text-muted-foreground w-4 text-right flex-shrink-0">{i + 1}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                          <span className="text-xs font-medium truncate group-hover:text-primary transition-colors">
+                            {isExpanded ? <ChevronDown className="w-3 h-3 inline mr-1 opacity-60" /> : <ChevronRight className="w-3 h-3 inline mr-1 opacity-40" />}
+                            {docLabel}
+                          </span>
+                          <span className="text-xs font-mono text-amber-500 flex-shrink-0">
+                            {row.value} of {row.total} pages
+                          </span>
+                        </div>
+                        <div className="h-1 rounded-full bg-border/40 overflow-hidden">
+                          <div className="h-full rounded-full bg-amber-500/70 transition-all" style={{ width: `${pct}%` }} />
+                        </div>
                       </div>
-                      <div className="h-1 rounded-full bg-border/40 overflow-hidden">
-                        <div className="h-full rounded-full bg-amber-500/70 transition-all" style={{ width: `${pct}%` }} />
-                      </div>
+                      <button
+                        className="flex-shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-muted text-muted-foreground hover:text-foreground transition-all"
+                        title="Open document"
+                        onClick={e => { e.stopPropagation(); onSelectDocumentId(row.documentId); }}
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                      </button>
                     </div>
+                    {isExpanded && (
+                      <IssuePageList documentId={row.documentId} issue={activeMetric} metric={metric} />
+                    )}
                   </div>
                 );
               })}

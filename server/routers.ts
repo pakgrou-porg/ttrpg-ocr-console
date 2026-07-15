@@ -36,6 +36,7 @@ import {
   getContentBlocksByDocumentPaginated, getContentBlocksCount,
   deleteContentBlocksByDocumentId,
   getDocumentMetrics, getAllDocumentMetricsSummary, getDocumentProfileMetrics,
+  getPagesWithIssue, type AttentionIssueKey,
   getDatasetStats,
   exportCOCODataset,
   getAllLayoutModels, getLayoutModelById, createLayoutModel, updateLayoutModel, setActiveLayoutModel,
@@ -2175,6 +2176,58 @@ export const appRouter = router({
     allDocumentMetrics: protectedProcedure
       .query(async () => {
         return getAllDocumentMetricsSummary();
+      }),
+
+    /** Pages within a document that have a specific attention issue — used for inline drill-down. */
+    pagesWithIssue: protectedProcedure
+      .input(z.object({
+        documentId: z.number().int(),
+        issue: z.enum(["missingLayout", "missingRegions", "ocrIncomplete", "hitlPending", "highOverlap"] as const),
+      }))
+      .query(async ({ ctx, input }) => {
+        assertDocumentAccess(ctx, await getDocumentById(input.documentId));
+        const pages = await getPagesWithIssue(input.documentId, input.issue as AttentionIssueKey);
+        return pages.map(p => ({
+          id:         p.id,
+          pageNumber: p.pageNumber,
+          rawPngUrl:  p.rawPngUrl
+            ? `/api/pipeline/pages/${p.rawPngUrl.replace(/.*\/workspace\//, "")}?_v=${(p.updatedAt as Date).getTime()}`
+            : null,
+        }));
+      }),
+
+    /** Queue a pipeline stage re-run on a batch of pages (Collection Overview drill-down). */
+    batchRetryStage: protectedProcedure
+      .input(z.object({
+        pageIds: z.array(z.number().int()).min(1).max(500),
+        stages:  z.array(z.enum(["layout_analysis", "bbox_detection", "ocr_extraction"] as const)).min(1),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        for (const pageId of input.pageIds) {
+          enqueuePageRetry(pageId, input.stages as RetryStage[], undefined, { reviewerUserId: ctx.user.id });
+        }
+        return { success: true, queued: input.pageIds.length };
+      }),
+
+    /** Flag a batch of pages for HITL review, skipping any already in the queue. */
+    batchFlagForHITL: protectedProcedure
+      .input(z.object({
+        pageIds:      z.array(z.number().int()).min(1).max(500),
+        reason:       z.string().max(1024),
+        flagCategory: z.string().max(64).optional(),
+      }))
+      .mutation(async ({ input }) => {
+        let flagged = 0;
+        let skipped = 0;
+        for (const pageId of input.pageIds) {
+          const existing = await getHitlItemsByPageId(pageId);
+          const open = existing.find(i => i.status === "queued" || i.status === "in_progress" || i.status === "escalated");
+          if (open) { skipped++; continue; }
+          await createHitlItem({ pageId, reason: input.reason, flagCategory: input.flagCategory, priority: "medium" });
+          await updateDocumentPage(pageId, { isFlagged: true });
+          flagged++;
+        }
+        return { success: true, flagged, skipped };
       }),
 
     /** Annotation coverage stats for the training dataset (split breakdown, per-document counts). */

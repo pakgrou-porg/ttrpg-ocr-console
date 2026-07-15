@@ -2739,6 +2739,69 @@ export async function getAllDocumentMetricsSummary() {
   }));
 }
 
+export type AttentionIssueKey = "missingLayout" | "missingRegions" | "ocrIncomplete" | "hitlPending" | "highOverlap";
+
+/** Pages in a document that have a specific attention issue, ordered by page number. */
+export async function getPagesWithIssue(documentId: number, issue: AttentionIssueKey) {
+  const db = await getDb();
+  if (!db) return [];
+
+  let result: unknown;
+  if (issue === "missingLayout") {
+    result = await db.execute(sql`
+      SELECT id, page_number, raw_png_url, updated_at
+      FROM document_pages
+      WHERE document_id = ${documentId} AND part_index = 0 AND layout_type IS NULL
+      ORDER BY page_number
+    `);
+  } else if (issue === "missingRegions") {
+    result = await db.execute(sql`
+      SELECT id, page_number, raw_png_url, updated_at
+      FROM document_pages
+      WHERE document_id = ${documentId} AND part_index = 0 AND content_regions IS NULL
+      ORDER BY page_number
+    `);
+  } else if (issue === "ocrIncomplete") {
+    result = await db.execute(sql`
+      SELECT id, page_number, raw_png_url, updated_at
+      FROM document_pages
+      WHERE document_id = ${documentId} AND part_index = 0 AND ocr_completed = false
+      ORDER BY page_number
+    `);
+  } else if (issue === "hitlPending") {
+    result = await db.execute(sql`
+      SELECT dp.id, dp.page_number, dp.raw_png_url, dp.updated_at
+      FROM document_pages dp
+      WHERE dp.document_id = ${documentId} AND dp.part_index = 0
+        AND EXISTS (
+          SELECT 1 FROM hitl_queue hq
+          WHERE hq.page_id = dp.id AND hq.status IN ('queued', 'in_progress', 'escalated')
+        )
+      ORDER BY dp.page_number
+    `);
+  } else {
+    result = await db.execute(sql`
+      SELECT dp.id, dp.page_number, dp.raw_png_url, dp.updated_at
+      FROM document_pages dp
+      JOIN ocr_results ocr ON ocr.page_id = dp.id
+      WHERE dp.document_id = ${documentId} AND dp.part_index = 0
+        AND ocr.bbox_overlap_ratio > 0.10
+        AND NOT EXISTS (
+          SELECT 1 FROM hitl_queue hq
+          WHERE hq.page_id = dp.id AND hq.status IN ('resolved', 'skipped')
+        )
+      ORDER BY ocr.bbox_overlap_ratio DESC
+    `);
+  }
+
+  return (result as Array<Record<string, unknown>>).map(row => ({
+    id:         Number(row.id),
+    pageNumber: Number(row.page_number),
+    rawPngUrl:  (row.raw_png_url as string | null) ?? null,
+    updatedAt:  row.updated_at as Date,
+  }));
+}
+
 /** Per-document distribution of layout types and region types — for model-tuning analysis. */
 export async function getDocumentProfileMetrics(documentId: number) {
   const db = await getDb();
