@@ -155,6 +155,20 @@
       "when": 1750870800000,
       "tag": "0021_bbox_quality_metrics",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1784073600000,
+      "tag": "0022_ttrpg_training_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1784160000000,
+      "tag": "0023_layout_models",
+      "breakpoints": true
     }
   ]
 }
