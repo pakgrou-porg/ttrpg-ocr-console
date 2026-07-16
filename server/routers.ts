@@ -37,6 +37,7 @@ import {
   deleteContentBlocksByDocumentId,
   getDocumentMetrics, getAllDocumentMetricsSummary, getDocumentProfileMetrics,
   getPagesWithIssue, type AttentionIssueKey,
+  batchFlagPagesForHITL,
   getDatasetStats,
   exportCOCODataset,
   getAllLayoutModels, getLayoutModelById, createLayoutModel, updateLayoutModel, setActiveLayoutModel,
@@ -2217,17 +2218,8 @@ export const appRouter = router({
         flagCategory: z.string().max(64).optional(),
       }))
       .mutation(async ({ input }) => {
-        let flagged = 0;
-        let skipped = 0;
-        for (const pageId of input.pageIds) {
-          const existing = await getHitlItemsByPageId(pageId);
-          const open = existing.find(i => i.status === "queued" || i.status === "in_progress" || i.status === "escalated");
-          if (open) { skipped++; continue; }
-          await createHitlItem({ pageId, reason: input.reason, flagCategory: input.flagCategory, priority: "medium" });
-          await updateDocumentPage(pageId, { isFlagged: true });
-          flagged++;
-        }
-        return { success: true, flagged, skipped };
+        const result = await batchFlagPagesForHITL(input.pageIds, input.reason, input.flagCategory);
+        return { success: true, ...result };
       }),
 
     /** Annotation coverage stats for the training dataset (split breakdown, per-document counts). */

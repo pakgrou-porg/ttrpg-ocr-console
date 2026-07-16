@@ -1427,6 +1427,43 @@ export async function createHitlItem(item: InsertHitlQueueItem & Record<string, 
   return created!;
 }
 
+/** Bulk-flag pages for HITL review — 3 queries regardless of batch size. Skips pages with open items. */
+export async function batchFlagPagesForHITL(
+  pageIds: number[],
+  reason: string,
+  flagCategory?: string,
+): Promise<{ flagged: number; skipped: number }> {
+  const db = await getDb();
+  if (!db || pageIds.length === 0) return { flagged: 0, skipped: 0 };
+
+  const openItems = await db
+    .select({ pageId: hitlQueue.pageId })
+    .from(hitlQueue)
+    .where(
+      and(
+        inArray(hitlQueue.pageId, pageIds),
+        inArray(hitlQueue.status, ["queued", "in_progress", "escalated"]),
+      ),
+    );
+  const alreadyOpen = new Set(openItems.map(i => i.pageId));
+  const toFlag = pageIds.filter(id => !alreadyOpen.has(id));
+
+  if (toFlag.length > 0) {
+    await db.insert(hitlQueue).values(
+      toFlag.map(pageId => ({
+        pageId,
+        reason,
+        flagCategory: flagCategory ?? null,
+        priority: "medium" as const,
+        status: "queued" as const,
+      })),
+    );
+    await db.update(documentPages).set({ isFlagged: true }).where(inArray(documentPages.id, toFlag));
+  }
+
+  return { flagged: toFlag.length, skipped: alreadyOpen.size };
+}
+
 export async function updateHitlItem(id: number, updates: Partial<InsertHitlQueueItem> & Record<string, unknown>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");

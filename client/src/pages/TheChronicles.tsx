@@ -2141,6 +2141,24 @@ const ATTENTION_METRICS: {
   { key: "highOverlap",    label: "Bbox Overlap",   getValue: r => r.highOverlapUnresolved, icon: AlertTriangle, action: "Review overlapping regions",retryStages: ["bbox_detection"],            retryLabel: "Re-run Regions" },
 ];
 
+function pageRangeChips(nums: number[]): string[] {
+  if (nums.length === 0) return [];
+  const sorted = [...nums].sort((a, b) => a - b);
+  const chips: string[] = [];
+  let start = sorted[0];
+  let end = sorted[0];
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i] === end + 1) {
+      end = sorted[i];
+    } else {
+      chips.push(start === end ? `p.${start}` : `p.${start}–${end}`);
+      start = end = sorted[i];
+    }
+  }
+  chips.push(start === end ? `p.${start}` : `p.${start}–${end}`);
+  return chips;
+}
+
 function IssuePageList({
   documentId,
   issue,
@@ -2187,14 +2205,14 @@ function IssuePageList({
 
   return (
     <div className="pl-7 pt-1.5 pb-2 space-y-2">
-      {/* Scrollable page chip list */}
-      <div className="flex gap-1 overflow-x-auto pb-1 scrollbar-thin">
-        {pages.map(p => (
+      {/* Page range chips — consecutive runs are compressed (e.g. p.1–6, p.8–10, p.13) */}
+      <div className="flex gap-1 flex-wrap">
+        {pageRangeChips(pages.map(p => p.pageNumber)).map((label, idx) => (
           <span
-            key={p.id}
-            className="flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-mono bg-muted/60 text-muted-foreground border border-border/40"
+            key={idx}
+            className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-muted/60 text-muted-foreground border border-border/40"
           >
-            p.{p.pageNumber}
+            {label}
           </span>
         ))}
       </div>
