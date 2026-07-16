@@ -2150,9 +2150,9 @@ function IssuePageList({
   issue: AttentionMetricKey;
   metric: (typeof ATTENTION_METRICS)[number];
 }) {
-  const { data: pages, isLoading } = trpc.library.pagesWithIssue.useQuery(
+  const { data: pages, isLoading, error } = trpc.library.pagesWithIssue.useQuery(
     { documentId, issue },
-    { staleTime: 60_000 },
+    { staleTime: 60_000, retry: 1 },
   );
   const retryMutation  = trpc.library.batchRetryStage.useMutation({
     onSuccess: r  => toast.success(`Queued ${r.queued} page${r.queued !== 1 ? "s" : ""} for re-processing.`),
@@ -2168,6 +2168,12 @@ function IssuePageList({
       <div className="pl-7 pt-1 pb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
         <Loader2 className="w-3 h-3 animate-spin" /> Loading pages…
       </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="pl-7 pt-1 pb-2 text-xs text-destructive italic">Error: {error.message}</div>
     );
   }
 

@@ -2191,7 +2191,7 @@ export const appRouter = router({
           id:         p.id,
           pageNumber: p.pageNumber,
           rawPngUrl:  p.rawPngUrl
-            ? `/api/pipeline/pages/${p.rawPngUrl.replace(/.*\/workspace\//, "")}?_v=${(p.updatedAt as Date).getTime()}`
+            ? `/api/pipeline/pages/${p.rawPngUrl.replace(/.*\/workspace\//, "")}`
             : null,
         }));
       }),

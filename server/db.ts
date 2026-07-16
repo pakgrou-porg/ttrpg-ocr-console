@@ -2749,28 +2749,28 @@ export async function getPagesWithIssue(documentId: number, issue: AttentionIssu
   let result: unknown;
   if (issue === "missingLayout") {
     result = await db.execute(sql`
-      SELECT id, page_number, raw_png_url, updated_at
+      SELECT id, page_number, raw_png_url
       FROM document_pages
       WHERE document_id = ${documentId} AND part_index = 0 AND layout_type IS NULL
       ORDER BY page_number
     `);
   } else if (issue === "missingRegions") {
     result = await db.execute(sql`
-      SELECT id, page_number, raw_png_url, updated_at
+      SELECT id, page_number, raw_png_url
       FROM document_pages
       WHERE document_id = ${documentId} AND part_index = 0 AND content_regions IS NULL
       ORDER BY page_number
     `);
   } else if (issue === "ocrIncomplete") {
     result = await db.execute(sql`
-      SELECT id, page_number, raw_png_url, updated_at
+      SELECT id, page_number, raw_png_url
       FROM document_pages
       WHERE document_id = ${documentId} AND part_index = 0 AND ocr_completed = false
       ORDER BY page_number
     `);
   } else if (issue === "hitlPending") {
     result = await db.execute(sql`
-      SELECT dp.id, dp.page_number, dp.raw_png_url, dp.updated_at
+      SELECT dp.id, dp.page_number, dp.raw_png_url
       FROM document_pages dp
       WHERE dp.document_id = ${documentId} AND dp.part_index = 0
         AND EXISTS (
@@ -2781,7 +2781,7 @@ export async function getPagesWithIssue(documentId: number, issue: AttentionIssu
     `);
   } else {
     result = await db.execute(sql`
-      SELECT dp.id, dp.page_number, dp.raw_png_url, dp.updated_at
+      SELECT dp.id, dp.page_number, dp.raw_png_url
       FROM document_pages dp
       JOIN ocr_results ocr ON ocr.page_id = dp.id
       WHERE dp.document_id = ${documentId} AND dp.part_index = 0
@@ -2798,7 +2798,6 @@ export async function getPagesWithIssue(documentId: number, issue: AttentionIssu
     id:         Number(row.id),
     pageNumber: Number(row.page_number),
     rawPngUrl:  (row.raw_png_url as string | null) ?? null,
-    updatedAt:  row.updated_at as Date,
   }));
 }
 
