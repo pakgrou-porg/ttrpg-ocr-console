@@ -1520,7 +1520,7 @@ export async function getHitlRetryAttemptsByPage(pageId: number) {
 export async function getActiveRetryAttempts() {
   const db = await getDb();
   if (!db) return [];
-  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+  const fiveMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
   const rows = await db.execute(sql`
     SELECT
       r.id,

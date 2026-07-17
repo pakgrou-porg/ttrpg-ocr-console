@@ -853,6 +853,22 @@ export default function OverseeScribes() {
                         all
                       </button>
                     )}
+                    <div className="ml-auto flex items-center gap-1.5">
+                      {hasCompleted && (
+                        <Button variant="ghost" size="sm" className="h-6 text-[10px] gap-1 text-muted-foreground hover:text-foreground px-2"
+                          onClick={() => { if (confirm("Delete all completed jobs?")) clearMut.mutate({ statuses: ["completed"] }); }}
+                          disabled={clearMut.isPending}>
+                          <Trash2 className="w-3 h-3" /> Clear Completed
+                        </Button>
+                      )}
+                      {hasFailed && (
+                        <Button variant="ghost" size="sm" className="h-6 text-[10px] gap-1 text-red-400/70 hover:text-red-400 px-2"
+                          onClick={() => { if (confirm("Delete all failed jobs?")) clearMut.mutate({ statuses: ["failed"] }); }}
+                          disabled={clearMut.isPending}>
+                          <Trash2 className="w-3 h-3" /> Clear Failed
+                        </Button>
+                      )}
+                    </div>
                   </div>
                   {finishedJobs.slice(0, finishedLimit).map(renderJobRow)}
                   {finishedJobs.length > finishedLimit && (
@@ -868,82 +884,92 @@ export default function OverseeScribes() {
       </Card>
 
       {/* ── Retry Queue ────────────────────────────────────────────────────── */}
-      {(retryQueue as any[] ?? []).length > 0 && (
-        <Card className="bg-card/50 backdrop-blur-sm border-border/50">
-          <CardHeader className="pb-2 pt-3 px-4 border-b border-border/50">
-            <CardTitle className="text-sm flex items-center gap-2">
-              <RotateCcw className="w-4 h-4 text-violet-400" />
-              Retry Queue
-              <span className="text-xs text-muted-foreground font-normal ml-1">
-                — active retries and results from the last 5 minutes
-              </span>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="p-0">
-            {/* Column headers */}
-            <div className="grid grid-cols-[48px_1fr_160px_140px_80px_80px] gap-x-3 px-4 py-1.5 text-[10px] text-muted-foreground/50 uppercase tracking-wide border-b border-border/30">
-              <span>ID</span>
-              <span>Document · Page</span>
-              <span>Stages</span>
-              <span>Status</span>
-              <span className="text-right">Conf</span>
-              <span className="text-right">Duration</span>
+      <Card className="bg-card/50 backdrop-blur-sm border-border/50">
+        <CardHeader className="pb-2 pt-3 px-4 border-b border-border/50">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <RotateCcw className="w-4 h-4 text-violet-400" />
+            Retry Queue
+            <span className="text-xs text-muted-foreground font-normal ml-1">
+              — active retries and results from the last 30 minutes
+            </span>
+            <span className="text-[10px] text-muted-foreground/50 font-normal ml-1">
+              (triggered by Save + Retry OCR in the HITL console, or batch re-runs from Collection Overview)
+            </span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          {(retryQueue as any[] ?? []).length === 0 ? (
+            <div className="flex items-center gap-2 px-4 py-5 text-muted-foreground/50">
+              <RotateCcw className="w-4 h-4 flex-shrink-0" />
+              <span className="text-sm">No active or recent retries. Use &ldquo;Retry OCR&rdquo; in the HITL console or &ldquo;Re-run Stage&rdquo; in Collection Overview to enqueue page retries.</span>
             </div>
-            {(retryQueue as any[]).map((r: any) => {
-              const isPending  = r.status === "pending_queue";
-              const isRunning  = r.status === "running";
-              const isSuccess  = r.status === "succeeded";
-              const isFailed   = r.status === "failed";
-              const statusColor = isPending ? "text-muted-foreground"
-                : isRunning  ? "text-blue-400"
-                : isSuccess  ? "text-green-400"
-                : "text-red-400";
-              const delta = r.confidence_delta != null
-                ? (r.confidence_delta > 0 ? `+${r.confidence_delta}` : String(r.confidence_delta))
-                : null;
-              return (
-                <div key={r.id}
-                  className="grid grid-cols-[48px_1fr_160px_140px_80px_80px] gap-x-3 px-4 py-2 items-center hover:bg-muted/10 border-b border-border/20 last:border-0">
-                  <span className="font-mono text-xs text-muted-foreground">R-{r.id}</span>
-                  <div className="min-w-0">
-                    <div className="text-xs font-medium truncate">{r.document_title}</div>
-                    <div className="text-[10px] text-muted-foreground">
-                      p.{r.page_number}{r.printed_page_label ? ` / doc p.${r.printed_page_label}` : ""}
+          ) : (
+            <>
+              {/* Column headers */}
+              <div className="grid grid-cols-[48px_1fr_160px_140px_80px_80px] gap-x-3 px-4 py-1.5 text-[10px] text-muted-foreground/50 uppercase tracking-wide border-b border-border/30">
+                <span>ID</span>
+                <span>Document · Page</span>
+                <span>Stages</span>
+                <span>Status</span>
+                <span className="text-right">Conf</span>
+                <span className="text-right">Duration</span>
+              </div>
+              {(retryQueue as any[]).map((r: any) => {
+                const isPending  = r.status === "pending_queue";
+                const isRunning  = r.status === "running";
+                const isSuccess  = r.status === "succeeded";
+                const isFailed   = r.status === "failed";
+                const statusColor = isPending ? "text-muted-foreground"
+                  : isRunning  ? "text-blue-400"
+                  : isSuccess  ? "text-green-400"
+                  : "text-red-400";
+                const delta = r.confidence_delta != null
+                  ? (r.confidence_delta > 0 ? `+${r.confidence_delta}` : String(r.confidence_delta))
+                  : null;
+                return (
+                  <div key={r.id}
+                    className="grid grid-cols-[48px_1fr_160px_140px_80px_80px] gap-x-3 px-4 py-2 items-center hover:bg-muted/10 border-b border-border/20 last:border-0">
+                    <span className="font-mono text-xs text-muted-foreground">R-{r.id}</span>
+                    <div className="min-w-0">
+                      <div className="text-xs font-medium truncate">{r.document_title}</div>
+                      <div className="text-[10px] text-muted-foreground">
+                        p.{r.page_number}{r.printed_page_label ? ` / doc p.${r.printed_page_label}` : ""}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      {(r.requested_stages ?? []).map((s: string) => (
+                        <span key={s} className="text-[10px] bg-muted/30 rounded px-1.5 py-0.5 font-mono">
+                          {s.replace(/_/g, " ")}
+                        </span>
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      {isRunning && <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse flex-shrink-0" />}
+                      <span className={`text-xs font-medium ${statusColor}`}>
+                        {r.status.replace(/_/g, " ")}
+                      </span>
+                      {isFailed && (r.stages_failed ?? []).length > 0 && (
+                        <span className="text-[10px] text-red-400/70">({(r.stages_failed as string[]).join(", ")})</span>
+                      )}
+                    </div>
+                    <div className="text-right">
+                      {r.confidence != null ? (
+                        <span className={`text-xs font-mono ${isSuccess ? "text-green-400" : "text-muted-foreground"}`}>
+                          {r.confidence}%
+                          {delta && <span className="text-[10px] ml-1 opacity-70">{delta}</span>}
+                        </span>
+                      ) : <span className="text-xs text-muted-foreground/40">—</span>}
+                    </div>
+                    <div className="text-right text-xs text-muted-foreground/70 font-mono">
+                      {r.duration_ms != null ? fmtMs(r.duration_ms) : isPending ? "queued" : "…"}
                     </div>
                   </div>
-                  <div className="flex flex-wrap gap-1">
-                    {(r.requested_stages ?? []).map((s: string) => (
-                      <span key={s} className="text-[10px] bg-muted/30 rounded px-1.5 py-0.5 font-mono">
-                        {s.replace(/_/g, " ")}
-                      </span>
-                    ))}
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    {isRunning && <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse flex-shrink-0" />}
-                    <span className={`text-xs font-medium ${statusColor}`}>
-                      {r.status.replace(/_/g, " ")}
-                    </span>
-                    {isFailed && (r.stages_failed ?? []).length > 0 && (
-                      <span className="text-[10px] text-red-400/70">({(r.stages_failed as string[]).join(", ")})</span>
-                    )}
-                  </div>
-                  <div className="text-right">
-                    {r.confidence != null ? (
-                      <span className={`text-xs font-mono ${isSuccess ? "text-green-400" : "text-muted-foreground"}`}>
-                        {r.confidence}%
-                        {delta && <span className="text-[10px] ml-1 opacity-70">{delta}</span>}
-                      </span>
-                    ) : <span className="text-xs text-muted-foreground/40">—</span>}
-                  </div>
-                  <div className="text-right text-xs text-muted-foreground/70 font-mono">
-                    {r.duration_ms != null ? fmtMs(r.duration_ms) : isPending ? "queued" : "…"}
-                  </div>
-                </div>
-              );
-            })}
-          </CardContent>
-        </Card>
-      )}
+                );
+              })}
+            </>
+          )}
+        </CardContent>
+      </Card>
 
       <GameSystemAdmin />
     </div>
