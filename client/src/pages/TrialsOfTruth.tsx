@@ -1022,6 +1022,7 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
   const [expanded, setExpanded] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
   const [activeTab, setActiveTab] = useState<TabId>("text");
+  const [savedFields, setSavedFields] = useState<Set<string>>(new Set());
   const [corrections, setCorrections] = useState<Record<TabId, string>>(() => {
     const sd = item.ocr?.structuredData as any;
     const correctedSd = item.ocr?.correctedStructuredData as any;
@@ -1154,7 +1155,10 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
   const saveSection = (field: "text" | "layout" | "regions" | "structure" | "json") => () => {
     saveCorrectionMut.mutate(
       { pageId: item.page?.id ?? item.pageId, field, value: corrections[field] },
-      { onSuccess: () => { if (!KEEP_ON_SAVE.has(field)) setCorrections(c => ({ ...c, [field]: "" })); } },
+      { onSuccess: () => {
+        if (KEEP_ON_SAVE.has(field)) setSavedFields(s => new Set([...s, field]));
+        else setCorrections(c => ({ ...c, [field]: "" }));
+      }},
     );
   };
   const EDITABLE_FIELDS = ["text", "layout", "regions", "structure", "json"] as const;
@@ -1166,6 +1170,8 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
     for (const f of fields) {
       await saveCorrectionMut.mutateAsync({ pageId, field: f, value: corrections[f] });
     }
+    const toMark = fields.filter(f => KEEP_ON_SAVE.has(f));
+    if (toMark.length > 0) setSavedFields(s => new Set([...s, ...toMark]));
     const toClear = fields.filter(f => !KEEP_ON_SAVE.has(f));
     if (toClear.length > 0)
       setCorrections(c => ({ ...c, ...Object.fromEntries(toClear.map(f => [f, ""])) }));
@@ -1182,6 +1188,8 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
       } catch {
         return;
       }
+      const toMark = fields.filter(f => KEEP_ON_SAVE.has(f));
+      if (toMark.length > 0) setSavedFields(s => new Set([...s, ...toMark]));
       const toClear = fields.filter(f => !KEEP_ON_SAVE.has(f));
       if (toClear.length > 0)
         setCorrections(c => ({ ...c, ...Object.fromEntries(toClear.map(f => [f, ""])) }));
@@ -1215,8 +1223,10 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
 
   const isPending = resolveMut.isPending || skipMut.isPending || escalateMut.isPending || retryMut.isPending;
 
-  const setCorrection = (tab: TabId) => (v: string) =>
+  const setCorrection = (tab: TabId) => (v: string) => {
+    setSavedFields(s => { const n = new Set(s); n.delete(tab); return n; });
     setCorrections(c => ({ ...c, [tab]: v }));
+  };
 
   const buildCorrectedData = () => {
     const entries = Object.entries(corrections).filter(([, v]) => v.trim());
@@ -1424,7 +1434,7 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
                       <span className="min-w-[1.1rem] h-[1.1rem] rounded-full bg-primary/20 text-primary text-[9px] font-bold flex items-center justify-center px-0.5 flex-shrink-0">
                         {retryAttempts.length}
                       </span>
-                    ) : id !== "history" && corrections[id]?.trim() ? (
+                    ) : id !== "history" && corrections[id]?.trim() && !savedFields.has(id) ? (
                       <span className="w-1.5 h-1.5 rounded-full bg-orange-400 flex-shrink-0" title="Has correction" />
                     ) : null}
                   </button>
