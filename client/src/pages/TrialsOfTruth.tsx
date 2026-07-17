@@ -1157,39 +1157,41 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
       { onSuccess: () => { if (!KEEP_ON_SAVE.has(field)) setCorrections(c => ({ ...c, [field]: "" })); } },
     );
   };
-  const saveActiveOnly = () => {
-    if (activeTab === "document") return;
-    const field = activeTab as "text" | "layout" | "regions" | "structure" | "json";
-    saveCorrectionMut.mutate(
-      { pageId: item.page?.id ?? item.pageId, field, value: corrections[field] },
-      { onSuccess: () => { if (!KEEP_ON_SAVE.has(field)) setCorrections(c => ({ ...c, [field]: "" })); } },
-    );
-  };
-  const saveActiveAndRetryOcr = () => {
+  const EDITABLE_FIELDS = ["text", "layout", "regions", "structure", "json"] as const;
+
+  const saveAllCorrections = async () => {
     const pageId = item.page?.id ?? item.pageId;
-    const canSave = (activeTab === "layout" || activeTab === "regions") && corrections[activeTab]?.trim();
-    if (canSave) {
-      saveCorrectionMut.mutate(
-        { pageId, field: activeTab as "layout" | "regions", value: corrections[activeTab as "layout" | "regions"] },
-        {
-          onSuccess: () => {
-            retryMut.mutate({
-              pageId,
-              hitlId: item.id,
-              stages: ["ocr_extraction"],
-              savedCorrectionFields: [activeTab as "layout" | "regions"],
-            });
-          },
-        },
-      );
-    } else {
+    const fields = EDITABLE_FIELDS.filter(f => corrections[f].trim());
+    if (fields.length === 0) return;
+    for (const f of fields) {
+      await saveCorrectionMut.mutateAsync({ pageId, field: f, value: corrections[f] });
+    }
+    const toClear = fields.filter(f => !KEEP_ON_SAVE.has(f));
+    if (toClear.length > 0)
+      setCorrections(c => ({ ...c, ...Object.fromEntries(toClear.map(f => [f, ""])) }));
+  };
+
+  const saveAllAndRetryOcr = () => {
+    void (async () => {
+      const pageId = item.page?.id ?? item.pageId;
+      const fields = EDITABLE_FIELDS.filter(f => corrections[f].trim());
+      try {
+        for (const f of fields) {
+          await saveCorrectionMut.mutateAsync({ pageId, field: f, value: corrections[f] });
+        }
+      } catch {
+        return;
+      }
+      const toClear = fields.filter(f => !KEEP_ON_SAVE.has(f));
+      if (toClear.length > 0)
+        setCorrections(c => ({ ...c, ...Object.fromEntries(toClear.map(f => [f, ""])) }));
       retryMut.mutate({
         pageId,
         hitlId: item.id,
         stages: ["ocr_extraction"],
-        savedCorrectionFields: [],
+        savedCorrectionFields: fields,
       });
-    }
+    })();
   };
 
   // When the reviewer switches to the Layout or Regions tab they are manually
@@ -1486,16 +1488,16 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
               {activeEditableTab && (
                 <>
                   <Button size="sm" variant="outline" className="gap-1.5"
-                    onClick={saveActiveOnly} disabled={isPending || saveCorrectionMut.isPending}>
+                    onClick={() => void saveAllCorrections()} disabled={isPending || saveCorrectionMut.isPending}>
                     {saveCorrectionMut.isPending
                       ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving...</>
                       : <><Save className="w-3.5 h-3.5" /> Save</>}
                   </Button>
                   <Button size="sm" variant="outline" className="gap-1.5"
-                    onClick={saveActiveAndRetryOcr} disabled={isPending || saveCorrectionMut.isPending}>
+                    onClick={saveAllAndRetryOcr} disabled={isPending || saveCorrectionMut.isPending}>
                     {saveCorrectionMut.isPending || retryMut.isPending
                       ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Applying...</>
-                      : (activeTab === "layout" || activeTab === "regions") && corrections[activeTab]?.trim()
+                      : hasCorrections
                         ? <><RefreshCw className="w-3.5 h-3.5" /> Save + OCR</>
                         : <><RefreshCw className="w-3.5 h-3.5" /> Retry OCR</>}
                   </Button>
