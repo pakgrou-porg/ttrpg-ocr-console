@@ -2463,9 +2463,13 @@ export async function retryPageStages(
 
       // After enough retries without meeting the threshold, escalate instead of re-queuing
       // so the page doesn't loop indefinitely in the console.
+      // Exception: human-guided retries (reviewer explicitly saved corrections and triggered
+      // retry from the HITL console) always requeue to "queued" — the auto-escalation cap
+      // is a guard against automated loops, not against deliberate human intervention.
       const MAX_REQUEUE_RETRIES = 5;
+      const isHumanRetry = !!(metadata.reviewerUserId) || (metadata.savedCorrectionFields ?? []).length > 0;
       const priorAttempts = await getHitlRetryAttemptsByPageId(pageId).catch(() => [] as any[]);
-      if (priorAttempts.length >= MAX_REQUEUE_RETRIES) {
+      if (!isHumanRetry && priorAttempts.length >= MAX_REQUEUE_RETRIES) {
         parts.unshift(`Auto-escalated after ${priorAttempts.length} retries without improvement`);
         await updateHitlItem(hitlId, { status: "escalated", resolutionNotes: parts.join(" — ") });
       } else {
