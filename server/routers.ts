@@ -1077,6 +1077,16 @@ export const appRouter = router({
             if (models.length > 0) {
               await updateLlmProvider(input.id, { availableModels: models });
             }
+            // If a specific model is configured, verify it is actually loaded.
+            // A reachable server with the wrong model loaded is still a misconfiguration.
+            if (provider.modelId && models.length > 0 && !models.includes(provider.modelId)) {
+              return {
+                ok: false,
+                latencyMs,
+                models,
+                error: `Server reachable but model "${provider.modelId}" is not loaded. Loaded: ${models.join(", ")}`,
+              };
+            }
             return { ok: true, latencyMs, models };
           } else {
             return { ok: false, latencyMs, error: `HTTP ${response.status}: ${response.statusText}` };
