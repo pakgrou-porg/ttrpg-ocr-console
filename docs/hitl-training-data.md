@@ -11,8 +11,9 @@ The HITL review queue can now produce task-specific records for OCR tuning and p
    - Regions: draw, move, resize, type, add, or delete bounding boxes and save them to the page record.
    - Text or JSON: corrected OCR output.
 4. Re-run OCR extraction after saving layout or region corrections when the existing OCR should be regenerated from the curated page configuration. The `Save + OCR` action saves the active layout or region correction and retries only OCR extraction so the curated page configuration is preserved.
-5. Resolve the HITL item after the correction is saved.
-6. Export `Training Data` from Trials of Truth for the selected status bucket, or export a document page range by document ID and page range.
+5. **Approve OCR** (optional but required for OCR training inclusion): on the OCR Text, Structure, or JSON tab, click **Approve OCR** after reading and verifying the output — including any tables, stat blocks, or structured data. This sets `human_approved: true` in the export. Pages without this explicit approval export `human_approved: false` and must have their OCR turn loss-masked during fine-tuning.
+6. Resolve the HITL item after the correction is saved.
+7. Export `Training Data` from Trials of Truth for the selected status bucket, or export a document page range by document ID and page range.
 
 ## Export Shape
 
@@ -56,12 +57,26 @@ Each page record contains:
   "tasks": {
     "layout_analysis": { "input": {}, "model_output": {}, "expected": {} },
     "bbox_detection": { "input": {}, "model_output": [], "expected": [] },
-    "ocr_extraction": { "input": {}, "model_output": {}, "expected": {} }
+    "ocr_extraction": {
+      "input": {},
+      "model_output": {},
+      "expected": {},
+      "human_approved": false,
+      "approval_scope": null
+    }
   }
 }
 ```
 
 The `expected` value uses the human correction when present. If a reviewer resolves an item as acceptable without corrections, the current pipeline output is exported as the accepted target.
+
+### OCR Approval (`human_approved`)
+
+`tasks.ocr_extraction.human_approved` is `true` only when a reviewer explicitly clicked **Approve OCR** after reading the output. It is never inferred from the presence of a correction or from resolving the HITL item.
+
+`approval_scope` is an optional array of content types the reviewer verified (e.g. `["prose", "tables", "stat_blocks"]`). `null` means the reviewer approved all content without scoping.
+
+**Training pipeline rule:** Only include OCR turns in active training (loss enabled) when `human_approved: true`. Pages with `human_approved: false` may still appear in multi-turn training conversations for context coherence, but the OCR turn loss must be masked.
 
 Document range exports include pages without HITL records. Those records have `"review": null` and still include page image, layout, bbox, OCR, and model trace fields when available.
 
@@ -77,3 +92,5 @@ Document range exports include pages without HITL records. Those records have `"
 Keep layout and bbox examples separate from OCR text examples. Layout and region quality fails for different reasons than transcription quality, so mixing them into one training target makes the feedback weaker.
 
 For bbox data, prefer reviewed pages with diverse structures: two-column prose, stat blocks, sidebars, tables, full-page art, page headers, page numbers, and mixed text/art pages.
+
+For tabular OCR specifically, `human_approved` carries higher weight: pipeline errors in tables (column misalignment, dropped rows, merged cells) are systematic and plausible-looking — a quick scan during layout/bbox review will miss them. Pages with table-type regions should only be included in OCR training after explicit cell-level verification and `Approve OCR` confirmation.

@@ -2598,6 +2598,25 @@ export const appRouter = router({
         return { success: true };
       }),
 
+    /** Explicitly mark the OCR output for a page as human-approved for training data inclusion.
+     *  Only pages with this flag set will have their OCR turn contribute gradient during fine-tuning.
+     *  `scope` is optional metadata indicating which content types were verified; null means all. */
+    approveOcr: protectedProcedure
+      .input(z.object({
+        pageId: z.number().int(),
+        scope: z.array(z.enum(["prose", "tables", "stat_blocks", "lists"] as const)).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const ocr = await getOcrResultByPageId(input.pageId);
+        if (!ocr) throw new TRPCError({ code: "NOT_FOUND", message: "No OCR result found for this page." });
+        await updateOcrResult(ocr.id, {
+          ocrApprovedAt: new Date(),
+          ocrApprovedBy: ctx.user.id,
+          ocrApprovalScope: input.scope ?? null,
+        } as any);
+        return { success: true };
+      }),
+
     /** Re-run one or more pipeline stages for a page, with surrounding-page context */
     retryPage: protectedProcedure
       .input(z.object({
@@ -2895,6 +2914,8 @@ export const appRouter = router({
                   structured_data: ocr?.structuredData ?? null,
                 },
                 expected: ocrExpected,
+                human_approved: ocr?.ocrApprovedAt != null,
+                approval_scope: (ocr?.ocrApprovalScope as string[] | null) ?? null,
               },
             },
           };

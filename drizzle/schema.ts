@@ -592,6 +592,11 @@ export const ocrResults = pgTable("ocr_results", {
   correctedStructuredData: jsonb("corrected_structured_data").$type<Record<string, unknown>>(),
   correctedBy: integer("corrected_by"),
   correctedAt: timestamp("corrected_at"),
+  /** Set by a reviewer who has explicitly read and validated the OCR output for training inclusion. */
+  ocrApprovedAt: timestamp("ocr_approved_at"),
+  ocrApprovedBy: integer("ocr_approved_by"),
+  /** Optional content types the reviewer explicitly verified, e.g. ["prose", "tables", "stat_blocks"]. Null means all scopes were checked. */
+  ocrApprovalScope: text("ocr_approval_scope").array(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (t) => ({

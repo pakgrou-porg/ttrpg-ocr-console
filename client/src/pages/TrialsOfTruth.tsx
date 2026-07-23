@@ -14,7 +14,7 @@ import {
   CheckCircle2, XCircle, ArrowUpCircle, ChevronDown, ChevronRight,
   Loader2, ClipboardList, FileText, Layout, BoxSelect, ListTree, Braces, BookOpen,
   Trash2, ChevronLeft, Download, RefreshCw, Scissors, Save, Copy, ClipboardPaste,
-  ArrowUp, ArrowDown, RotateCcw, RotateCw, History, TrendingUp, TrendingDown, Minus,
+  ArrowUp, ArrowDown, RotateCcw, RotateCw, History, TrendingUp, TrendingDown, Minus, ShieldCheck,
 } from "lucide-react";
 import { BboxOverlayToggle } from "@/components/BboxOverlay";
 import { BboxRegionEditor, parseRegionJson, TYPE_COLORS, sortRegionsByPosition } from "@/components/BboxRegionEditor";
@@ -1146,6 +1146,16 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
     onSuccess: () => toast({ title: "Section saved" }),
     onError: (e) => toast({ title: "Save failed", description: e.message, variant: "destructive" }),
   });
+
+  const [ocrApproved, setOcrApproved] = useState<boolean>(() => !!(item.ocr?.ocrApprovedAt));
+  const approveOcrMut = trpc.hitl.approveOcr.useMutation({
+    onSuccess: () => {
+      setOcrApproved(true);
+      toast({ title: "OCR approved", description: "Marked as human-curated for training inclusion." });
+    },
+    onError: (e) => toast({ title: "OCR approval failed", description: e.message, variant: "destructive" }),
+  });
+
   // Tabs backed by a visual editor (BboxRegionEditor / layout selector): keep the
   // correction value after save so the editor doesn't revert to stale source data.
   // Text / structure / json are free-text fields with no visual dependency — clear
@@ -1292,6 +1302,7 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
 
   const hasCorrections = Object.values(corrections).some(v => v.trim());
   const activeEditableTab = activeTab !== "document" && activeTab !== "history";
+  const activeOcrTab = activeTab === "text" || activeTab === "structure" || activeTab === "json";
   const retryAttempts: any[] = Array.isArray(item.retryAttempts) ? item.retryAttempts : [];
 
   return (
@@ -1436,6 +1447,10 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
                       </span>
                     ) : id !== "history" && corrections[id]?.trim() && !savedFields.has(id) ? (
                       <span className="w-1.5 h-1.5 rounded-full bg-orange-400 flex-shrink-0" title="Has correction" />
+                    ) : (id === "text" || id === "structure" || id === "json") && ocrApproved ? (
+                      <span title="OCR approved for training" className="flex-shrink-0">
+                        <ShieldCheck className="w-2.5 h-2.5 text-green-500" />
+                      </span>
                     ) : null}
                   </button>
                 ))}
@@ -1513,6 +1528,21 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
                   </Button>
                 </>
               )}
+              {activeOcrTab && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className={`gap-1.5 ml-auto ${ocrApproved ? "border-green-500/50 text-green-500 hover:bg-green-500/10" : "text-muted-foreground"}`}
+                  onClick={() => approveOcrMut.mutate({ pageId: item.page?.id ?? item.pageId })}
+                  disabled={approveOcrMut.isPending}
+                  title={ocrApproved ? "OCR output has been explicitly human-approved for training inclusion" : "Mark this OCR output as human-curated and safe for training"}
+                >
+                  {approveOcrMut.isPending
+                    ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    : <ShieldCheck className="w-3.5 h-3.5" />}
+                  {ocrApproved ? "OCR Approved" : "Approve OCR"}
+                </Button>
+              )}
             </div>
             {retryAttempts.length > 0 && (
               <div className="space-y-1 border-t border-border/30 pt-3">
@@ -1555,6 +1585,11 @@ function HitlCard({ item, onResolved, isSelected, onToggle, isActive, onActivate
                   </p>
                 ) : (
                   <p className="text-xs text-muted-foreground">No corrections — Approve accepts OCR output as-is.</p>
+                )}
+                {ocrApproved && (
+                  <p className="text-xs text-green-500 flex items-center gap-1 flex-shrink-0">
+                    <ShieldCheck className="w-3 h-3" /> OCR approved for training
+                  </p>
                 )}
                 {isActive && (
                   <p className="text-[10px] font-mono text-muted-foreground/40 flex-shrink-0 hidden sm:block">
