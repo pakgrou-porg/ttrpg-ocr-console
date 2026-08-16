@@ -12,7 +12,7 @@ import { mkdirSync } from "fs";
 import { extname, basename, join } from "path";
 import { Router, type Request, type Response, type NextFunction } from "express";
 import multer from "multer";
-import { createIngestionJob } from "./db";
+import { createIngestionJob, getActiveIngestionJobCount } from "./db";
 import { startJob } from "./pipeline/runner";
 import { sdk } from "./_core/sdk";
 import type { User } from "../drizzle/schema";
@@ -21,6 +21,14 @@ const router = Router();
 const WORKSPACE = process.env.PIPELINE_WORKSPACE ?? "/app/workspace";
 const UPLOAD_DIR = join(WORKSPACE, "uploads");
 const MAX_UPLOAD_MB = 200;
+
+// Maximum concurrent ingestion jobs allowed globally. Configurable via env var.
+// Once this limit is reached, new uploads are rejected with HTTP 429 until
+// existing jobs complete or fail. Default: 3 concurrent jobs.
+const MAX_CONCURRENT_JOBS = parseInt(
+  process.env.MAX_CONCURRENT_JOBS ?? "3",
+  10,
+);
 
 async function requireAuth(req: Request & { authenticatedUser?: User }, res: Response, next: NextFunction) {
   try {
@@ -78,6 +86,21 @@ router.post(
     try {
       const file = req.file;
       if (!file) return res.status(400).json({ error: "No file provided." });
+
+      // ── Concurrent job limit (H-5 hardening) ──────────────────────────────
+      // Prevents resource exhaustion by limiting how many ingestion jobs can
+      // run simultaneously. Rejects with 429 if the pipeline is at capacity.
+      const activeCount = await getActiveIngestionJobCount();
+      if (activeCount >= MAX_CONCURRENT_JOBS) {
+        // Clean up the uploaded temp file before rejecting
+        await unlink(file.path).catch(() => undefined);
+        return res.status(429).json({
+          error: `Concurrent job limit reached (${MAX_CONCURRENT_JOBS} active). `
+            + "Please wait for existing jobs to complete before uploading more files.",
+          activeJobs: activeCount,
+          limit: MAX_CONCURRENT_JOBS,
+        });
+      }
 
       if (file.mimetype === "application/pdf" && !(await isPdfFile(file.path))) {
         await unlink(file.path).catch(() => undefined);

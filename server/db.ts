@@ -700,6 +700,23 @@ export async function getActiveIngestionJobs() {
     .orderBy(desc(ingestionJobs.createdAt));
 }
 
+/**
+ * Returns the count of active (non-terminal) ingestion jobs.
+ * Used by the upload route to enforce the concurrent job limit (H-5).
+ * Active = any status except completed, failed, or cancelled.
+ */
+export async function getActiveIngestionJobCount(): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const rows = await db.select().from(ingestionJobs)
+    .where(and(
+      ne(ingestionJobs.status, "completed"),
+      ne(ingestionJobs.status, "failed"),
+      ne(ingestionJobs.status, "cancelled"),
+    ));
+  return rows.length;
+}
+
 export async function getIngestionJobById(id: number) {
   const db = await getDb();
   if (!db) return undefined;
